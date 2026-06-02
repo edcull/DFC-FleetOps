@@ -1102,6 +1102,7 @@
       <div class="hud-item" id="hud-turn-info" style="display:none;"></div>
       <div class="hud-row">
         <button class="hud-btn" id="btn-3d-toggle" style="padding:4px 7px;" title="Toggle 3D view">3D</button>
+        <button class="hud-icon-btn" id="btn-zoom-reset" title="Reset zoom (double-click to fit board)">⤢</button>
         <button class="hud-icon-btn" id="btn-arc-toggle" data-arcview="1" title="Arcs+Scan: show weapon arcs &amp; scan range / enemy signatures">⚙</button>
         <button class="hud-icon-btn" id="btn-sig-toggle" data-arcview="2" title="Sig: show own signature aura / enemy arcs &amp; scan ranges">◎</button>
         <button class="hud-icon-btn" id="btn-trails-toggle" title="Toggle movement trail lines">↝</button>
@@ -12656,6 +12657,8 @@ function toggle3d() {
   if (_view3d) {
     if (!_3d) { try { init3d(); } catch(e) { console.error('[3D init]', e); _view3d = false; toggle3d(); } }
     else sync3d();
+  } else {
+    _resetMapView(); // restore full-board view when returning to 2D
   }
 }
 
@@ -12778,6 +12781,8 @@ document.addEventListener('click', (e) => {
     updateArcViewHud();
     renderAll(true); return;
   }
+  // Zoom reset
+  if (e.target.matches('#btn-zoom-reset')) { _resetMapView(); return; }
   // Movement trails toggle — persisted, applies to both 2D and 3D views
   if (e.target.matches('#btn-trails-toggle')) {
     _view3dTrails = !_view3dTrails;
@@ -14832,6 +14837,111 @@ board.addEventListener('mouseleave', () => {
 });
 
 /* Touch support — basic */
+// ── 2D board zoom / pan ───────────────────────────────────────────────────
+// State: zoom level (1 = full board) and pan offset in SVG board units.
+let _mapZoom = 1;        // >1 = zoomed in
+let _mapPanX = 0;        // SVG-space offset from the board origin
+let _mapPanY = 0;
+const _MAP_ZOOM_MIN = 1;
+const _MAP_ZOOM_MAX = 8;
+const _MAP_BOARD    = 576; // total board size in SVG units
+
+function _applyViewBox() {
+  const size = _MAP_BOARD / _mapZoom;
+  // Clamp pan so the viewport never shows area outside the board.
+  _mapPanX = Math.max(0, Math.min(_MAP_BOARD - size, _mapPanX));
+  _mapPanY = Math.max(0, Math.min(_MAP_BOARD - size, _mapPanY));
+  board.setAttribute('viewBox', `${_mapPanX} ${_mapPanY} ${size} ${size}`);
+}
+
+// Reset zoom/pan (e.g. on view-mode toggle)
+function _resetMapView() {
+  _mapZoom = 1; _mapPanX = 0; _mapPanY = 0;
+  _applyViewBox();
+}
+
+// Wheel → zoom towards the cursor position
+board.addEventListener('wheel', (e) => {
+  if (_view3d) return; // 3D handles its own camera
+  e.preventDefault();
+  const factor   = e.deltaY < 0 ? 1.15 : 1 / 1.15;
+  const newZoom  = Math.max(_MAP_ZOOM_MIN, Math.min(_MAP_ZOOM_MAX, _mapZoom * factor));
+  if (newZoom === _mapZoom) return;
+
+  // Keep the cursor point stable in board space.
+  const pt = svgPointFromEvent(e); // board-space coords under cursor
+  const oldSize = _MAP_BOARD / _mapZoom;
+  const newSize = _MAP_BOARD / newZoom;
+  // Fraction of old viewport where cursor sits
+  const fx = (pt.x - _mapPanX) / oldSize;
+  const fy = (pt.y - _mapPanY) / oldSize;
+  _mapZoom = newZoom;
+  _mapPanX = pt.x - fx * newSize;
+  _mapPanY = pt.y - fy * newSize;
+  _applyViewBox();
+}, { passive: false });
+
+// Pointer drag → pan (middle button or right button; or two-finger touch)
+let _panDrag = null;
+board.addEventListener('pointerdown', (e) => {
+  if (_view3d) return;
+  if (e.button === 1 || e.button === 2) { // middle or right button
+    e.preventDefault();
+    _panDrag = { startX: e.clientX, startY: e.clientY, panX: _mapPanX, panY: _mapPanY };
+    board.setPointerCapture(e.pointerId);
+  }
+});
+board.addEventListener('pointermove', (e) => {
+  if (!_panDrag) return;
+  const rect = board.getBoundingClientRect();
+  const scale = (_MAP_BOARD / _mapZoom) / rect.width; // client px → SVG units
+  _mapPanX = _panDrag.panX - (e.clientX - _panDrag.startX) * scale;
+  _mapPanY = _panDrag.panY - (e.clientY - _panDrag.startY) * scale;
+  _applyViewBox();
+});
+board.addEventListener('pointerup',   () => { _panDrag = null; });
+board.addEventListener('pointercancel', () => { _panDrag = null; });
+
+// Touch: pinch-to-zoom + two-finger pan
+let _touches = {};
+board.addEventListener('touchstart', (e) => {
+  if (_view3d) return;
+  Array.from(e.changedTouches).forEach(t => { _touches[t.identifier] = { x: t.clientX, y: t.clientY }; });
+}, { passive: true });
+board.addEventListener('touchmove', (e) => {
+  if (_view3d) return;
+  const ids = Object.keys(_touches);
+  if (ids.length === 2 && e.touches.length >= 2) {
+    e.preventDefault();
+    const [a, b] = [e.touches[0], e.touches[1]];
+    const [oa, ob] = [_touches[ids[0]], _touches[ids[1]]];
+    if (!oa || !ob) return;
+    const oldDist = Math.hypot(oa.x - ob.x, oa.y - ob.y);
+    const newDist = Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
+    if (oldDist < 1) return;
+    const factor  = newDist / oldDist;
+    const midX    = (a.clientX + b.clientX) / 2;
+    const midY    = (a.clientY + b.clientY) / 2;
+    const pt      = svgPointFromEvent({ clientX: midX, clientY: midY });
+    const oldSize = _MAP_BOARD / _mapZoom;
+    const newZoom = Math.max(_MAP_ZOOM_MIN, Math.min(_MAP_ZOOM_MAX, _mapZoom * factor));
+    const newSize = _MAP_BOARD / newZoom;
+    const fx = (pt.x - _mapPanX) / oldSize;
+    const fy = (pt.y - _mapPanY) / oldSize;
+    _mapZoom  = newZoom;
+    _mapPanX  = pt.x - fx * newSize;
+    _mapPanY  = pt.y - fy * newSize;
+    _applyViewBox();
+    // Update stored touch positions for next frame
+    _touches[ids[0]] = { x: a.clientX, y: a.clientY };
+    _touches[ids[1]] = { x: b.clientX, y: b.clientY };
+  }
+}, { passive: false });
+board.addEventListener('touchend', (e) => {
+  Array.from(e.changedTouches).forEach(t => { delete _touches[t.identifier]; });
+}, { passive: true });
+// ────────────────────────────────────────────────────────────────────────────
+
 board.addEventListener('touchstart', (e) => {
   if (e.touches.length === 1) {
     const t = e.touches[0];
