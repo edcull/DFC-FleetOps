@@ -40,7 +40,7 @@ export function shouldAiAct(state, side) {
 
   if (phase !== 'play') return false;
 
-  // An unconfirmed end-of-activation atmosphere-damage report freezes the game;
+  // An unconfirmed end-of-activation hazard-damage report freezes the game;
   // the owning side (here, the AI) must acknowledge it.
   if (state.atmoDamage) return state.atmoDamage.side === side;
 
@@ -108,7 +108,7 @@ export async function triggerAi(room, onRecord = null) {
 
   if (phase !== 'play') return;
 
-  // Acknowledge an end-of-activation atmosphere-damage report so play can advance.
+  // Acknowledge an end-of-activation hazard-damage report so play can advance.
   if (state.atmoDamage && state.atmoDamage.side === aiSide) {
     applyFn({ type: 'confirmEndActivation' });
     return;

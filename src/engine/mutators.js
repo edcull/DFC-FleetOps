@@ -3427,52 +3427,55 @@ export function finishActivation(state, rng, gid) {
   const orbitalComplex = variantKey === 'orbital_complex';
   const layKey = state.scenario && state.scenario.layout;
   const isOrbitalDecayScen = layKey === 'se1_one_with_almost_nothing' || layKey === 'se1_almost_nothing_at_all';
-  const d3 = () => Math.ceil(rollDie(rng) / 2);
   const is2D3 = def.tonnage === 'C';
+  // Roll D3 (2D3 for Colossal), keeping each raw d6 face so the modal can render
+  // the dice the same way it renders hit/save rolls. Returns { dice, total }.
+  const rollD3 = (times = is2D3 ? 2 : 1) => {
+    const dice = []; let total = 0;
+    for (let i = 0; i < times; i++) {
+      const face = rollDie(rng); const val = Math.ceil(face / 2);
+      dice.push({ face, dmg: val }); total += val;
+    }
+    return { dice, total };
+  };
   const dmgLog = [];
-  // Per-ship record of non-Descent atmosphere damage, surfaced to the client as a
-  // dice-roll confirmation modal before the activation passes to the next player.
-  const atmoReport = [];
+  // Per-ship record of end-of-activation hazard damage (atmosphere, orbital decay,
+  // Expansive Atmosphere), surfaced to the client as a dice-roll confirmation
+  // modal before the activation passes to the next player.
+  const hazardReport = [];
 
   grp.ships.forEach((s, si) => {
     if (s.destroyed || s.offTable) return;
     let dmg = 0;
-    let atmoDice = null;
+    const sources = []; // { label, dice:[{face,dmg}], total }
 
     if (s.layer === 'atmosphere' && !/Descent/i.test(def.special || '')) {
-      // Roll D3 (2D3 for Colossal), keeping each raw d6 face so the modal can
-      // render the dice the same way it renders hit/save rolls.
-      atmoDice = [];
-      let a = 0;
-      for (let i = 0; i < (is2D3 ? 2 : 1); i++) {
-        const raw = rollDie(rng);
-        const val = Math.ceil(raw / 2);
-        atmoDice.push({ raw, val });
-        a += val;
-      }
-      dmg += a;
-      dmgLog.push(`${def.name}: ${a} (atmosphere)`);
+      const r = rollD3();
+      sources.push({ label: 'Atmosphere', kind: 'damage', dice: r.dice, total: r.total });
+      dmg += r.total;
+      dmgLog.push(`${def.name}: ${r.total} (atmosphere)`);
     }
     if (orbitalComplex && s.crippling && s.crippling.includes('decay')) {
-      const a = d3() + (is2D3 ? d3() : 0);
-      dmg += a;
-      dmgLog.push(`${def.name}: ${a} (orbital decay)`);
+      const r = rollD3();
+      sources.push({ label: 'Orbital Decay', kind: 'damage', dice: r.dice, total: r.total });
+      dmg += r.total;
+      dmgLog.push(`${def.name}: ${r.total} (orbital decay)`);
     }
     // Orbital Decay tokens (One With/Almost Nothing scenarios): each token deals D3 (2D3 for Colossal).
-    // No atmosphere layer in these scenarios — decay tokens are the only source of end-of-activation damage.
     if (isOrbitalDecayScen && s.orbitalDecayTokens > 0) {
-      let a = 0;
-      for (let t = 0; t < s.orbitalDecayTokens; t++) a += d3() + (is2D3 ? d3() : 0);
-      dmg += a;
-      dmgLog.push(`${def.name}: ${a} (${s.orbitalDecayTokens}× Orbital Decay)`);
+      const r = rollD3((is2D3 ? 2 : 1) * s.orbitalDecayTokens);
+      sources.push({ label: `${s.orbitalDecayTokens}× Orbital Decay`, kind: 'damage', dice: r.dice, total: r.total });
+      dmg += r.total;
+      dmgLog.push(`${def.name}: ${r.total} (${s.orbitalDecayTokens}× Orbital Decay)`);
     }
     const effOrd = openNet ? s.order : grp.order;
     if (expansiveAtmo && (effOrd === 'CC' || effOrd === 'MT')) {
+      // Save vs the better of ES/KS; a failed save (or no save) deals 1 damage.
       const sv = Math.min(saveVal(def.es) || 7, saveVal(def.ks) || 7);
-      if (sv == null || rollDie(rng) < sv) {
-        dmg += 1;
-        dmgLog.push(`${def.name}: 1 (Expansive Atmosphere)`);
-      }
+      const face = rollDie(rng);
+      const failed = sv == null || face < sv;
+      sources.push({ label: 'Expansive Atmosphere', kind: 'save', dice: [{ face, dmg: failed ? 1 : 0 }], total: failed ? 1 : 0 });
+      if (failed) { dmg += 1; dmgLog.push(`${def.name}: 1 (Expansive Atmosphere)`); }
     }
 
     const hullBefore = s.hull;
@@ -3493,11 +3496,11 @@ export function finishActivation(state, rng, gid) {
       if (heal > 0) s.hull += heal;
     }
 
-    if (atmoDice) {
-      atmoReport.push({
+    if (sources.length) {
+      hazardReport.push({
         si, name: def.name,
-        dice: atmoDice,
-        total: atmoDice.reduce((t, d) => t + d.val, 0),
+        sources,
+        total: dmg,
         hullBefore,
         hullAfter: s.hull,
         maxHull: s.maxHull,
@@ -3523,18 +3526,18 @@ export function finishActivation(state, rng, gid) {
   state.selectedShipIdx = null;
   state.selectedGroupId = null;
 
-  // Non-Descent ships that ended in the atmosphere took hull damage: pause here
-  // and surface the roll for confirmation. The activation passes to the next
-  // player only once `confirmEndActivation` clears the report.
-  if (atmoReport.length) {
-    state.atmoDamage = { gid, side: def.side, ships: atmoReport };
+  // Ships that took end-of-activation hazard damage (atmosphere / orbital decay /
+  // Expansive Atmosphere): pause here and surface the roll for confirmation. The
+  // activation passes to the next player only once `confirmEndActivation` clears it.
+  if (hazardReport.length) {
+    state.atmoDamage = { gid, side: def.side, ships: hazardReport };
   } else {
     advanceActiveSide(state);
   }
   return state;
 }
 
-/* Clear the end-of-activation atmosphere-damage report (after the player has
+/* Clear the end-of-activation hazard-damage report (after the player has
    acknowledged the dice roll) and hand the activation to the next player. */
 export function confirmEndActivation(state) {
   if (!state.atmoDamage) return state;
