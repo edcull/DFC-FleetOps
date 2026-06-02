@@ -36,13 +36,18 @@ export function createRoom(forceId = null) {
     sockets: { player1: null, player2: null },
     spectators: [],
     lastActivity: Date.now(),
-    endRoundVotes: new Set(), // tracks which sides have voted to end the round
+    endRoundVotes: new Set(),
+    advanceRoundVotes: new Set(),
+    assetPhaseVotes: new Set(),      // tracks ready votes for asset-phase step transitions
     createdAt: Date.now(),
     intentLog: [],          // [{ts, side, intent}] — play phase only
     playStartState: null,   // deep clone of state the moment beginPlay is applied
     playStartRngState: null,
     creatorUserId: null,    // set by POST /api/rooms for save attribution
     chatHistory: [],        // [{side, username, text, ts}] — ephemeral, capped at 200
+    aiSide: null,           // 'player1' | 'player2' | null — slot occupied by the AI
+    aiPersonality: null,    // personality key ('balanced', 'aggressive', etc.)
+    aiPending: false,       // guard against concurrent AI triggers
   };
 
   rooms.set(id, room);

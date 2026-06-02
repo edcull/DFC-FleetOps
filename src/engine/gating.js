@@ -119,8 +119,9 @@ export function isLegal(state, intent, side) {
       if (!def || def.side !== side) return false;
       const ship = grp.ships[si];
       if (!ship || ship.destroyed || ship.offTable || ship.firedThisActivation || ship.detectorUsed) return false;
+      const hasDetectorSpecial = /\bDetector\b/i.test(def.special || '');
       const w = def.weapons && def.weapons[wi];
-      if (!w || (w.arc !== 'LoS' && !/^Detector$/i.test(w.name))) return false;
+      if (!hasDetectorSpecial && (!w || (w.arc !== 'LoS' && !/^Detector$/i.test(w.name)))) return false;
       const targetGrp = state.groups[targetGid];
       if (!targetGrp) return false;
       const targetDef = getDef(state, targetGid);
@@ -351,7 +352,7 @@ export function isLegal(state, intent, side) {
       return true;
     }
     case 'openDAFeatureAttack': {
-      if (state.phase !== 'da') return false;
+      if (state.phase !== 'da' && state.phase !== 'play') return false;
       if (!state.dropsiteActivation || (side && state.dropsiteActivation.side !== side)) return false;
       const { dsId, fi } = intent;
       const ds = state.scenarioData && state.scenarioData.dropsites && state.scenarioData.dropsites.find(d => d.id === dsId);
@@ -363,7 +364,7 @@ export function isLegal(state, intent, side) {
       return true;
     }
     case 'daPickDropsite': {
-      if (state.phase !== 'da') return false;
+      if (state.phase !== 'da' && state.phase !== 'play') return false;
       if (!state.dropsiteActivation || (side && state.dropsiteActivation.side !== side)) return false;
       const ds = state.scenarioData && state.scenarioData.dropsites && state.scenarioData.dropsites.find(d => d.id === intent.dsId);
       return !!ds;
@@ -374,7 +375,10 @@ export function isLegal(state, intent, side) {
     case 'finishAttack':
     case 'attackDeclare': {
       if (state.phase !== 'play' || !state.attackModal) return false;
-      const atk = state.assetActiveSide || state.activeSide;            // attacker drives the flow
+      // Bomber attacks in the asset phase: the attacker is the bomber's side, which may
+      // differ from assetActiveSide (opponent's bombers resolve during your stage turn).
+      const atk = (state.attackModal.bomber ? state.attackModal.bomberSide : null)
+                  || state.assetActiveSide || state.activeSide;
       let def = atk === 'player1' ? 'player2' : atk === 'player2' ? 'player1' : null; // defender owns defensive choices
       // Defensive decisions (Shields / Brace / Contain, save re-rolls, Close
       // Protection) belong to the defender; the rest (advances, hit re-rolls,
@@ -382,6 +386,7 @@ export function isLegal(state, intent, side) {
       const defensive =
         (intent.type === 'attackFighterReroll') ||
         (intent.type === 'attackReroll' && intent.which === 'save') ||
+        (intent.type === 'attackStep' && (intent.to === 'apply' || intent.to === 'rollbackup')) ||
         (intent.type === 'attackDeclare' && (intent.what === 'shield' || intent.what === 'shieldBooster' || intent.what === 'brace' || intent.what === 'contain'));
       // If activeSide is null (all activations done but attackModal still open), derive
       // the defender from the first target ship's faction so the shield intent can pass.
@@ -413,6 +418,8 @@ export function isLegal(state, intent, side) {
       if (state.attackModal) { console.log('[gate:LWT] fail: attackModal active'); return false; }
       const grp = state.groups[gid];
       if (!grp || grp.activated) { console.log('[gate:LWT] fail: no grp or activated', {grp: !!grp, activated: grp && grp.activated}); return false; }
+      // The group's order must permit firing. MT / SR have fireRule 'none'.
+      if (grp.order && ORDERS[grp.order]?.fireRule === 'none') { console.log('[gate:LWT] fail: order forbids firing', grp.order); return false; }
       const def = getDef(state, gid);
       if (!def || def.side !== side) { console.log('[gate:LWT] fail: def.side', def && def.side, 'vs side', side); return false; }
       if (!playTurnOk(state, side)) { console.log('[gate:LWT] fail: playTurnOk activeSide', state.activeSide, 'side', side); return false; }
@@ -442,6 +449,7 @@ export function isLegal(state, intent, side) {
       if (state.attackModal) return false;
       const grp = state.groups[gid];
       if (!grp || grp.activated) return false;
+      if (grp.order && ORDERS[grp.order]?.fireRule === 'none') return false;
       const def = getDef(state, gid);
       if (!def || def.side !== side) return false;
       if (!playTurnOk(state, side)) return false;
@@ -491,6 +499,8 @@ export function isLegal(state, intent, side) {
       if (state.attackModal) return false;
       const grp = state.groups[gid];
       if (!grp || grp.activated) return false;
+      // The group's order must permit firing. MT / SR have fireRule 'none'.
+      if (grp.order && ORDERS[grp.order]?.fireRule === 'none') return false;
       const def = getDef(state, gid);
       if (!def || def.side !== side) return false;
       if (!playTurnOk(state, side)) return false;
@@ -630,7 +640,7 @@ export function isLegal(state, intent, side) {
     }
     case 'assetStageDone': {
       if (!state.assetPhase || state.assetPhase.step !== 'assets') return false;
-      if (state.assetActiveSide !== intent.side || state.assetPhase.assetType !== intent.type) return false;
+      if (state.assetActiveSide !== intent.side || state.assetPhase.assetType !== intent.assetType) return false;
       if (side && intent.side !== side) return false;
       return true;
     }
@@ -665,8 +675,10 @@ export function isLegal(state, intent, side) {
       return Math.hypot(x - asset.x, y - asset.y) <= thrPx + 2;
     }
     case 'fireFeatureWeapon': {
-      if (state.phase !== 'da') return false;
-      if (!state.daActiveSide || (side && state.daActiveSide !== side)) return false;
+      if (state.phase !== 'da' && state.phase !== 'play') return false;
+      // daActiveSide is set by openDAFeatureAttack; fall back to dropsiteActivation.side
+      const _daActive = state.daActiveSide || state.dropsiteActivation?.side;
+      if (!_daActive || (side && _daActive !== side)) return false;
       const { dsId, fi, targetGid, targetSi } = intent;
       const fwDs = state.scenarioData && state.scenarioData.dropsites && state.scenarioData.dropsites.find(d => d.id === dsId);
       if (!fwDs) return false;
@@ -679,11 +691,23 @@ export function isLegal(state, intent, side) {
       return !!(fwTs && !fwTs.destroyed && !fwTs.offTable);
     }
     case 'startAssetMove':
+      return !!(state.assetPhase && state.assetPhase.step !== 'assets');
+
     case 'assetT2T':
     case 'selectAssetMove':
     case 'assetLockTarget':
     case 'assetUntarget':
+      return state.phase === 'play' || state.phase === 'deploy';
+
+    case 'dismissDogfight':
+      return !!state.dogfightResult;
+
+    case 'beginBomberAttack':
+      return !!(state.assetPhase && state.assetPhase.step === 'assets'
+                && intent.side === side && !state.attackModal);
+
     case 'assetResetMove':
+    case 'skipBattalionCombat':
     case 'resolveBoarding':
     case 'startBattalionCombat':
     case 'bcPickDropsite':

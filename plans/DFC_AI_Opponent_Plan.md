@@ -1,8 +1,8 @@
 # DFC Fleet Ops — AI Opponent Plan
 
-> **Status (May 2026): PLANNED — not yet implemented.**
-> `legalActions(state, side)` and the full intent/apply pipeline exist. The engine runs
-> headlessly on the Node server. Prerequisites are satisfied; implementation can begin.
+> **Status (June 2026): Phase A + B + C substantially complete.**
+> All `src/ai/` files exist and are implemented. Phase D (polish) is next.
+> See Implementation Phases section for remaining gaps.
 
 ---
 
@@ -183,6 +183,12 @@ export async function triggerAi(room) {
     await maybeAiTurn(room);
   }
 }
+
+// ⚠️ Circular-dependency note:
+// triggerAi (ai/index.js) calls maybeAiTurn (rooms.js), but rooms.js imports triggerAi.
+// Break the cycle by injecting maybeAiTurn as a parameter or callback:
+//   export async function triggerAi(room, maybeAiTurn) { ... }
+// rooms.js passes its own maybeAiTurn when calling triggerAi.
 ```
 
 The human client receives a single clean state update per AI activation, not a stream of
@@ -239,8 +245,15 @@ ASSETS  PHR Dropships (2) at DS-3, placed by Orpheus
 
 ## Options Parser (`src/ai/options.js`)
 
-`legalActions()` returns hundreds of granular intents. The options parser groups them into
-**activation-level choices** — the unit the AI reasons about.
+> ⚠️ **Implementation note:** `legalActions(state, side)` in gating.js only iterates the
+> small `INTENT_TYPES` set (`['pass', 'endRound', 'commitScenario']`) — it cannot enumerate
+> move, order, or targeting intents because those require payload parameters. `options.js`
+> must generate candidate intents itself and validate each with `isLegal(state, intent, side)`.
+> The generation algorithm below already reflects this correctly.
+
+The options parser generates **activation-level choices** — the unit the AI reasons about —
+by enumerating candidate (group, order, destination, target) combinations and checking each
+with `isLegal()`.
 
 ### Activation-level option structure
 
@@ -335,6 +348,7 @@ AI_PROVIDER=openai      AI_API_KEY=sk-...        AI_MODEL=gpt-4o-mini
 
 **Recommended model**: `claude-haiku-4-5-20251001` or `gpt-4o-mini`. Option selection from
 a short list does not require a large model; speed and cost matter more than raw capability.
+When Claude 4.x Haiku is released, prefer it over Haiku 4.5 for the same price tier.
 
 **Cost estimate**: ~30–40 AI activations per 6-round game. At Haiku pricing ≈ $0.001/call:
 negligible per game. Sonnet ≈ $0.05/game — acceptable for higher-quality play.
@@ -849,8 +863,8 @@ The builder returns a `validation` object alongside the fleet for logging/debugg
   targetPts: 1500,
   pctUsed: 0.999,
   dropPts: 405,
-  dropPct: 0.270,   // ✓ within 0.20–0.40
-  hGroups: 1,       // ✓ ≤ floor(1500/500) = 3
+  dropPct: 0.270,   // informational — no rulebook constraint (see §6 above)
+  hGroups: 1,       // ✓ heavyPts (e.g. 350) ≤ mediumPts (e.g. 700) — points-ratio rule
   cGroups: 0,       // ✓ ≤ 1
   rareNames: ['Lima Detector Frigate'],   // ✓ each appears once
   uniqueNames: [],

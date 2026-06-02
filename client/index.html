@@ -456,7 +456,7 @@
 
   /* Activation HUD — floating action panel bottom-right of the board */
   .act-hud {
-    position: absolute; bottom: 48px; left: 50%; transform: translateX(-50%);
+    position: absolute; top: 48px; left: 10px; transform: none;
     min-width: 160px; max-width: 220px;
     background: rgba(8,16,15,0.93); backdrop-filter: blur(6px);
     border: 1px solid var(--border-bright); border-radius: 4px;
@@ -1481,8 +1481,10 @@ function renderEventLog() {
   }
 
   const netDot = isOnline
-    ? `<span style="width:6px;height:6px;border-radius:50%;background:${_netConnected ? '#4ad66d' : '#ff5252'};display:inline-block;flex-shrink:0;"></span>
-       <span style="font-size:8px;font-family:var(--mono);color:var(--text-mute);letter-spacing:0.06em;">${_netRoom}</span>`
+    ? (_aiThinking
+        ? `<span style="font-size:9px;font-family:var(--mono);color:var(--text-mute);letter-spacing:0.05em;animation:pulse 1s infinite;">⏳ AI thinking…</span>`
+        : `<span style="width:6px;height:6px;border-radius:50%;background:${_netConnected ? '#4ad66d' : '#ff5252'};display:inline-block;flex-shrink:0;"></span>
+           <span style="font-size:8px;font-family:var(--mono);color:var(--text-mute);letter-spacing:0.06em;">${_netRoom}</span>`)
     : '';
 
   const badge = _chatUnread > 0 ? `<span class="chat-unread">${_chatUnread}</span>` : '';
@@ -1684,7 +1686,7 @@ function renderDropsite(d) {
       }
     }
   }
-  const daActive = state.dropsiteActivation && state.dropsiteActivation.dsId === d.id && !state.launching && !state.featureAttack;
+  const daActive = state.dropsiteActivation && state.dropsiteActivation.dsId === d.id && !state.launching;
   if (d.features && d.features.length) {
     d.features.forEach((fkey, fi) => {
       const f = FEATURES[fkey];
@@ -1939,18 +1941,24 @@ function renderAssetPhase() {
         else hint = `click a destination ≤<b>${thr}"</b>`;
       } else hint = 'use the right panel';
       msg = `<span><b style="color:var(--${sideCssKey(a?a.side:'player1')})">${a?a.kind:''}</b> selected — ${hint} →</span>`;
-      footer = `<button class="btn" id="asset-finish-stage" style="padding:5px 12px;font-size:10px;">DONE WITH ${typeLabel.toUpperCase()} →</button>`;
+      footer = '';
     } else {
       msg = `<span><b style="color:var(--${sideCssKey(state.assetActiveSide)})">${playerNameForSide(state.assetActiveSide)}</b> activates <b>${typeLabel}</b> · click one on the board to move it.</span>`;
-      footer = `<button class="btn" id="asset-finish-stage" style="padding:5px 12px;font-size:10px;">DONE WITH ${typeLabel.toUpperCase()} →</button>`;
+      footer = '';
     }
     banner.innerHTML = `${msg}${footer}`;
     board.appendChild(banner);
 
-    // "DONE WITH [TYPE]" — server-authoritative stage advance.
+    // "DONE WITH [TYPE]" / "RESOLVE BOMBER ATTACKS" — resolve pending attacks first, then advance stage.
     const fb = banner.querySelector('#asset-finish-stage');
     if (fb) fb.addEventListener('click', () => {
-      dispatch({ type: 'assetStageDone', side: state.assetActiveSide, type: ap.assetType });
+      state.assetMove = null;
+      if (anyPendingBomberAttacks(state.assetActiveSide, ap.assetType)) {
+        resolvePendingBomberAttacks(state.assetActiveSide, ap.assetType);
+        renderAll();
+        return;
+      }
+      dispatch({ type: 'assetStageDone', side: state.assetActiveSide, assetType: ap.assetType });
       renderAll();
     });
 
@@ -2001,17 +2009,23 @@ function renderAssetPhase() {
     const logHTML = (bc.log && bc.log.length)
       ? `<div class="ap-section"><div class="ap-log" style="color:var(--text-dim)">${bc.log.slice(-5).join('<br>')}</div></div>` : '';
 
+    // In online mode, only the active actor for each stage can interact.
+    // _netSide is null in hotseat (all buttons active).
+    const bcMyTurn = (actor) => !_netSide || _netSide === actor;
+    const dis = (actor) => bcMyTurn(actor) ? '' : ' disabled';
+
     if (bc.stage === 'pick') {
       const contested = contestedDropsites();
+      const myTurn = bcMyTurn(initSide);
       if (!contested.length) {
         bodyHTML = `<div class="ap-section"><div class="ap-log" style="color:var(--text-mute)">No more contested dropsites — Battalion Combat complete.</div></div>`;
-        footerHTML = `<button class="btn-primary" id="bc-to-destroy">CONTINUE →</button>`;
+        footerHTML = `<button class="btn-primary" id="bc-to-destroy"${dis(initSide)}>CONTINUE →</button>`;
       } else {
         bodyHTML = `<div class="ap-section"><div class="ap-title">${sideName(initSide)} (1st initiative) — pick a contested dropsite</div>` +
-          contested.map(d => `<button class="btn" data-bc-pick="${d.id}" style="width:100%;margin-bottom:3px;">
+          contested.map(d => `<button class="btn" data-bc-pick="${d.id}" style="width:100%;margin-bottom:3px;"${dis(initSide)}>
             ${d.base.name} <span style="color:var(--text-mute)">(${sideName('player1')} ${dsSideBattalions(d,'player1')} · ${sideName('player2')} ${dsSideBattalions(d,'player2')})</span></button>`).join('') +
           `</div>`;
-        footerHTML = `<button class="btn" id="bc-to-destroy">SKIP REMAINING →</button>`;
+        footerHTML = '';
       }
     } else if (bc.stage === 'init' || bc.stage === 'other') {
       const actor = bc.stage === 'init' ? initSide : otherSide;
@@ -2019,74 +2033,80 @@ function renderAssetPhase() {
       const feats = enemyFeatures(ds, actor);
       const myGround = dsBattalions(ds).ground[actor] || 0;
       bodyHTML = `<div class="ap-section">
-        <div class="ap-title">${ds.base.name} — ${sideName(actor)} assigns ground battalions</div>
+        <div class="ap-title">${ds.base.name} — ${sideName(actor)} assigns ground battalions${!bcMyTurn(actor) ? ' <span style="color:var(--text-mute);font-size:8px;">(waiting)</span>' : ''}</div>
         <div style="font-size:10px;color:var(--text-dim);margin-bottom:5px;">
           ${sideName(actor)} has <b style="color:var(--${sideCssKey(actor)})">${myGround}</b> battalion${myGround!==1?'s':''} on the dropsite ground.
           ${(myGround>0 && feats.length) ? 'Pick one enemy-held Feature to attack (1-for-1), or skip.' : (myGround<=0 ? 'No ground battalions to assign.' : 'No enemy-held Features.')}
         </div>`;
       if (myGround > 0 && feats.length) {
-        bodyHTML += feats.map(fk => `<button class="btn" data-bc-feat="${fk}" style="width:100%;margin-bottom:3px;">
+        bodyHTML += feats.map(fk => `<button class="btn" data-bc-feat="${fk}" style="width:100%;margin-bottom:3px;"${dis(actor)}>
           Attack ${locDisplayName(ds, fk)} <span style="color:var(--text-mute)">(enemy ${dsBattalions(ds)[fk][enemy]})</span></button>`).join('');
       }
       bodyHTML += `</div>`;
-      footerHTML = `<button class="btn-primary" id="bc-skip-assign">${bc.stage === 'init' ? 'NEXT PLAYER →' : 'RESOLVE DROPSITE →'}</button>`;
+      footerHTML = `<button class="btn-primary" id="bc-skip-assign"${dis(actor)}>${bc.stage === 'init' ? 'NEXT PLAYER →' : 'RESOLVE DROPSITE →'}</button>`;
     } else if (bc.stage === 'destroy') {
       const destroyOpts = featureDestroyOptions();
       bodyHTML = `<div class="ap-section">
         <div class="ap-title">Destroy Features <span style="color:var(--text-mute);font-weight:400;font-size:8.5px;">(4+ battalions, no enemy)</span></div>
         <div style="font-size:10px;color:var(--text-dim);margin-bottom:5px;">${destroyOpts.length ? 'Optional — remove all those battalions to destroy the Feature.' : 'No eligible Features.'}</div>`;
-      bodyHTML += destroyOpts.map(o => `<button class="btn" data-destroy-feature="${o.dsId}|${o.key}" style="width:100%;margin-bottom:3px;">
+      // Destroy buttons are gated per-side: only the side that owns the battalions can destroy.
+      bodyHTML += destroyOpts.map(o => `<button class="btn" data-destroy-feature="${o.dsId}|${o.key}" style="width:100%;margin-bottom:3px;"${dis(o.side)}>
         Destroy ${o.name} <span style="color:var(--${sideCssKey(o.side)})">(${sideName(o.side)})</span></button>`).join('');
       bodyHTML += `</div>`;
+      // Either side can call bcFinish once there's nothing left to destroy.
       footerHTML = `<button class="btn-primary" id="bc-finish">FINISH COMBAT →</button>`;
     }
 
-    overlay = document.createElement('div');
-    overlay.id = 'asset-overlay';
-    overlay.className = 'setup-overlay';
-    overlay.innerHTML = `
-      <div class="setup-card" style="max-width:440px;">
-        <div class="setup-header">
-          <h2 class="setup-title">BATTALION COMBAT</h2>
-          <div class="setup-sub">Round ${state.round} · ${sideName(initSide)} has initiative</div>
-        </div>
-        <div class="setup-body">
-          ${bodyHTML}
-          ${logHTML}
-          <div class="ap-section"><div class="ap-title">Battalions <span style="color:var(--text-mute);font-weight:400;">(${sideName('player1')} · ${sideName('player2')})</span></div>${battSummaryFor(bc.dsId)}</div>
-        </div>
-        <div class="setup-footer">${footerHTML}</div>
-      </div>
+    const bcHud = document.createElement('div');
+    bcHud.id = 'asset-overlay';
+    bcHud.className = 'hud-item';
+    bcHud.style.cssText = 'pointer-events:auto;max-width:280px;min-width:220px;';
+    bcHud.innerHTML = `
+      <div style="font-family:var(--display);font-size:10px;letter-spacing:1px;color:var(--text);margin-bottom:2px;">BATTALION COMBAT · R${state.round}</div>
+      <div style="font-size:9px;color:var(--text-mute);margin-bottom:6px;">${sideName(initSide)} has initiative</div>
+      ${bodyHTML}
+      ${logHTML}
+      <div class="ap-section"><div class="ap-title" style="font-size:9px;">Battalions <span style="color:var(--text-mute);font-weight:400;">(${sideName('player1')} · ${sideName('player2')})</span></div>${battSummaryFor(bc.dsId)}</div>
+      <div style="margin-top:6px;">${footerHTML}</div>
     `;
-    board.appendChild(overlay);
+    document.querySelector('.board-hud').appendChild(bcHud);
     return;
   }
 
   const hasContested = contestedDropsites().length > 0;
   const hudEl = document.createElement('div');
   hudEl.id = 'asset-phase-hud';
-  hudEl.className = 'hud-item';
-  hudEl.style.cssText = 'pointer-events:auto;min-width:170px;';
+  hudEl.className = 'act-hud';
+  const _apBtnStyle = 'background:linear-gradient(180deg,#1a6a7a 0%,#0f4a58 100%);border-color:#2a8a9a;color:#e0f8ff;';
+
+  // Build a button that shows WAITING if this player has already voted for this transition.
+  const _apVoteBtn = (id, label, voteType) => {
+    const iVoted = !!_netSide && _assetPhaseVoteType === voteType && _assetPhaseVotes.has(_gs());
+    const voted = (_assetPhaseVoteType === voteType) ? _assetPhaseVotes.size : 0;
+    if (iVoted) return `<button class="btn-finish-act" disabled style="${_apBtnStyle}opacity:0.6;">WAITING… (${voted}/2)</button>`;
+    return `<button class="btn-finish-act" id="${id}" style="${_apBtnStyle}">${label}</button>`;
+  };
+
   let primaryBtn = '';
   if (!ap.resolved) {
     if (hasContested) {
-      primaryBtn = `<button class="hud-btn" id="asset-start-battalions" style="width:100%;margin-top:5px;padding:3px 8px;">BATTALION COMBAT →</button>`;
+      primaryBtn = _apVoteBtn('asset-start-battalions', 'BATTALION COMBAT ▸', 'startBattalionCombat');
     } else {
-      primaryBtn = `<button class="hud-btn" id="asset-skip-battalions" style="width:100%;margin-top:5px;padding:3px 8px;">ASSET PHASE →</button>`;
+      primaryBtn = _apVoteBtn('asset-skip-battalions', 'ASSET PHASE ▸', 'skipBattalionCombat');
     }
   } else if (!ap.boardingResolved && anyShipBattalions()) {
-    primaryBtn = `<button class="hud-btn" id="asset-boarding" style="width:100%;margin-top:5px;padding:3px 8px;">BOARDING ACTIONS →</button>`;
+    primaryBtn = _apVoteBtn('asset-boarding', 'BOARDING ACTIONS ▸', 'resolveBoarding');
   } else {
-    primaryBtn = `<button class="hud-btn" id="asset-move-assets" style="width:100%;margin-top:5px;padding:3px 8px;">MOVE LAUNCH ASSETS →</button>`;
+    primaryBtn = _apVoteBtn('asset-move-assets', 'MOVE LAUNCH ASSETS ▸', 'startAssetMove');
   }
   hudEl.innerHTML = `
-    <div style="font-family:var(--display);font-size:10px;letter-spacing:1px;color:var(--text);margin-bottom:3px;">ASSET PHASE · R${state.round}</div>
-    <div style="font-size:9px;color:var(--text-mute);">${sideName(initSide)} has initiative</div>
-    ${ap.resolved ? `<div style="font-size:9px;color:var(--hull-good);margin-top:3px;">&#10003; Battalion Combat done</div>` : ''}
-    ${ap.boardingResolved ? `<div style="font-size:9px;color:var(--hull-good);">&#10003; Boarding resolved</div>` : ''}
+    <div class="act-hud-title">ASSET PHASE · R${state.round}</div>
+    <div style="font-size:10px;color:var(--text-dim);margin-bottom:4px;">${sideName(initSide)} has initiative</div>
+    ${ap.resolved ? `<div style="font-size:9px;color:var(--hull-good);margin-bottom:2px;">✓ Battalion Combat done</div>` : ''}
+    ${ap.boardingResolved ? `<div style="font-size:9px;color:var(--hull-good);margin-bottom:2px;">✓ Boarding resolved</div>` : ''}
     ${primaryBtn}
   `;
-  document.querySelector('.board-hud').appendChild(hudEl);
+  document.querySelector('.board-wrap').appendChild(hudEl);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -2123,12 +2143,22 @@ function renderPanels() {
 
   let ucmPts = 0, shalPts = 0;
   const rf = redFleet(), bf = blueFleet();
-  const TONNAGE_SORT = { C: 0, H: 1, M: 2, L: 3 };
+  const fleetSortKey = def => {
+    const slot = state.slotForSide && state.slotForSide[def.side];
+    const imported = slot && state.importedFleets && state.importedFleets[slot];
+    const admiralIdx = imported?.admiralGroupIdx ?? -1;
+    const isAdmiral = (admiralIdx >= 0 && def.baseId === 'imp' + admiralIdx) ||
+      (imported?.admiralAssignments?.some(a => def.baseId === 'imp' + a.groupIdx) ?? false);
+    if (isAdmiral) return 0;
+    const hasDrop = !!(def.launch && def.launch.some(l => /lander|dropship/i.test(l.type || '')));
+    const base = { C: 1, H: 2, M: 4, L: 6 }[def.tonnage] ?? 8;
+    return base + (def.tonnage !== 'C' && hasDrop ? 1 : 0);
+  };
   const renderSide = (fleet, container, side) => {
     let pts = 0, grpCount = 0;
-    // Non-payload groups render as normal individual cards, heaviest tonnage first.
+    // Non-payload groups render as normal individual cards: admiral → C → H/M/L by drop.
     // Fully-destroyed groups are removed from the list.
-    fleet.filter(def => !def.payload).sort((a, b) => (TONNAGE_SORT[a.tonnage] ?? 99) - (TONNAGE_SORT[b.tonnage] ?? 99)).forEach(def => {
+    fleet.filter(def => !def.payload).sort((a, b) => fleetSortKey(a) - fleetSortKey(b)).forEach(def => {
       pts += def.pts;
       const grp = state.groups[def.id];
       if (grp && grp.ships.every(s => s.destroyed)) return;
@@ -2716,13 +2746,6 @@ function renderDropsiteDetail(ds) {
     </div>`;
   }
 
-  // Finish Activation — at the very bottom while this dropsite is being activated.
-  if (daActive) {
-    html += `<div class="panel-section">
-      <button class="btn-primary" id="da-finish-ds" style="width:100%;">✓ FINISH ACTIVATION</button>
-    </div>`;
-  }
-
   return html;
 }
 
@@ -2787,7 +2810,6 @@ function renderAssetDetail(a) {
         html += `<div class="panel-section">
           <div class="panel-title">Target Locked</div>
           <div class="weapon-special" style="color:var(--hull-crit);">▶ ${tn} — resolves when all assets have moved.</div>
-          <button class="btn" id="asset-detail-untarget" style="width:100%;margin-top:4px;">✕ Clear Target</button>
         </div>`;
       } else if (contacts.length) {
         const verb = a.kind === 'torpedo' ? 'TORPEDO' : a.kind === 'fireship' ? 'FIRE SHIP' : 'BOMBER';
@@ -2814,23 +2836,28 @@ function renderAssetDetail(a) {
     </div>`;
   }
 
-  // Reset Move: undo this asset's move so it can be re-activated this turn.
-  if (a.moved && a.kind !== 'mine') {
-    html += `<div class="panel-section">
-      <button class="btn" id="asset-detail-reset" style="width:100%;">⟲ Reset Move</button>
-      ${a._preMove ? '' : '<div class="weapon-special" style="color:var(--text-mute);margin-top:3px;">(stack was split/merged — resets in place)</div>'}
-    </div>`;
+  // Reset Move and Deselect: only shown for non-fighter, non-bomber assets.
+  // Fighters and bombers use board clicks (combine / select) instead of panel buttons.
+  if (a.kind !== 'fighter' && a.kind !== 'bomber' && a.kind !== 'fireship') {
+    if (a.moved && a.kind !== 'mine') {
+      html += `<div class="panel-section">
+        <button class="btn" id="asset-detail-reset" style="width:100%;">⟲ Reset Move</button>
+        ${a._preMove ? '' : '<div class="weapon-special" style="color:var(--text-mute);margin-top:3px;">(stack was split/merged — resets in place)</div>'}
+      </div>`;
+    }
+    html += `<div class="panel-section"><button class="btn" id="asset-detail-deselect" style="width:100%;">↩ Deselect</button></div>`;
   }
-
-  html += `<div class="panel-section"><button class="btn" id="asset-detail-deselect" style="width:100%;">↩ Deselect</button></div>`;
   return html;
 }
 
 function renderDetail() {
   const div = document.getElementById('detail-panel');
 
-  // ── EXPLOSION REVIEW: while an explosion is resolving, show blast info in this panel. ──
+  // ── EXPLOSION: moved to board HUD (renderExplosionHUD). Clear panel when active. ──
   if (state.attackModal && state.attackModal.step === 'explosion' && state.attackModal.explodeQueue && state.attackModal.explodeQueue[0]) {
+    div.innerHTML = '';
+    return;
+    // (dead code below kept for reference — original explosion panel)
     const M = state.attackModal;
     const ex = M.explodeQueue[0];
     const defSide = getDef(ex.gid) ? getDef(ex.gid).side : null;
@@ -3219,7 +3246,9 @@ function renderDetail() {
   const selShipOOF = state.selectedShipIdx !== null && oofSet.has(state.selectedShipIdx);
 
   let weaponsHTML = '';
-  if (def.weapons && def.weapons.length) {
+  const _hasDetectorSpecial = /\bDetector\b/i.test(def.special || '');
+  const _hasLoSWeapon = def.weapons && def.weapons.some(w => w.arc === 'LoS' || /^Detector$/i.test(w.name));
+  if ((def.weapons && def.weapons.length) || _hasDetectorSpecial) {
     const si = state.selectedShipIdx;
     const selShip = si !== null ? grp.ships[si] : null;
     const eo = selShip ? effectiveOrder(def, grp, si) : null;
@@ -3284,6 +3313,19 @@ function renderDetail() {
         ${tgt ? `<button class="hp-btn" data-weapon-unlock="${state.selectedGroupId}|${si}|${wi}" style="margin-top:3px;">✕ clear target</button>` : ''}
       </div>`;
     });
+    // Detector special-rule action card (ships where Detector is in special but have no LoS weapon).
+    if (_hasDetectorSpecial && !_hasLoSWeapon) {
+      const detectorUsed = selShip && selShip.detectorUsed;
+      const detectorAiming = state.detector && state.detector.gid === state.selectedGroupId && state.detector.si === si && state.detector.wi === -1;
+      const canDetect = !isOpponent && !grp.activated && state.phase === 'play' && onTable && !selShipOOF && !weaponsOffline && !fired && moveGate && !detectorUsed;
+      weaponsHTML += `<div class="weapon-row${detectorAiming ? ' weapon-aiming' : ''}"
+          ${canDetect ? `data-detector="${state.selectedGroupId}|${si}|-1" style="cursor:pointer;"` : ''}>
+        <div class="weapon-name">Detector${detectorUsed ? ` <span style="color:var(--text-mute);font-size:9px;">✓ used</span>` : ''}</div>
+        <div class="weapon-stats">Line of Sight · place Spikes</div>
+        ${detectorAiming ? `<div class="weapon-special" style="color:#4ad6ff">Click an enemy ship in Line of Sight · right-click cancels</div>` : ''}
+        ${canDetect && !detectorAiming ? `<div class="weapon-special" style="color:#4ad6ff">Click to use Detector (forgoes firing this activation)</div>` : ''}
+      </div>`;
+    }
     weaponsHTML += `</div>`;
     // Status / FIRE button.
     if (!isOpponent && state.phase === 'play' && onTable) {
@@ -3864,11 +3906,13 @@ function renderBoard() {
             const rem = gateRemaining(g.ship, g.def);
             const isSel = gsel && gsel.si === g.si && gsel.gid === g.def.id;
             const gr = shipBaseRadiusPx(g.def);
+            const invalidOrder = ['WF', 'DC', 'MT'].includes(g.ship.order);
+            const gateOpacity = (rem <= 0 || invalidOrder) ? 0.25 : 1;
             html += `<circle cx="${g.x}" cy="${g.y}" r="${gr + 3}" fill="none"
-                      stroke="${acol}" stroke-width="${isSel?2:0.8}" opacity="${rem>0?1:0.35}"/>`;
+                      stroke="${invalidOrder ? '#888' : acol}" stroke-width="${isSel?2:0.8}" opacity="${gateOpacity}"/>`;
             html += `<text x="${g.x}" y="${g.y - gr - 5}" font-family="var(--mono)" font-size="7.5"
-                      font-weight="700" fill="${acol}" text-anchor="middle"
-                      stroke="var(--bg)" stroke-width="2" paint-order="stroke" pointer-events="none">G${rem}</text>`;
+                      font-weight="700" fill="${invalidOrder ? '#888' : acol}" text-anchor="middle"
+                      stroke="var(--bg)" stroke-width="2" paint-order="stroke" pointer-events="none">${invalidOrder ? g.ship.order : `G${rem}`}</text>`;
             if (isSel) {
               html += `<circle cx="${g.x}" cy="${g.y}" r="${reachPx}"
                         fill="rgba(212,166,71,0.09)" stroke="${acol}" stroke-width="1" stroke-dasharray="4 3"/>`;
@@ -4608,30 +4652,7 @@ function openAttackModal(gid, si) {
    Uses the side's faction profile for that asset kind. */
 function openBomberAttackModal(assetIds, targetGid, targetSi, side, kind) {
   kind = kind || 'bomber';
-  const movers = state.launchedAssets.filter(a => assetIds.includes(a.id) && a.kind === kind);
-  const total = movers.reduce((n, a) => n + a.count, 0);
-  if (!total) { flashLaunchMsg('No asset in contact'); return; }
-  const tg = state.groups[targetGid];
-  const ts = tg && tg.ships[targetSi];
-  if (!ts) { flashLaunchMsg('Invalid target'); return; }
-  const prof = assetProfile(side, kind);
-  const totalDice = total * (prof.att || 1);
-  // Saturation Fire (bombers/fire ships): −1 save die per asset above 6.
-  const saturation = (kind === 'torpedo') ? 0 : Math.max(0, total - 6);
-  // Scourge Crippling-Fire on bombers (2 if 7+).
-  const cripplingFire = (prof.special || '').includes('Crippling-Fire') ? (total >= 7 ? 2 : 1) : 0;
-  const kindLabel = kind === 'torpedo' ? 'Torpedo' : kind === 'fireship' ? 'Fire Ship Wing' : 'Bomber Wing';
-  const w = { name: `${kindLabel} ×${total}`, arc: '—', att: totalDice, lock: prof.lock, dmg: prof.dmg, type: prof.type,
-    special: [prof.special || '', saturation ? `Saturation −${saturation}` : ''].filter(Boolean).join(', ') };
-  state.attackModal = {
-    bomber: true, bomberKind: kind, bomberAssetIds: assetIds, bomberSide: side, saturation, cripplingFire,
-    attackerName: `${kindLabel} ×${total}`,
-    attackerGid: null, attackerSi: null,
-    shots: [{ wi: 0, w, targetGid, targetSi }],
-    step: 'intro', shotIdx: 0, shieldsUp: {}, log: [], pendingDamage: {},
-    hitResult: null, saveResult: null, crippleQueue: [], explodeQueue: []
-  };
-  renderAll();
+  dispatch({ type: 'beginBomberAttack', assetIds, targetGid, targetSi, side, kind });
 }
 
 /* Any launched assets currently locked onto a ship target (awaiting pooled attack)?
@@ -4653,11 +4674,7 @@ function resolvePendingBomberAttacks(side, type) {
   const inScope = a => a.bomberTarget && (!side || a.side === side) && (!kinds || kinds.includes(a.kind));
   const locked = (state.launchedAssets || []).filter(inScope);
   if (!locked.length) {
-    // No (more) attacks for this scope. If we were resolving for a stage, advance it.
-    if (side) {
-      state._bomberResolveSide = null; state._bomberResolveType = null;
-      dispatch({ type: 'assetStageDone', side, type: type || 'bomber' });
-    }
+    state._bomberResolveSide = null; state._bomberResolveType = null;
     return false;
   }
   const first = locked[0];
@@ -4941,7 +4958,7 @@ function renderAttackModal() {
         : `<div class="am-line" style="color:var(--text-mute);font-size:10px;"><b>${primFailedNow}</b> hit${primFailedNow!==1?'s':''} unsaved so far${sr.backupVal != null ? ` — Backup (${td.bs}) still to roll` : (sr.isBomberAtk || sr.isCloseAction) ? ' — Aegis still to roll' : ''}</div>`}`;
     if (!sr.backupRolled) {
       const failed = sr.primDice.filter(d => !d.ok).length;
-      if (isDefender && !sr.rerolled && td.side && state.planning && state.planning.ap[td.side] >= 1 && failed > 0) {
+      if (isDefender && !sr.rerolled && !sr.fighterRerolled && td.side && state.planning && state.planning.ap[td.side] >= 1 && failed > 0) {
         const maxRR = Math.min(failed, state.planning.ap[td.side]);
         const n = Math.min(M.rerollN || maxRR, maxRR);
         body += `<div class="am-line" style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
@@ -4959,7 +4976,7 @@ function renderAttackModal() {
       if (isDefender) {
         const isBomberAtk = M.bomber && (M.bomberKind === 'bomber' || M.bomberKind === 'fireship');
         const isCloseAction = parseWeaponSpecials(s.w).closeAction || /Close Action/i.test(s.w.special || '');
-        if ((isBomberAtk || isCloseAction) && failed > 0 && td.side && !sr.fighterRerolled) {
+        if ((isBomberAtk || isCloseAction) && failed > 0 && td.side && !sr.fighterRerolled && !sr.rerolled) {
           const wings = friendlyFightersInRange(td.side, ts.x, ts.y);
           const avail = wings.reduce((a, w) => a + w.count, 0);
           if (avail > 0) {
@@ -4983,11 +5000,11 @@ function renderAttackModal() {
         }
       }
     }
-    // Footer: if Backup/Aegis are still to roll and hits remain unsaved → roll them
-    // (after re-rolls); otherwise apply damage. Both advance the attack — attacker only.
+    // Footer: backup saves and Apply Damage are on the DEFENDER's modal — they've rolled
+    // (and optionally re-rolled) saves and choose when to apply the result.
     const needBackup = !sr.backupRolled && sr.hitsList.some(h => !h.saved && h.sv != null) &&
       (sr.backupVal != null || ((sr.isBomberAtk || sr.isCloseAction) && !M.aegisUsed && aegisValueForGroup(sr.targetGid) > 0));
-    if (isAttacker) {
+    if (isDefender) {
       footer = needBackup
         ? `<button class="btn-primary ${sideClass==='shal'?'shal':''}" data-am-next="rollbackup">Roll Backup Saves ▸</button>`
         : `<button class="btn-primary ${sideClass==='shal'?'shal':''}" data-am-next="apply">Apply Damage ▸</button>`;
@@ -5185,15 +5202,9 @@ function rollDeferredBackupSaves(M) { _rollDeferredBackupSaves(state, rng, M); }
 function finishAttack() {
   const M = state.attackModal;
   if (!M) return;
-  // Feature weapon attacks and regular ship attacks both close via the finishAttack intent
-  if (!M.bomber || M.bomberKind === 'feature') { dispatch({ type: 'finishAttack' }); return; }
-  const hint = _finishAttack(state, M);
-  if (hint && hint.bomber) {
-    const { scope, scopeType } = hint;
-    if (anyPendingBomberAttacks(scope, scopeType)) { resolvePendingBomberAttacks(scope, scopeType); renderAll(); return; }
-    if (scope) { state._bomberResolveSide = null; state._bomberResolveType = null; dispatch({ type: 'assetStageDone', side: scope, type: scopeType || 'bomber' }); }
-  }
-  renderAll();
+  // Always server-authoritative — clears attackModal on the server and broadcasts.
+  // After the full broadcast, anyPendingBomberAttacks drives the RESOLVE ATTACKS / DONE button.
+  dispatch({ type: 'finishAttack' });
 }
 
 /* ── END-PHASE REPAIR ──
@@ -5252,29 +5263,33 @@ function openRepairPhase() {
 /* Dogfight result modal: when a Fighter Wing moves onto an enemy launch asset, equal
    numbers are removed from each. This shows the before/after counts and losses. */
 function renderDogfightModal() {
-  let overlay = document.getElementById('dogfight-overlay');
-  if (overlay) overlay.remove();
+  // Render as a board HUD rather than a full-screen modal.
+  const existing = document.getElementById('dogfight-overlay');
+  if (existing) existing.remove();
   const r = state.dogfightResult;
   if (!r) return;
+
   const an = factionName(r.attackerSide), fn = factionName(r.foeSide);
   const foeLabel = { fighter: 'Fighters', bomber: 'Bombers', fireship: 'Fire Ships', torpedo: 'Torpedoes', mine: 'Mines' }[r.foeKind] || r.foeKind;
-  const row = (label, col, before, after, lost) => `<div style="display:flex;align-items:center;gap:8px;margin:5px 0;">
-    <span style="flex:1;color:${col};font-weight:600;">${label}</span>
-    <span style="font-family:var(--mono);font-size:13px;">${before} → <b>${after}</b></span>
-    <span style="font-family:var(--mono);font-size:11px;color:var(--hull-crit);min-width:54px;text-align:right;">−${lost} lost</span>
-  </div>`;
-  overlay = document.createElement('div');
-  overlay.id = 'dogfight-overlay';
-  overlay.className = 'setup-overlay';
-  overlay.innerHTML = `<div class="setup-panel" style="max-width:340px;">
-    <div class="setup-title">⚔ Dogfight</div>
-    <div style="font-size:10px;color:var(--text-dim);margin:4px 0 10px;">Fighters and the enemy Wing trade losses one-for-one.</div>
+  const row = (label, col, before, after, lost) =>
+    `<div style="display:flex;align-items:center;gap:6px;margin:4px 0;">
+      <span style="flex:1;color:${col};font-weight:600;font-size:10px;">${label}</span>
+      <span style="font-family:var(--mono);font-size:10px;">${before}→<b>${after}</b></span>
+      <span style="font-family:var(--mono);font-size:9px;color:var(--hull-crit);">−${lost}</span>
+    </div>`;
+
+  const hud = document.createElement('div');
+  hud.id = 'dogfight-overlay';
+  hud.className = 'act-hud';
+  hud.innerHTML = `
+    <div class="act-hud-title">⚔ DOGFIGHT</div>
+    <div style="font-size:9px;color:var(--text-dim);margin-bottom:6px;">Losses traded one-for-one.</div>
     ${row(an + ' Fighters', 'var(--' + r.attackerSide + ')', r.attackerBefore, r.attackerAfter, r.removed)}
-    ${row(fn + ' ' + foeLabel, 'var(--' + r.foeSide + ')', r.foeBefore, r.foeAfter, r.removed)}
-    <div class="setup-footer"><button class="btn-primary" id="dogfight-ok" style="width:100%;">OK ▸</button></div>
-  </div>`;
-  document.body.appendChild(overlay);
-  overlay.querySelector('#dogfight-ok').addEventListener('click', () => { state.dogfightResult = null; renderAll(); });
+    ${row(fn + ' ' + foeLabel,  'var(--' + r.foeSide    + ')', r.foeBefore,      r.foeAfter,      r.removed)}
+    <button class="btn-primary" id="dogfight-ok" style="width:100%;margin-top:6px;">OK ▸</button>
+  `;
+  document.querySelector('.board-wrap').appendChild(hud);
+  hud.querySelector('#dogfight-ok').addEventListener('click', () => { dispatch({ type: 'dismissDogfight' }); });
 }
 
 /* Modal to choose WHERE to land launched Battalions: on the Dropsite itself, or on
@@ -5362,14 +5377,20 @@ function renderRepairPhase() {
     body = `<div class="am-step-head">🔥 Fire Damage</div>
       <div class="am-line" style="font-size:10px;color:var(--text-dim)">At the start of the End Phase, each Fire Token deals 1 damage before repairs.</div>
       ${R.fireLog.length ? R.fireLog.map(l => `<div class="am-line" style="font-size:11px;">${l}</div>`).join('') : '<div class="am-line">No Fire damage.</div>'}
-      ${R.explosions.length ? `<div class="am-line" style="color:var(--hull-crit)">${R.explosions.length} ship(s) destroyed by Fire — explosions resolve.</div>` : ''}`;
+      ${(R.explosions && R.explosions.length) ? `<div class="am-line" style="color:var(--hull-crit)">${R.explosions.length} ship(s) destroyed by Fire — explosions resolve.</div>` : ''}`;
     footer = `<button class="btn-primary" data-rp-next="repair">Continue ▸</button>`;
   }
 
   else if (R.step === 'repair') {
+    const mySide = _gs();
+    const iVoted = !!_netSide && mySide && _advanceRoundVotes.has(mySide);
+    const voted = _advanceRoundVotes.size;
+    const endRoundBtn = iVoted
+      ? `<button class="btn-primary" disabled style="opacity:0.55;">WAITING… (${voted}/2)</button>`
+      : `<button class="btn-primary" data-rp-close="1">END ROUND ▸</button>`;
     if (!R.targets.length) {
       body = `<div class="am-step-head">🔧 Repair</div><div class="am-line">No repairable Crippling Effects.</div>`;
-      footer = `<button class="btn-primary" data-rp-close="1">End Round ▸</button>`;
+      footer = endRoundBtn;
     } else {
       const t = R.targets[R.idx];
       const ship = state.groups[t.gid].ships[t.si];
@@ -5400,20 +5421,20 @@ function renderRepairPhase() {
           ${r.success?'<span style="color:var(--hull-good)">✓ repaired</span>':'<span style="color:var(--text-mute)">remains</span>'}
         </div>`).join('')}`;
       const last = R.idx >= R.targets.length - 1;
-      footer = `<button class="btn-primary" data-rp-next="${last?'done':'next'}">${last?'End Round ▸':'Next Ship ▸'}</button>`;
+      footer = last ? endRoundBtn : `<button class="btn-primary" data-rp-next="next">Next Ship ▸</button>`;
     }
   }
 
   overlay = document.createElement('div');
   overlay.id = 'repair-overlay';
-  overlay.className = 'setup-overlay';
-  overlay.style.zIndex = '300';
-  overlay.innerHTML = `<div class="setup-card" style="max-width:420px;">
-    <div class="setup-header"><h2 class="setup-title" style="color:var(--hull-warn)">⚙ END PHASE · REPAIR</h2></div>
-    <div class="setup-body">${body}</div>
-    <div class="setup-footer">${footer}</div>
-  </div>`;
-  document.body.appendChild(overlay);
+  overlay.className = 'act-hud';
+  overlay.style.cssText = 'max-width:280px;';
+  overlay.innerHTML = `
+    <div class="act-hud-title" style="color:var(--hull-warn);">⚙ END PHASE · REPAIR</div>
+    <div style="margin-bottom:6px;">${body}</div>
+    <div>${footer}</div>
+  `;
+  document.querySelector('.board-wrap').appendChild(overlay);
   const nb = overlay.querySelector('[data-rp-next]');
   if (nb) nb.addEventListener('click', () => {
     const to = nb.dataset.rpNext;
@@ -5428,7 +5449,14 @@ function renderRepairPhase() {
 
 /* Close the repair phase and actually advance the round. */
 function finishRepairPhase() {
-  state.repairPhase = null;
+  if (!_netSide) {
+    state.repairPhase = null;
+  } else {
+    // Optimistically mark own vote locally so the button switches to WAITING immediately,
+    // preventing accidental double-clicks before the server broadcasts advanceRoundVotes.
+    _advanceRoundVotes = new Set([..._advanceRoundVotes, _gs()]);
+    renderAll(true);
+  }
   dispatch({ type: 'advanceRound' });
 }
 
@@ -6947,44 +6975,85 @@ function renderScoreboard() {
   if (el) el.remove();
 }
 
-/* R4/R6 Standard-Scoring breakdown modal (shown after the round's scoring runs). */
+// Track which round's scoring HUD has been dismissed (client-side only).
+let _scoringHudDismissedRound = -1;
+
+/* End-Phase scoring HUD — shown after every round that produces VP.
+   For R4/R6 shows the full Standard Scoring breakdown; other rounds show
+   the raw scoring log lines. */
 function renderScoringModal() {
-  let overlay = document.getElementById('scoring-overlay');
-  if (overlay) overlay.remove();
+  let hud = document.getElementById('scoring-overlay');
+  if (hud) hud.remove();
+
+  // Standard scoring modal (R4/R6): use state.scoringModal.
   const M = state.scoringModal;
-  if (!M) return;
-  const rows = (M.rows || []).map(r => `<div class="am-line" style="display:flex;gap:8px;font-size:10px;align-items:center;">
-    <span style="flex:1;">${r.name} <span style="color:var(--text-mute)">(${r.sz})</span></span>
-    <span style="color:${r.ctrl?`var(--${r.ctrl})`:'var(--text-mute)'};font-size:9px;">${r.status}</span>
-    <span style="font-family:var(--mono);min-width:78px;text-align:right;">
-      ${r.ucm?`<b style="color:var(--ucm)">${r.ucm>0?'+':''}${r.ucm}</b>`:'<span style="color:var(--text-mute)">·</span>'}
-      / ${r.shal?`<b style="color:var(--shal)">${r.shal>0?'+':''}${r.shal}</b>`:'<span style="color:var(--text-mute)">·</span>'}
-    </span>
-  </div>`).join('');
-  overlay = document.createElement('div');
-  overlay.id = 'scoring-overlay';
-  overlay.className = 'setup-overlay';
-  overlay.style.zIndex = '305';
-  overlay.innerHTML = `<div class="setup-card" style="max-width:420px;">
-    <div class="setup-header"><h2 class="setup-title" style="color:var(--hull-good,#6ec97a)">⊕ STANDARD SCORING · ROUND ${M.round}</h2>
-      <div class="setup-sub">Control / Contest of Dropsites</div></div>
-    <div class="setup-body">
-      <div class="init-grid" style="margin-bottom:10px;">
-        <div class="init-slot"><div class="init-name" style="color:var(--ucm)">${playerNameForSide('player1')}</div>
-          <div style="font-size:22px;font-weight:700;color:var(--ucm)">${M.player1>=0?'+':''}${M.player1}</div>
-          <div style="font-size:9px;color:var(--text-mute)">VP this round · ${state.score.player1.vp} total</div></div>
-        <div class="init-vs">vs</div>
-        <div class="init-slot"><div class="init-name" style="color:var(--shal)">${playerNameForSide('player2')}</div>
-          <div style="font-size:22px;font-weight:700;color:var(--shal)">${M.player2>=0?'+':''}${M.player2}</div>
-          <div style="font-size:9px;color:var(--text-mute)">VP this round · ${state.score.player2.vp} total</div></div>
+  // General round scoring: use _lastScoreLog if not yet seen.
+  const log = state._lastScoreLog;
+  const currentRound = state.round || 0;
+
+  if (!M && (!log || !log.length || _scoringHudDismissedRound >= currentRound)) return;
+
+  const board = document.querySelector('.board-wrap');
+  hud = document.createElement('div');
+  hud.id = 'scoring-overlay';
+  hud.className = 'act-hud';
+  hud.style.cssText = 'max-width:260px;border-color:rgba(110,201,122,0.4);';
+
+  if (M) {
+    // R4/R6 Standard Scoring — full dropsite breakdown
+    const rows = (M.rows || []).map(r => `
+      <div style="display:flex;gap:6px;font-size:9px;align-items:center;padding:2px 0;border-bottom:1px solid var(--border);">
+        <span style="flex:1;color:var(--text-dim);">${r.name} <span style="color:var(--text-mute);font-size:8px;">${r.sz}</span></span>
+        <span style="color:${r.ctrl?`var(--${r.ctrl})`:'var(--text-mute)'};font-size:8px;">${r.status}</span>
+        <span style="font-family:var(--mono);font-size:9px;">
+          ${r.ucm?`<b style="color:var(--ucm)">${r.ucm>0?'+':''}${r.ucm}</b>`:'<span style="opacity:0.3">·</span>'}
+          /<span style="margin-left:2px;">${r.shal?`<b style="color:var(--shal)">${r.shal>0?'+':''}${r.shal}</b>`:'<span style="opacity:0.3">·</span>'}</span>
+        </span>
+      </div>`).join('');
+    hud.innerHTML = `
+      <div class="act-hud-title" style="color:var(--hull-good);">⊕ END PHASE · ROUND ${M.round} SCORING</div>
+      <div style="display:flex;gap:6px;margin-bottom:6px;">
+        <div style="flex:1;text-align:center;">
+          <div style="font-size:9px;color:var(--ucm);">${playerNameForSide('player1')}</div>
+          <div style="font-size:18px;font-weight:700;color:var(--ucm);">${M.player1>=0?'+':''}${M.player1}</div>
+          <div style="font-size:8px;color:var(--text-mute);">${state.score.player1.vp} total</div>
+        </div>
+        <div style="align-self:center;font-size:10px;color:var(--text-mute);">vs</div>
+        <div style="flex:1;text-align:center;">
+          <div style="font-size:9px;color:var(--shal);">${playerNameForSide('player2')}</div>
+          <div style="font-size:18px;font-weight:700;color:var(--shal);">${M.player2>=0?'+':''}${M.player2}</div>
+          <div style="font-size:8px;color:var(--text-mute);">${state.score.player2.vp} total</div>
+        </div>
       </div>
-      <div style="font-size:9px;letter-spacing:0.12em;color:var(--text-mute);margin-bottom:4px;">PER DROPSITE (${playerNameForSide('player1')} / ${playerNameForSide('player2')})</div>
-      ${rows || '<div class="am-line" style="color:var(--text-mute)">No Dropsites scored.</div>'}
-    </div>
-    <div class="setup-footer"><button class="btn-primary" id="scoring-ok" style="width:100%;">CONTINUE →</button></div>
-  </div>`;
-  document.body.appendChild(overlay);
-  overlay.querySelector('#scoring-ok').addEventListener('click', () => { state.scoringModal = null; renderAll(); });
+      <div style="font-size:8px;color:var(--text-mute);margin-bottom:3px;">DROPSITES (${playerNameForSide('player1')} / ${playerNameForSide('player2')})</div>
+      <div style="margin-bottom:6px;">${rows || '<div style="font-size:9px;color:var(--text-mute);">No dropsites scored.</div>'}</div>
+      <button class="btn-primary" id="scoring-ok" style="width:100%;margin-top:4px;">CONTINUE →</button>
+    `;
+    board.appendChild(hud);
+    hud.querySelector('#scoring-ok').addEventListener('click', () => {
+      state.scoringModal = null;
+      _scoringHudDismissedRound = currentRound;
+      renderAll();
+    });
+  } else {
+    // General round scoring — just the log lines
+    const lines = (log || []).map(l => `<div style="font-size:9px;color:var(--text-dim);padding:2px 0;">${l}</div>`).join('');
+    hud.innerHTML = `
+      <div class="act-hud-title" style="color:var(--hull-good);">⊕ END PHASE · VICTORY POINTS</div>
+      <div style="margin-bottom:6px;">${lines || '<div style="font-size:9px;color:var(--text-mute);">No VP scored this round.</div>'}</div>
+      <div style="display:flex;gap:6px;margin-bottom:6px;font-size:9px;">
+        <span style="color:var(--ucm);">${playerNameForSide('player1')} ${state.score.player1.vp} VP</span>
+        <span style="color:var(--text-mute);">·</span>
+        <span style="color:var(--shal);">${playerNameForSide('player2')} ${state.score.player2.vp} VP</span>
+      </div>
+      <button class="btn-primary" id="scoring-ok" style="width:100%;">CONTINUE →</button>
+    `;
+    board.appendChild(hud);
+    hud.querySelector('#scoring-ok').addEventListener('click', () => {
+      _scoringHudDismissedRound = currentRound;
+      renderAll();
+    });
+  }
 }
 
 /* AP adjuster modal — opened from a fleet's AP chip.
@@ -7391,38 +7460,28 @@ function renderInitiative() {
 
   overlay = document.createElement('div');
   overlay.id = 'init-overlay';
-  overlay.className = 'setup-overlay';
+  overlay.className = 'act-hud';
+  overlay.style.cssText = 'max-width:260px;';
   overlay.innerHTML = `
-    <div class="setup-card" style="max-width:400px;">
-      <div class="setup-header">
-        <h2 class="setup-title">PLANNING PHASE</h2>
-        <div class="setup-sub">Round ${I.round} · Initiative roll-off</div>
+    <div class="act-hud-title">PLANNING · R${I.round}</div>
+    <div style="display:flex;gap:8px;margin-bottom:6px;">
+      <div style="flex:1;text-align:center;">
+        <div style="font-size:9px;color:var(--ucm);margin-bottom:2px;">${redName}</div>
+        ${die(I.rRaw, I.redBonus, 'var(--ucm)')}
+        <div style="font-size:9px;margin-top:2px;">${apDetail('player1')}</div>
+        <div style="min-height:12px;">${passDetail('player1')}</div>
       </div>
-      <div class="setup-body">
-        <div class="init-grid">
-          <div class="init-slot">
-            <div class="init-name" style="color:var(--ucm)">${redName}</div>
-            ${die(I.rRaw, I.redBonus, 'var(--ucm)')}
-            <div style="font-size:9px;color:var(--text-mute);line-height:1.4;">${apDetail('player1')}</div>
-            <div style="min-height:14px;">${passDetail('player1')}</div>
-          </div>
-          <div class="init-vs">vs</div>
-          <div class="init-slot">
-            <div class="init-name" style="color:var(--shal)">${blueName}</div>
-            ${die(I.bRaw, I.blueBonus, 'var(--shal)')}
-            <div style="font-size:9px;color:var(--text-mute);line-height:1.4;">${apDetail('player2')}</div>
-            <div style="min-height:14px;">${passDetail('player2')}</div>
-          </div>
-        </div>
-        <div class="init-result" style="color:var(--${sideCssKey(I.winner)})">
-          ${winName} won the roll
-        </div>
-        ${choiceHtml}
-      </div>
-      <div class="setup-footer">
-        ${footerHtml}
+      <div style="align-self:center;font-size:10px;color:var(--text-mute);">vs</div>
+      <div style="flex:1;text-align:center;">
+        <div style="font-size:9px;color:var(--shal);margin-bottom:2px;">${blueName}</div>
+        ${die(I.bRaw, I.blueBonus, 'var(--shal)')}
+        <div style="font-size:9px;margin-top:2px;">${apDetail('player2')}</div>
+        <div style="min-height:12px;">${passDetail('player2')}</div>
       </div>
     </div>
+    <div style="font-size:10px;font-weight:600;color:var(--${sideCssKey(I.winner)});margin-bottom:4px;">${winName} won the roll</div>
+    ${choiceHtml}
+    <div style="margin-top:6px;">${footerHtml}</div>
   `;
   board.appendChild(overlay);
   overlay.querySelectorAll('[data-init-give]').forEach(btn => {
@@ -7937,7 +7996,8 @@ function renderSetupOverlay() {
             ${state.fleetChoices?.f1 ? `<button class="btn${fleetAssignmentsReady('f1')?'':' btn-primary'}" data-view-fleet="f1" style="width:100%;margin-top:3px;font-size:10px;" ${f1ViewLock ? 'disabled' : ''}>${fleetAssignmentsReady('f1')?'👁':'⚠'} ${state.importedFleets?.f1||(fleetHasPayloads(state.fleetChoices.f1)&&!state.importedFleets?.f1)?'SETUP / ':''}VIEW FLEET${state.importedFleets&&state.importedFleets.f1?' ('+_fleetTotalPts(state.importedFleets.f1)+' pts)':''}</button>` : ''}
           </div>
           <div class="faction-slot">
-            <div class="faction-lbl" style="color:var(--shal)">${_netSide === 'player2' ? '▶ YOUR NAME' : _netSide === 'player1' ? 'Opponent' : 'Player 2'}${p2Ready ? ' <span style="color:var(--hull-good);font-size:9px;">✓ READY</span>' : ''}</div>
+            <div class="faction-lbl" style="color:var(--shal)">${state.aiOpponent ? '🤖 AI OPPONENT' : (_netSide === 'player2' ? '▶ YOUR NAME' : _netSide === 'player1' ? 'Opponent' : 'Player 2')}${p2Ready ? ' <span style="color:var(--hull-good);font-size:9px;">✓ READY</span>' : ''}</div>
+            ${state.aiOpponent ? `<div style="font-size:9px;color:var(--text-mute);font-family:var(--mono);margin-bottom:4px;">${FACTIONS[state.fleetChoices?.f2]?.name || '—'} · ${state.aiPersonality || 'balanced'}</div>` : ''}
             <input class="fleet-dropdown" type="text" data-player-name="f2" value="${state.playerNames ? state.playerNames.f2 : 'Player 2'}" placeholder="Player 2 name" style="margin-bottom:5px;font-size:10px;" ${f2Lock ? 'disabled' : ''}>
             <select class="fleet-dropdown" data-fleet-choice="f2" ${f2Lock ? 'disabled' : ''}>
               <option value="" ${!state.fleetChoices.f2?'selected':''}>— select quickplay fleet —</option>
@@ -7954,8 +8014,8 @@ function renderSetupOverlay() {
                 <option value="">— Bonus secondary —</option>
                 ${['annihilate','take_prizes','decapitate'].map(k => `<option value="${k}" ${(state.moonguardSecondaryChoice&&state.moonguardSecondaryChoice.f2)===k?'selected':''}>${SECONDARY_OBJECTIVES[k]?SECONDARY_OBJECTIVES[k].name:k}</option>`).join('')}
               </select>` : ''}
-            <button class="btn" data-import-fleet="f2" style="width:100%;margin-top:5px;font-size:10px;" ${f2Lock ? 'disabled' : ''}>${state.importedFleets&&state.importedFleets.f2 ? '✏ EDIT IMPORT' : '≡ IMPORT LIST'}</button>
-            ${state.fleetChoices?.f2 ? `<button class="btn${fleetAssignmentsReady('f2')?'':' btn-primary'}" data-view-fleet="f2" style="width:100%;margin-top:3px;font-size:10px;" ${f2ViewLock ? 'disabled' : ''}>${fleetAssignmentsReady('f2')?'👁':'⚠'} ${state.importedFleets?.f2||(fleetHasPayloads(state.fleetChoices.f2)&&!state.importedFleets?.f2)?'SETUP / ':''}VIEW FLEET${state.importedFleets&&state.importedFleets.f2?' ('+_fleetTotalPts(state.importedFleets.f2)+' pts)':''}</button>` : ''}
+            ${!state.aiOpponent ? `<button class="btn" data-import-fleet="f2" style="width:100%;margin-top:5px;font-size:10px;" ${f2Lock ? 'disabled' : ''}>${state.importedFleets&&state.importedFleets.f2 ? '✏ EDIT IMPORT' : '≡ IMPORT LIST'}</button>` : ''}
+            ${state.fleetChoices?.f2 && !state.aiOpponent ? `<button class="btn${fleetAssignmentsReady('f2')?'':' btn-primary'}" data-view-fleet="f2" style="width:100%;margin-top:3px;font-size:10px;" ${f2ViewLock ? 'disabled' : ''}>${fleetAssignmentsReady('f2')?'👁':'⚠'} ${state.importedFleets?.f2||(fleetHasPayloads(state.fleetChoices.f2)&&!state.importedFleets?.f2)?'SETUP / ':''}VIEW FLEET${state.importedFleets&&state.importedFleets.f2?' ('+_fleetTotalPts(state.importedFleets.f2)+' pts)':''}</button>` : ''}
           </div>
         </div>
         <div style="font-size:9px;color:var(--text-mute);margin:-4px 0 10px;text-align:center;">Red and Blue deployment sides are assigned randomly when you confirm.</div>
@@ -7995,6 +8055,9 @@ function renderSetupOverlay() {
           const myReady = mySide === 'player1' ? p1Ready : p2Ready;
           if (myReady) {
             return `<button class="btn" data-unready-setup="${mySide}" style="color:var(--hull-good);border-color:var(--hull-good);">✓ READY [${readyCount}/2] — cancel</button>`;
+          }
+          if (state.aiOpponent) {
+            return `<button class="btn-primary" data-ready-setup="${mySide}" ${scenarioComplete ? '' : 'disabled'}>▶ BEGIN vs AI</button>`;
           }
           const countLabel = readyCount > 0 ? ` [${readyCount}/2]` : '';
           return `<button class="btn-primary" data-ready-setup="${mySide}" ${scenarioComplete ? '' : 'disabled'}>✓ CONFIRM READY${countLabel}</button>`;
@@ -8292,6 +8355,78 @@ function renderSetupOverlay() {
   });
 }
 
+/* Explosion HUD: shown on the board instead of the right panel. */
+function renderExplosionHUD() {
+  const board = document.querySelector('.board-wrap');
+  let hud = document.getElementById('explosion-hud');
+  if (hud) hud.remove();
+
+  if (!(state.attackModal && state.attackModal.step === 'explosion' &&
+        state.attackModal.explodeQueue && state.attackModal.explodeQueue[0])) return;
+
+  const M  = state.attackModal;
+  const ex = M.explodeQueue[0];
+  const defSide    = getDef(ex.gid)?.side;
+  const canContain = defSide && state.planning && state.planning.ap[defSide] >= 2 && !ex.contained;
+  const isAttacker = !_netSide || (_netSide && defSide && _netSide !== defSide);
+
+  let inner = `
+    <div class="act-hud-title" style="color:var(--hull-crit);">💥 EXPLOSION</div>
+    <div style="font-weight:600;font-size:11px;margin-bottom:2px;">${ex.name}</div>
+    <div style="font-size:9px;color:var(--text-dim);margin-bottom:6px;">Blast ${ex.rangeIn}" · ${ex.layer}${ex.mod ? ` · +${ex.mod}` : ''}</div>`;
+
+  if (!ex.rolled) {
+    if (ex.contained) {
+      inner += `<div style="font-size:9px;color:var(--hull-crit);margin-bottom:6px;">Containing — result 2.</div>`;
+    } else if (canContain) {
+      inner += `<button class="btn" id="expl-contain-btn" style="font-size:9px;width:100%;margin-bottom:6px;">⚙ Contain Reactor (2 AP)</button>`;
+    }
+    inner += `<div style="font-size:9px;color:var(--text-mute);margin-bottom:6px;">Declare Admiral abilities, then roll.</div>
+      <button class="btn-primary" id="expl-roll-btn" style="width:100%;">${ex.contained ? 'Resolve (2) ▸' : 'ROLL 1D6 ▸'}</button>`;
+  } else {
+    if (ex.d1 != null) inner += `<div style="margin-bottom:4px;"><span class="am-die" style="font-size:11px;">${ex.d1}</span>${ex.mod ? ` +${ex.mod} = <b>${ex.total}</b>` : ''}</div>`;
+    inner += `<div style="color:var(--hull-crit);font-weight:600;margin-bottom:2px;font-size:10px;">${ex.effectName}</div>
+      <div style="font-size:9px;color:var(--text-dim);margin-bottom:8px;">${ex.effectDesc}</div>`;
+    if (ex.effKind !== 'none') {
+      const mult   = ex.effKind === 'spike2x' ? 2 : 1;
+      const rangePx = ex.rangeIn * INCH * mult;
+      const hit = [];
+      Object.keys(state.groups).forEach(agid => {
+        const adef = getDef(agid);
+        state.groups[agid].ships.forEach(s => {
+          if (s.destroyed || s.offTable || s.attachedTo) return;
+          if ((s.layer || 'orbit') !== ex.layer) return;
+          if (Math.hypot(s.x - ex.x, s.y - ex.y) > rangePx) return;
+          if (!hit.find(h => h.gid === agid)) hit.push({ gid: agid, name: adef.name, side: adef.side });
+        });
+      });
+      if (hit.length) {
+        inner += `<div style="font-size:9px;color:var(--text-mute);margin-bottom:3px;font-weight:600;">AFFECTED:</div>`;
+        hit.forEach(h => {
+          const sc = h.side === 'player1' ? 'var(--ucm)' : 'var(--shal)';
+          inner += `<div style="font-size:9px;color:${sc};">${h.name}</div>`;
+        });
+        inner += `<div style="margin-top:4px;"></div>`;
+      }
+    }
+    inner += `<button class="btn-primary" id="expl-resolve-btn" style="width:100%;margin-top:4px;">Resolve Effects ▸</button>`;
+  }
+
+  hud = document.createElement('div');
+  hud.id = 'explosion-hud';
+  hud.className = 'act-hud';
+  hud.style.cssText = 'max-width:200px;border-color:rgba(255,60,60,0.5);';
+  hud.innerHTML = inner;
+  board.appendChild(hud);
+
+  const containBtn = hud.querySelector('#expl-contain-btn');
+  if (containBtn) containBtn.addEventListener('click', () => dispatch({ type: 'attackDeclare', what: 'contain' }));
+  const rollBtn = hud.querySelector('#expl-roll-btn');
+  if (rollBtn) rollBtn.addEventListener('click', () => advanceAttack('explosion-roll'));
+  const resolveBtn = hud.querySelector('#expl-resolve-btn');
+  if (resolveBtn) resolveBtn.addEventListener('click', () => advanceAttack('explosion-next'));
+}
+
 /* Activation HUD: Undo Move · Finish Activation · Undo Deploy
    Floats at the bottom-right of the board so the detail panel stays uncluttered. */
 function renderActivationHUD() {
@@ -8300,6 +8435,99 @@ function renderActivationHUD() {
   if (hud) hud.remove();
 
   const P = state.planning;
+
+  // ── Asset phase action HUD ──
+  if (state.assetPhase && state.assetPhase.step === 'assets') {
+    const myTurn = !_netSide || _gs() === state.assetActiveSide;
+    const ap = state.assetPhase;
+    const typeLabel = { fighter: 'Fighters', bomber: 'Bombers & Fire Ships', torpedo: 'Torpedoes' }[ap.assetType] || 'Assets';
+
+    // Pending bomber target lock — undo / confirm
+    if (_pendingAssetTarget && myTurn) {
+      const ta = (state.launchedAssets || []).find(x => x.id === _pendingAssetTarget.assetId);
+      const td = getDef(_pendingAssetTarget.gid);
+      const tnLabel = td ? td.name : '?';
+      hud = document.createElement('div');
+      hud.id = 'act-hud';
+      hud.className = 'act-hud';
+      hud.innerHTML = `
+        <div class="act-hud-title">LOCK TARGET</div>
+        <div style="font-size:10px;color:var(--text-dim);margin-bottom:4px;">${ta ? ta.kind : ''} → <b>${tnLabel}</b></div>
+        <button class="btn" id="hud-asset-reset" style="width:100%;margin-bottom:4px;">✕ CANCEL</button>
+        <button class="btn-finish-act" id="hud-asset-confirm" style="width:100%;">CONFIRM LOCK ▸</button>
+      `;
+      board.appendChild(hud);
+      return;
+    }
+
+    // Asset moved — show UNDO / CONFIRM while assetMove is still selected on a moved asset
+    if (myTurn && state.assetMove) {
+      const ma = (state.launchedAssets || []).find(x => x.id === state.assetMove.id);
+      if (ma && ma.moved) {
+        hud = document.createElement('div');
+        hud.id = 'act-hud';
+        hud.className = 'act-hud';
+        hud.innerHTML = `
+          <div class="act-hud-title">${ma.kind.toUpperCase()} MOVED</div>
+          <button class="btn" id="hud-asset-reset" style="width:100%;margin-bottom:4px;">⟲ UNDO MOVE</button>
+          <button class="btn-finish-act" id="hud-asset-confirm" style="width:100%;">CONFIRM ALL ▸</button>
+        `;
+        board.appendChild(hud);
+        return;
+      }
+    }
+
+    // DONE / RESOLVE ATTACKS — combined: instruction + button in one HUD (no separate banner).
+    if (myTurn && state.assetActiveSide) {
+      const existingBanner = document.getElementById('asset-move-banner');
+      if (existingBanner) existingBanner.remove();
+
+      const hasPending = anyPendingBomberAttacks(state.assetActiveSide, ap.assetType);
+      const doneLabel = hasPending ? 'RESOLVE ATTACKS ▸' : 'DONE ▸';
+      const _apBtnStyle = hasPending
+        ? ''
+        : 'background:linear-gradient(180deg,#1a6a7a 0%,#0f4a58 100%);border-color:#2a8a9a;color:#e0f8ff;';
+      const kindWord = ap.assetType === 'fighter' ? 'fighter'
+                     : ap.assetType === 'torpedo'  ? 'torpedo'
+                     : 'bomber';
+      hud = document.createElement('div');
+      hud.id = 'act-hud';
+      hud.className = 'act-hud';
+      hud.innerHTML = `
+        <div class="act-hud-title">ASSET PHASE · ${typeLabel.toUpperCase()}</div>
+        <div style="font-size:10px;color:var(--text-dim);margin-bottom:6px;">Click a <b>${kindWord}</b> on the board to move it.</div>
+        <button class="btn-finish-act" id="hud-stage-done" style="width:100%;${_apBtnStyle}">${doneLabel}</button>
+      `;
+      board.appendChild(hud);
+      return;
+    }
+  }
+
+  // ── End of Activation Phase ──
+  // advanceActiveSide() nulls activeSide once every eligible group on BOTH sides
+  // has activated. At that point either player may vote to end the round; the
+  // server waits for both endRound votes before advancing to Dropsite Activation.
+  if (state.phase === 'play' && state.activeSide === null && !state.dropsiteActivation
+      && !state.assetPhase && !state.attackModal && !state.launching && !state.aiming) {
+    const myEndSide = _gs() || 'player1';
+    if (_isLegal(state, { type: 'endRound' }, myEndSide)) {
+      const voted = _endRoundVotes.size;
+      const iVoted = !!_netSide && _endRoundVotes.has(myEndSide);
+      let label = 'END ROUND ▸';
+      if (_netSide && voted > 0) label += ` (${voted}/2)`;
+      if (iVoted) label = `WAITING… (${voted}/2)`;
+      hud = document.createElement('div');
+      hud.id = 'act-hud';
+      hud.className = 'act-hud';
+      hud.innerHTML = `
+        <div class="act-hud-title">ACTIVATIONS COMPLETE</div>
+        <button class="btn-finish-act" id="end-round" style="width:100%;"${iVoted ? ' disabled' : ''}>${label}</button>
+      `;
+      board.appendChild(hud);
+      return;
+    }
+  }
+
   const anyActivated = state.activeSide && allDefs().some(def =>
     def.side === state.activeSide && state.groups[def.id]?.activated);
   const canPass = state.phase === 'play' && P && state.activeSide
@@ -8704,6 +8932,7 @@ function renderAll(localOnly = false) {
     renderInitiative();
     renderDeployHint();
     renderActivationHUD();
+    renderExplosionHUD();
     renderFeatureAttackHUD();
     renderScenBanner();
     updateHUD();
@@ -8715,8 +8944,6 @@ function renderAll(localOnly = false) {
   // Replay mode never relays — we're rendering a historical state copy.
   if (!localOnly && !_replayMode) {
     if (state.phase === 'setup' || state.phase === 'scenery' || state.phase === 'nominations') netRelaySetup();
-    else console.log('[relay] netAfterRender called and not acted on');
-    // else netAfterRender();
   }
   // Hotseat only: auto-activate ineligible off-table groups. In online mode the
   // server pre-activates them inside rollInitiative so no client dispatch needed.
@@ -9024,7 +9251,8 @@ let _3dShipMeshes = []; // [{mesh, gid, si}] rebuilt each sync3d — used for ra
 let _3D_STATION_Y_DROP = 0;
 
 const _3D_LAYER_Y = { orbit: 120, atmosphere: 60 };
-const _3D_SHIP_DIMS = { SH: [28, 4, 12], H: [20, 3.5, 9], M: [14, 3, 6], L: [10, 2.5, 4] };
+// C (Colossal) sits between Heavy and Super-Heavy; dreadnoughts/supercarriers use it.
+const _3D_SHIP_DIMS = { SH: [28, 4, 12], C: [23, 3.9, 10], H: [20, 3.5, 9], M: [14, 3, 6], L: [10, 2.5, 4] };
 
 // ─── GEOMETRY / MATERIAL CACHES ──────────────────────────────────────────────
 // Static scenery group (rings, asteroids, cities, stations, placed-clouds).
@@ -9093,6 +9321,16 @@ const _FACTION_GLB_FRIGATE = {
 };
 const _BIO_CELL_GLB  = '/client/assets/bio_cell.glb';
 const _STATION_GLB   = '/client/assets/station.glb';
+const _VOIDGATE_GLB  = '/client/assets/voidgate.glb';
+// Per-faction heavy-class model variants: battlecruiser / battleship / dreadnought
+const _HEAVY_GLB = {
+  ucm:        { battlecruiser: '/client/assets/ucm_battlecruiser.glb', battleship: '/client/assets/ucm_battleship.glb', dreadnought: '/client/assets/ucm_dreadnought.glb' },
+  scourge:    { battlecruiser: '/client/assets/sco_battlecruiser.glb', battleship: '/client/assets/sco_battleship.glb', dreadnought: '/client/assets/sco_dreadnought.glb' },
+  phr:        { battlecruiser: '/client/assets/phr_battlecruiser.glb', battleship: '/client/assets/phr_battleship.glb', dreadnought: '/client/assets/phr_dreadnought.glb' },
+  shaltari:   { battlecruiser: '/client/assets/sha_battlecruiser.glb', battleship: '/client/assets/sha_battleship.glb', dreadnought: '/client/assets/sha_dreadnought.glb' },
+  resistance: { battlecruiser: '/client/assets/res_battlecruiser.glb', battleship: '/client/assets/res_battleship.glb', dreadnought: '/client/assets/res_dreadnought.glb' },
+  bioficer:   { battlecruiser: '/client/assets/bio_battlecruiser.glb', battleship: '/client/assets/bio_battleship.glb', dreadnought: '/client/assets/bio_dreadnought.glb' },
+};
 const _CITY_GLB = {
   S: '/client/assets/city_small.glb',
   M: '/client/assets/city_medium.glb',
@@ -9104,6 +9342,8 @@ let _glbFrigates = {}; // faction → frigate GLB
 let _glbBioCell  = null;
 let _glbCities   = {}; // S/M/L → city GLB
 let _glbStation  = null; // single station template, scaled per S/M/L at placement
+let _glbHeavy    = {}; // faction → { battlecruiser, battleship, dreadnought }
+let _glbVoidgate = null;
 
 function _3dShipRotY(headingDeg) {
   const r = headingDeg * Math.PI / 180;
@@ -9336,6 +9576,7 @@ function _handle3dClick(e) {
       }
       flashLaunchMsg(`Dropsite launched ${_fdCount} ${_fdLabel}${_fdCount > 1 ? 's' : ''}`, true);
       dispatch({ type: 'launchDropsiteAsset', kind: _fdKind, count: _fdCount, x: _fdPt.x, y: _fdPt.y, fromDropsite: _fdL.fromDropsite, fromFeature: _fdL.fromFeature ?? null });
+      state.launching = null; state.featureAttack = null;
       return;
     }
     // Non-point dropsite launches (gate-dropship etc.) fall through to panel UI.
@@ -9413,6 +9654,7 @@ function _handle3dClick(e) {
         const _gLBest = _gLGates.find(g => g.def.id === _gLHit.def.id && g.si === _gLHit.si);
         if (!_gLBest) { flashLaunchMsg('Click a chained Voidgate'); return; }
         if (gateRemaining(_gLBest.ship, _gLBest.def) <= 0) { flashLaunchMsg('That Voidgate has no Gateship value left'); return; }
+        if (['WF', 'DC', 'MT'].includes(_gLBest.ship.order)) { flashLaunchMsg(`That Voidgate is on ${_gLBest.ship.order} — cannot receive drops`); return; }
         const _gLLayer = _gLBest.ship.layer || 'orbit';
         const _gLAllDs = state.scenarioData.dropsites || [];
         const _gLReachable = _gLAllDs.some(d => {
@@ -9537,7 +9779,7 @@ function _handle3dClick(e) {
     });
 
     if (!state.assetMove) {
-      // Select an asset — uses same logic as the 2D handler.
+      // Select an asset.
       if (_aNear) {
         const a = _aNear;
         const curType = state.assetPhase.assetType;
@@ -9551,11 +9793,37 @@ function _handle3dClick(e) {
       return; // suppress ship/dropsite selection during asset phase
     }
 
-    // Move the selected asset — server-authoritative via assetMove intent.
+    // An asset is already selected (state.assetMove is set).
     const _aSel = (state.launchedAssets || []).find(x => x.id === state.assetMove.id);
     if (!_aSel) { state.assetMove = null; renderAll(); return; }
-    if (_aSel.moved) return;
     if (_aSel.kind === 'mine') { flashLaunchMsg('Mines cannot move once launched'); state.assetMove = null; renderAll(); return; }
+
+    // If the user clicked a different asset of the same type and side:
+    const _COMBINE_RANGE_PX = 4 * INCH; // assets within 4" are considered "same stack"
+    if (_aNear && _aNear.id !== _aSel.id && _aNear.kind === _aSel.kind && _aNear.side === _aSel.side) {
+      if (_aSel.moved) {
+        // Selected asset already moved — just select the clicked asset instead.
+        dispatch({ type: 'selectAssetMove', assetId: _aNear.id, count: _aNear.count });
+        renderAll();
+      } else {
+        // Selected asset hasn't moved yet — combine stacks if within range.
+        const dx = _aNear.x - _aSel.x, dy = _aNear.y - _aSel.y;
+        const combineRange = Math.hypot(dx, dy);
+        if (combineRange <= _COMBINE_RANGE_PX) {
+          // Add the other stack's count to the current selection and deselect the other asset.
+          state.assetMove = { id: _aSel.id, count: (state.assetMove.count || _aSel.count) + _aNear.count };
+          flashLaunchMsg(`Combined: ${state.assetMove.count} ${_aSel.kind}${state.assetMove.count !== 1 ? 's' : ''} ready to move`, true);
+          renderAll();
+        } else {
+          // Out of combine range — just select the other asset.
+          dispatch({ type: 'selectAssetMove', assetId: _aNear.id, count: _aNear.count });
+          renderAll();
+        }
+      }
+      return;
+    }
+
+    if (_aSel.moved) return;
     const _apt = (_aSel.kind === 'torpedo') ? _aptGround : _aptOrbit;
     if (!_apt) return;
     dispatch({ type: 'assetMove', assetId: _aSel.id, x: _apt.x, y: _apt.y, count: state.assetMove.count });
@@ -10015,9 +10283,11 @@ function init3d() {
       else { state.launching = null; flashLaunchMsg('Launch cancelled'); }
       renderAll(_wasDs); return;
     }
-    if (state.assetMove) { state.assetMove = null; renderAll(true); return; } // deselect is local-only
+    if (_pendingAssetTarget) { _pendingAssetTarget = null; renderAll(true); return; }
+    if (state.assetMove) { dispatch({ type: 'selectAssetMove' }); return; }
     if (state.extracting) { state.extracting = null; flashLaunchMsg('Extract cancelled'); renderAll(); return; }
     if (state.featureAttack) { state.featureAttack = null; flashLaunchMsg('Targeting cancelled'); renderAll(true); return; }
+    if (state.targeting) { state.targeting = null; flashLaunchMsg('Targeting cancelled'); renderAll(true); return; }
     if (state.aiming) {
       if (state.aiming.mode === 'course_change') { dispatch({ type: 'holdPosition', gid: state.aiming.gid, si: state.aiming.si }); }
       else { state.aiming = null; state.hoverPoint = null; renderAll(); }
@@ -10029,7 +10299,6 @@ function init3d() {
     if (state.payloadReattach) { state.payloadReattach = null; flashLaunchMsg('Reattach cancelled'); renderAll(); return; }
     if (state.antiWing) { state.antiWing = null; flashLaunchMsg('Anti-Wing cancelled'); renderAll(); return; }
     if (state.detector) { state.detector = null; flashLaunchMsg('Detector cancelled'); renderAll(true); return; }
-    if (state.targeting) { state.targeting = null; flashLaunchMsg('Targeting cancelled'); renderAll(true); return; }
     if (state.layerToggle) { state.layerToggle = false; state.hoverPoint = null; renderAll(); return; }
     if (state.phase === 'play' && state.selectedGroupId !== null && state.selectedShipIdx !== null) {
       const _rGid = state.selectedGroupId, _rSi = state.selectedShipIdx;
@@ -10155,6 +10424,23 @@ function _loadGlbModels() {
     if (_view3d && _3d) sync3d();
   }, undefined, err => console.warn('[3D] bio_cell GLB failed:', err));
 
+  // Heavy-class variants for all factions (battlecruiser / battleship / dreadnought)
+  Object.entries(_HEAVY_GLB).forEach(([faction, tiers]) => {
+    _glbHeavy[faction] = {};
+    Object.entries(tiers).forEach(([tier, url]) => {
+      loader.load(url, gltf => {
+        _glbHeavy[faction][tier] = _normaliseGlb(gltf.scene, _FACTION_GLB_YAW[faction] || 0);
+        if (_view3d && _3d) sync3d();
+      }, undefined, err => console.warn(`[3D] ${faction} ${tier} GLB failed:`, err));
+    });
+  });
+
+  // Shaltari Voidgate
+  loader.load(_VOIDGATE_GLB, gltf => {
+    _glbVoidgate = _normaliseGlb(gltf.scene, _FACTION_GLB_YAW['shaltari'] || 0);
+    if (_view3d && _3d) sync3d();
+  }, undefined, err => console.warn('[3D] voidgate GLB failed:', err));
+
   // City dropsites — all normalised to the same footprint so S/M/L keep their
   // natural relative size instead of being independently rescaled.
   const _CITY_FOOTPRINT = 55;
@@ -10231,9 +10517,9 @@ function _tintGlbScenery(clone, dead) {
 // Clone a cached GLB ship, scale to tonnage, and paint in varied tones of the
 // player colour — three alternating tones (main / light / dark) so different
 // hull sections read as belonging to the same faction without being flat.
-function _cloneGlbShip(template, tonnage, playerColorHex) {
+function _cloneGlbShip(template, tonnage, playerColorHex, sizeMultiplier = 1.0) {
   const model = template.clone(true);
-  const t     = (_3D_SHIP_DIMS[tonnage] || _3D_SHIP_DIMS['M'])[0] / 14;
+  const t     = (_3D_SHIP_DIMS[tonnage] || _3D_SHIP_DIMS['M'])[0] / 14 * sizeMultiplier;
   model.scale.multiplyScalar(t);
   model.position.multiplyScalar(t);
 
@@ -11960,15 +12246,49 @@ function _buildAssetWing3d(color, kind, side) {
 }
 
 function _buildShipMesh3d(tonnage, color, faction, role) {
-  // Bioficer cells (role 'Cell' / 'Cells') get their own model
-  if (faction === 'bioficer' && role && /^cells?$/i.test(role)) {
-    if (_glbBioCell)           return _cloneGlbShip(_glbBioCell,        tonnage, color);
+  const r = role || '';
+
+  // ── Shaltari Voidgates ────────────────────────────────────────────────────
+  if (faction === 'shaltari' && /Voidgate/i.test(r)) {
+    if (_glbVoidgate) return _cloneGlbShip(_glbVoidgate, tonnage, color);
   }
-  // L-tonnage ships use the frigate model
+
+  // ── Heavy-class variants for all factions with progressive sizing ─────────
+  // Role-to-tier mapping follows db.js comment sections:
+  //   Dreadnought model  : Dreadnought, Supercarrier, Interstellar (Ark/Dreadnought), Famous Admiral (Dreadnought/Supercarrier/Coloniser)
+  //   Battleship model   : Battleship, Super Battleship, Grand Battleship (Resistance)
+  //   Battlecruiser model: Battlecruiser, Pocket Battleship(s), Supercruiser, Old Battleship (Resistance)
+  //   Everything else    : cruiser / frigate models (Cruiser, Heavy Cruiser, Troopship, Mothership, Grand Cruiser, etc.)
+  const fHeavy = _glbHeavy[faction];
+  if (fHeavy) {
+    // For Famous Admiral ships the role is "Famous Admiral (X)" — extract X for tier matching.
+    const innerRole = r.replace(/^Famous\s+Admiral\s*\(/i, '').replace(/\)\s*$/, '');
+    const testRole  = /^Famous\s+Admiral/i.test(r) ? innerRole : r;
+
+    const isDreadnought  = /Dreadnought|Supercarrier|Interstellar|Coloniser/i.test(testRole);
+    const isBattleship   = /^Battleship$|Super Battleship|Grand Battleship/i.test(testRole);
+    const isBCrClass     = /Battlecruiser|Pocket Battleship|Old Battleship/i.test(testRole);
+    const isSupercruiser = /^Supercruiser$/i.test(testRole);
+
+    if (isDreadnought && fHeavy.dreadnought)
+      return _cloneGlbShip(fHeavy.dreadnought, tonnage, color);
+    if (isBattleship && fHeavy.battleship)
+      return _cloneGlbShip(fHeavy.battleship, tonnage, color, 1.08);
+    if ((isBCrClass || isSupercruiser) && fHeavy.battlecruiser)
+      return _cloneGlbShip(fHeavy.battlecruiser, tonnage, color, isSupercruiser ? 1.05 : 1.0);
+  }
+
+  // ── Bioficer cells ────────────────────────────────────────────────────────
+  if (faction === 'bioficer' && /^cells?$/i.test(r)) {
+    if (_glbBioCell) return _cloneGlbShip(_glbBioCell, tonnage, color);
+  }
+
+  // ── L-tonnage ships use the frigate model ─────────────────────────────────
   if (tonnage === 'L') {
     if (_glbFrigates[faction]) return _cloneGlbShip(_glbFrigates[faction], tonnage, color);
   }
-  // M / H / SH use the cruiser model; fall through to procedural while loading
+
+  // ── M / H / C / SH use the cruiser model; fall through to procedural ──────
   if (_glbModels[faction])     return _cloneGlbShip(_glbModels[faction],  tonnage, color);
   if (faction === 'ucm')       return _buildUCMShipMesh3d(tonnage, color);
   if (faction === 'scourge')   return _buildScourgeShipMesh3d(tonnage, color);
@@ -12382,19 +12702,38 @@ function renderFeatureAttackHUD() {
   const ds = state.scenarioData && state.scenarioData.dropsites.find(d => d.id === fa.dsId);
   const f = ds && FEATURES[ds.features[fa.fi]];
   if (!ds || !f || !f.weapon) return;
-  const sideKey = fa.side === 'player1' ? 'ucm' : 'shal';
   const el = document.createElement('div');
   el.id = 'feature-attack-hud';
-  el.className = 'hud-item';
-  el.style.cssText = 'pointer-events:auto; line-height:1.6;';
-  el.innerHTML = `<b style="color:var(--${sideKey})">${f.name}</b>: ${f.weapon.name}<br>
-    <span style="color:var(--text-mute);font-size:9px;">Click enemy ship · right-click cancels</span><br>
-    <button id="fa-hud-cancel" class="hud-btn" style="margin-top:4px;padding:2px 8px;font-size:9px;">CANCEL</button>`;
-  document.querySelector('.board-hud').appendChild(el);
+  el.className = 'act-hud';
+  if (fa.target) {
+    const td = getDef(fa.target.gid);
+    const tn = td ? td.name : '?';
+    el.innerHTML = `
+      <div class="act-hud-title">${f.weapon.name.toUpperCase()} — TARGET LOCKED</div>
+      <div style="font-size:10px;color:var(--text-dim);margin-bottom:4px;">▶ ${tn}</div>
+      <button class="btn" id="fa-hud-cancel" style="width:100%;margin-bottom:4px;">✕ CLEAR TARGET</button>
+      <button class="btn-finish-act" id="fa-hud-engage" style="background:linear-gradient(180deg,var(--hull-crit) 0%,#a32020 100%);border-color:var(--hull-crit);color:#fff;width:100%;">⊕ ENGAGE ▸</button>
+    `;
+  } else {
+    el.innerHTML = `
+      <div class="act-hud-title">${f.weapon.name.toUpperCase()}</div>
+      <div style="font-size:10px;color:var(--text-dim);margin-bottom:4px;">${f.name} · ${parseInt(f.weapon.scan)||6}" scan</div>
+      <div style="font-size:9px;color:var(--hull-crit);margin-bottom:4px;">Click an enemy ship in range</div>
+      <button class="btn" id="fa-hud-cancel" style="width:100%;">CANCEL</button>
+    `;
+  }
+  document.querySelector('.board-wrap').appendChild(el);
   document.getElementById('fa-hud-cancel').addEventListener('click', () => {
     state.featureAttack = null;
     flashLaunchMsg('Targeting cancelled');
     renderAll(true);
+  });
+  const engBtn = document.getElementById('fa-hud-engage');
+  if (engBtn) engBtn.addEventListener('click', () => {
+    if (!fa.target) return;
+    dispatch({ type: 'fireFeatureWeapon', dsId: ds.id, fi: fa.fi, targetGid: fa.target.gid, targetSi: fa.target.si });
+    state.featureAttack = null;
+    renderAll();
   });
 }
 
@@ -12793,8 +13132,39 @@ document.addEventListener('click', (e) => {
     dispatch({ type: 'holdPosition', gid, si: parseInt(si) });
     return;
   }
+  if (e.target.matches('#hud-asset-reset')) {
+    if (_pendingAssetTarget) { _pendingAssetTarget = null; renderAll(true); return; }
+    const a = state.assetMove && (state.launchedAssets || []).find(x => x.id === state.assetMove.id);
+    if (a) { flashLaunchMsg(`${a.kind} move reset`); dispatch({ type: 'assetResetMove', assetId: a.id }); }
+    return;
+  }
+  if (e.target.matches('#hud-asset-confirm')) {
+    if (_pendingAssetTarget) {
+      const pt = _pendingAssetTarget; _pendingAssetTarget = null;
+      dispatch({ type: 'assetLockTarget', assetId: pt.assetId, gid: pt.gid, si: pt.si });
+      return;
+    }
+    // Confirm all assets of this type for this side — advance stage.
+    const ap = state.assetPhase;
+    if (ap) dispatch({ type: 'assetStageDone', side: state.assetActiveSide, assetType: ap.assetType });
+    return;
+  }
+  if (e.target.matches('#hud-stage-done')) {
+    const ap = state.assetPhase;
+    if (!ap) return;
+    if (anyPendingBomberAttacks(state.assetActiveSide, ap.assetType)) {
+      state.assetMove = null;
+      resolvePendingBomberAttacks(state.assetActiveSide, ap.assetType);
+      renderAll();
+    } else {
+      dispatch({ type: 'assetStageDone', side: state.assetActiveSide, assetType: ap.assetType });
+      renderAll();
+    }
+    return;
+  }
   if (e.target.matches('[data-clear-trail]')) {
     const [gid, si] = e.target.dataset.clearTrail.split('|');
+    state.targeting = null;
     dispatch({ type: 'undoMove', gid, si: parseInt(si) });
     renderAll(); return;
   }
@@ -12909,9 +13279,14 @@ document.addEventListener('click', (e) => {
   // Dropsite Activation: fire button in the feature panel — enter targeting mode.
   if (e.target.closest && e.target.closest('[data-da-fire]')) {
     const [dsId, fi] = e.target.closest('[data-da-fire]').dataset.daFire.split('|');
-    dispatch({ type: 'openDAFeatureAttack', dsId, fi: parseInt(fi) });
+    const fiInt = parseInt(fi);
+    // Toggle off if clicking the already-active weapon
+    if (state.featureAttack && state.featureAttack.dsId === dsId && state.featureAttack.fi === fiInt) {
+      state.featureAttack = null; renderAll(true); return;
+    }
+    dispatch({ type: 'openDAFeatureAttack', dsId, fi: fiInt });
     const ds2 = state.scenarioData.dropsites.find(d => d.id === dsId);
-    const f2 = ds2 && FEATURES[ds2.features[parseInt(fi)]];
+    const f2 = ds2 && FEATURES[ds2.features[fiInt]];
     flashLaunchMsg(`${f2 ? f2.name + ': ' : ''}click an enemy ship in range`, true);
     renderAll(); return;
   }
@@ -12970,12 +13345,14 @@ document.addEventListener('click', (e) => {
   }
   // Asset Phase: START guided Battalion Combat.
   if (e.target.matches('#asset-start-battalions')) {
+    if (_netSide) { _assetPhaseVotes = new Set([..._assetPhaseVotes, _gs()]); _assetPhaseVoteType = 'startBattalionCombat'; }
     dispatch({ type: 'startBattalionCombat' });
     renderAll(); return;
   }
-  // Asset Phase: no contested dropsites — skip battalion combat, go straight to next step.
+  // Asset Phase: no contested dropsites — skip battalion combat.
   if (e.target.matches('#asset-skip-battalions')) {
-    state.assetPhase = { ...state.assetPhase, resolved: true };
+    if (_netSide) { _assetPhaseVotes = new Set([..._assetPhaseVotes, _gs()]); _assetPhaseVoteType = 'skipBattalionCombat'; }
+    dispatch({ type: 'skipBattalionCombat' });
     renderAll(); return;
   }
   // Battalion Combat: initiative player picks a contested dropsite.
@@ -13005,10 +13382,12 @@ document.addEventListener('click', (e) => {
   }
   // Asset Phase: enter Asset Combat (move launch assets) step.
   if (e.target.matches('#asset-boarding')) {
+    if (_netSide) { _assetPhaseVotes = new Set([..._assetPhaseVotes, _gs()]); _assetPhaseVoteType = 'resolveBoarding'; }
     dispatch({ type: 'resolveBoarding' });
     renderAll(); return;
   }
   if (e.target.matches('#asset-move-assets')) {
+    if (_netSide) { _assetPhaseVotes = new Set([..._assetPhaseVotes, _gs()]); _assetPhaseVoteType = 'startAssetMove'; }
     dispatch({ type: 'startAssetMove' });
     renderAll(); return;
   }
@@ -13052,8 +13431,7 @@ document.addEventListener('click', (e) => {
     const a = state.assetMove && state.launchedAssets.find(x => x.id === state.assetMove.id);
     if (a) {
       const [gid, si] = btn.dataset.assetTarget.split('|');
-      flashLaunchMsg(`${a.kind} locked onto ${getDef(gid).name}`, true);
-      dispatch({ type: 'assetLockTarget', assetId: a.id, gid, si: parseInt(si) });
+      _pendingAssetTarget = { assetId: a.id, gid, si: parseInt(si) };
       renderAll();
     }
     return;
@@ -13206,6 +13584,7 @@ function resolveLaunchClick(e) {
       if (!kind || count <= 0) { flashLaunchMsg('Set Fighters or Bombers first'); return false; }
       flashLaunchMsg(`Dropsite launched ${count} ${kindLabel}${count>1?'s':''}`, true);
       dispatch({ type: 'launchDropsiteAsset', kind, count, x: pt.x, y: pt.y, fromDropsite: L.fromDropsite, fromFeature: L.fromFeature ?? null });
+      state.launching = null; state.featureAttack = null;
       return true;
     }
     // (Other dropsite launch types could be added here.)
@@ -13490,12 +13869,8 @@ board.addEventListener('contextmenu', (e) => {
     renderAll(_wasDs);
     return;
   }
-  if (state.assetMove) {
-    e.preventDefault();
-    state.assetMove = null;
-    renderAll(true); // deselect is local-only
-    return;
-  }
+  if (_pendingAssetTarget) { e.preventDefault(); _pendingAssetTarget = null; renderAll(true); return; }
+  if (state.assetMove) { e.preventDefault(); dispatch({ type: 'selectAssetMove' }); return; }
   if (state.extracting) {
     e.preventDefault();
     state.extracting = null;
@@ -13508,6 +13883,13 @@ board.addEventListener('contextmenu', (e) => {
     state.featureAttack = null;
     flashLaunchMsg('Targeting cancelled');
     renderAll();
+    return;
+  }
+  if (state.targeting) {
+    e.preventDefault();
+    state.targeting = null;
+    flashLaunchMsg('Targeting cancelled');
+    renderAll(true);
     return;
   }
   if (state.aiming) {
@@ -13555,13 +13937,6 @@ board.addEventListener('contextmenu', (e) => {
     renderAll(true);
     return;
   }
-  if (state.targeting) {
-    e.preventDefault();
-    state.targeting = null;
-    flashLaunchMsg('Targeting cancelled');
-    renderAll(true);
-    return;
-  }
   if (state.phase === 'play' && state.selectedGroupId !== null && state.selectedShipIdx !== null) {
     e.preventDefault();
     const _rGid = state.selectedGroupId, _rSi = state.selectedShipIdx;
@@ -13569,7 +13944,7 @@ board.addEventListener('contextmenu', (e) => {
     const _rShip = _rGrp && _rGrp.ships[_rSi];
     const _rTrail = _rGrp && (_rGrp.moveTrail || []);
     const _canUndo = _rShip && _rShip.movedThisRound && !_rShip.firedThisActivation && !_rShip.detectorUsed && !(_rShip.launchedThisRound > 0) && !_rGrp.activated && _rTrail.some(t => t.si === _rSi);
-    if (_canUndo) { dispatch({ type: 'undoMove', gid: _rGid, si: _rSi }); }
+    if (_canUndo) { state.targeting = null; dispatch({ type: 'undoMove', gid: _rGid, si: _rSi }); }
     else { state.selectedGroupId = null; state.selectedShipIdx = null; netSendPeerView(); renderAll(true); }
     return;
   }
@@ -13823,26 +14198,24 @@ board.addEventListener('click', (e) => {
     return;
   }
 
-  if (state.featureAttack) {
+  if (state.featureAttack && !state.featureAttack.target) {
     const fa = state.featureAttack;
     const ds = state.scenarioData.dropsites.find(d => d.id === fa.dsId);
     const f = ds && FEATURES[ds.features[fa.fi]];
     if (!ds || !f || !f.weapon) { state.featureAttack = null; renderAll(); return; }
     const pt = svgPointFromEvent(e);
-    const enemy = fa.side === 'player1' ? 'player2' : 'player1';
     const hit = enemyShipAtPoint(fa.side, pt);
-    if (!hit) { flashLaunchMsg('Click an enemy ship'); return; }
+    if (!hit) { flashLaunchMsg('Click an enemy ship in range'); return; }
     const dsx = inchToPx(ds.x), dsy = inchToPx(ds.y);
     const ts = state.groups[hit.gid].ships[hit.si];
-    // Range: Close Action weapons reach the feature's Scan only (target Sig & Spikes
-    // give no extra range); other weapons add the target's effective Sig + 3"/Spike.
     const scanPx = (parseInt(f.weapon.scan) || 6) * INCH;
     const isCA = /Close Action/i.test(f.weapon.special || '');
     const sigBonusIn = isCA ? 0 : ((ts.sigSilent ? 0 : (getDef(hit.gid).sig || 0)) + ((state.groups[hit.gid].spikes||0)+(ts.spikes||0)) * 3);
     const reach = scanPx + sigBonusIn * INCH;
     if (Math.hypot(ts.x - dsx, ts.y - dsy) > reach) { flashLaunchMsg('Target out of range'); return; }
-    dispatch({ type: 'fireFeatureWeapon', dsId: ds.id, fi: fa.fi, targetGid: hit.gid, targetSi: hit.si });
-    state.featureAttack = null;
+    // Lock the target — show ENGAGE button instead of firing immediately.
+    state.featureAttack = { ...fa, target: { gid: hit.gid, si: hit.si } };
+    renderAll(true);
     return;
   }
 
@@ -14492,6 +14865,7 @@ function _gs() { return _netSide; }
 let   _netWs            = null;
 let   _netConnected     = false;
 let   _netReceiving     = false; // true while we are applying a remote state update
+let   _aiThinking       = false; // true while the server AI is computing its turn
 let   _chatMessages     = [];    // [{side, username, text, ts}]
 let   _activeLogTab     = 'chat'; // 'chat' | 'log'
 let   _chatUnread       = 0;
@@ -14507,6 +14881,11 @@ let _nomPicking = null;
 let _pendingDeploy = null;
 // Sides that have voted to end the current round (online mode only; cleared on full state update)
 let _endRoundVotes = new Set();
+let _advanceRoundVotes = new Set();
+let _assetPhaseVotes = new Set();   // ready votes for startBattalionCombat / skipBattalionCombat / resolveBoarding / startAssetMove
+let _assetPhaseVoteType = null;     // which transition the current votes are for
+// Pending (unconfirmed) bomber target lock: { assetId, gid, si } — set on panel button, dispatched on confirm
+let _pendingAssetTarget = null;
 
 // Ensure stuck flags never permanently silence the relay after an unhandled error.
 window.addEventListener('error', () => { _netReceiving = false; _netPendingIntent = false; });
@@ -14630,6 +15009,7 @@ function _netConnect() {
   _netWs.onclose = () => {
     _netConnected = false;
     _netPendingIntent = false;
+    _aiThinking = false;
     _netWs = null;
     _netUpdateBadge();
     console.log('[net] Disconnected — reconnecting in 2 s…');
@@ -14661,6 +15041,9 @@ function _netConnect() {
       case 'full':
         // Broadcast from the server after the other player acted.
         _endRoundVotes = new Set();
+        _advanceRoundVotes = new Set();
+        _assetPhaseVotes = new Set(); _assetPhaseVoteType = null;
+        _pendingAssetTarget = null;
         _netApplyRemote(msg.state);
         break;
       case 'peerJoined': {
@@ -14683,6 +15066,15 @@ function _netConnect() {
         _endRoundVotes = new Set(msg.votes || []);
         renderAll(true);
         break;
+      case 'advanceRoundVotes':
+        _advanceRoundVotes = new Set(msg.votes || []);
+        renderAll(true);
+        break;
+      case 'assetPhaseVotes':
+        _assetPhaseVotes = new Set(msg.votes || []);
+        _assetPhaseVoteType = msg.voteType || null;
+        renderAll(true);
+        break;
       case 'chatHistory': {
         _chatMessages = msg.messages;
         renderEventLog();
@@ -14696,6 +15088,10 @@ function _netConnect() {
         if (_activeLogTab === 'chat') _scrollChatToBottom();
         break;
       }
+      case 'aiThinking':
+        _aiThinking = !!msg.thinking;
+        renderEventLog();
+        break;
       case 'error':
         console.warn('[net] Server:', msg.reason);
         break;
@@ -14747,7 +15143,7 @@ function dispatch(intent) {
   if (_netSide) {
     // Apply targeting-UI intents locally even in online mode so two-click flows
     // (voidgate select → dropsite select) work without waiting for the server round-trip.
-    const _optimisticLocal = ['selectGate', 'cancelLaunch', 'beginLaunch'];
+    const _optimisticLocal = ['selectGate', 'cancelLaunch', 'beginLaunch', 'openDAFeatureAttack'];
     if (_optimisticLocal.includes(intent.type)) { _apply(state, intent, rng); renderAll(); }
     if (_netWs && _netConnected) {
       console.log('%c[intent]', 'color:#4caf50;font-weight:bold', intent.type, intent);
@@ -15031,6 +15427,10 @@ async function showModeSelector() {
             🔗 JOIN ONLINE GAME
             <div style="font-size:10px;font-weight:400;color:var(--text-mute);margin-top:3px;">Enter a room code to connect</div>
           </button>
+          <button class="btn" id="ms-solo" style="padding:14px 10px;font-size:13px;">
+            🤖 SOLO vs AI
+            <div style="font-size:10px;font-weight:400;color:var(--text-mute);margin-top:3px;">Single-player — play against an AI opponent</div>
+          </button>
           ${savesBtn}
         </div>
       </div>`;
@@ -15069,6 +15469,56 @@ async function showModeSelector() {
           <button class="btn-primary" id="ms-join-go" disabled style="padding:12px;">JOIN ▸</button>
         </div>
         <div class="setup-footer"><button class="btn" id="ms-back">← Back</button></div>
+      </div>`;
+    } else if (view === 'solo') {
+      const _soloSecOpts = () => Object.entries(SECONDARY_OBJECTIVES)
+        .filter(([, v]) => !v.nominate)
+        .map(([k, v]) => `<option value="${k}">${v.name}</option>`)
+        .join('');
+      html = `<div class="setup-card" style="max-width:380px;">
+        <div class="setup-header"><h2 class="setup-title">SOLO vs AI</h2></div>
+        <div class="setup-body" style="padding:24px;display:flex;flex-direction:column;gap:16px;">
+          <div>
+            <div style="font-size:9px;letter-spacing:0.1em;color:var(--text-mute);font-family:var(--mono);margin-bottom:5px;">AI PERSONALITY</div>
+            <select id="solo-personality" class="fleet-dropdown">
+              <option value="balanced">Balanced (recommended)</option>
+              <option value="aggressive">Aggressive — closes range, maximises kills</option>
+              <option value="positional">Positional — dropsite control, early battalions</option>
+              <option value="defensive">Defensive — fleet preservation, Silent Running</option>
+              <option value="opportunist">Opportunist — focus fires high-value targets</option>
+            </select>
+          </div>
+          <div>
+            <div style="font-size:9px;letter-spacing:0.1em;color:var(--text-mute);font-family:var(--mono);margin-bottom:5px;">AI FACTION</div>
+            <select id="solo-faction" class="fleet-dropdown">
+              <option value="">— select faction —</option>
+              ${Object.entries(FACTIONS).map(([k, v]) => `<option value="${k}">${v.name}</option>`).join('')}
+            </select>
+          </div>
+          <div>
+            <div style="font-size:9px;letter-spacing:0.1em;color:var(--text-mute);font-family:var(--mono);margin-bottom:5px;">AI FLEET POINTS</div>
+            <input id="solo-pts" type="number" min="500" max="5000" step="50" value="1500" class="fleet-dropdown"
+              style="font-family:var(--mono);font-size:12px;"/>
+            <div style="font-size:9px;color:var(--text-mute);margin-top:3px;">Match your own fleet total (500–5000 pts)</div>
+          </div>
+          <div>
+            <div style="font-size:9px;letter-spacing:0.1em;color:var(--text-mute);font-family:var(--mono);margin-bottom:4px;">AI SECONDARIES</div>
+            <div style="font-size:9px;color:var(--text-mute);margin-bottom:6px;">Map-nomination objectives (Key Site, Long Shot, etc.) not yet supported for AI.</div>
+            <select id="solo-sec1" class="fleet-dropdown">
+              <option value="">— Secondary 1 (optional) —</option>
+              ${_soloSecOpts()}
+            </select>
+            <select id="solo-sec2" class="fleet-dropdown" style="margin-top:4px;">
+              <option value="">— Secondary 2 (optional) —</option>
+              ${_soloSecOpts()}
+            </select>
+          </div>
+          <div id="solo-msg" style="font-size:10px;color:var(--hull-warn);min-height:14px;"></div>
+        </div>
+        <div class="setup-footer">
+          <button class="btn" id="ms-back">← Back</button>
+          <button class="btn-primary" id="solo-start" style="padding:10px 20px;font-size:12px;">▶ SETUP GAME</button>
+        </div>
       </div>`;
     } else if (view === 'hosting') {
       html = `<div class="setup-card" style="max-width:360px;">
@@ -15109,6 +15559,7 @@ async function showModeSelector() {
       };
       overlay.querySelector('#ms-host').onclick    = () => { render('hosting'); doHost(); };
       overlay.querySelector('#ms-join').onclick    = () => render('join');
+      overlay.querySelector('#ms-solo').onclick    = () => render('solo');
       const savesBtn = overlay.querySelector('#ms-saves');
       if (savesBtn) savesBtn.onclick = () => render('saves');
     }
@@ -15168,6 +15619,38 @@ async function showModeSelector() {
       });
       overlay.querySelector('#ms-back').onclick = () => render('main');
     }
+    if (view === 'solo') {
+      // Keep the two secondary pickers mutually exclusive.
+      const _secSelIds = ['#solo-sec1', '#solo-sec2'];
+      const updateSecMutex = () => {
+        const vals = _secSelIds.map(id => overlay.querySelector(id)?.value || '');
+        _secSelIds.forEach((id, i) => {
+          const sel = overlay.querySelector(id);
+          if (!sel) return;
+          const other = vals[1 - i];
+          sel.querySelectorAll('option').forEach(o => { o.disabled = !!(o.value && o.value === other); });
+        });
+      };
+      _secSelIds.forEach(id => {
+        const el = overlay.querySelector(id);
+        if (el) el.addEventListener('change', updateSecMutex);
+      });
+      overlay.querySelector('#solo-start').addEventListener('click', async () => {
+        const personality = overlay.querySelector('#solo-personality')?.value || 'balanced';
+        const faction     = overlay.querySelector('#solo-faction')?.value   || '';
+        const sec1        = overlay.querySelector('#solo-sec1')?.value      || '';
+        const sec2        = overlay.querySelector('#solo-sec2')?.value      || '';
+        const targetPts   = parseInt(overlay.querySelector('#solo-pts')?.value || '1500', 10) || 1500;
+        const msgEl       = overlay.querySelector('#solo-msg');
+        if (!faction) { if (msgEl) msgEl.textContent = 'Select a faction for the AI first.'; return; }
+        if (msgEl) msgEl.textContent = '';
+        overlay.querySelector('#solo-start').disabled = true;
+        await doSoloVsAi({ personality, faction, secondaries: [sec1, sec2].filter(Boolean), targetPts });
+        const startBtn = overlay.querySelector('#solo-start');
+        if (startBtn) startBtn.disabled = false;
+      });
+      overlay.querySelector('#ms-back').onclick = () => render('main');
+    }
     if (view === 'join') {
       const codeEl = overlay.querySelector('#ms-code');
       const goBtn  = overlay.querySelector('#ms-join-go');
@@ -15210,6 +15693,22 @@ async function showModeSelector() {
     try {
       const res  = await fetch('/api/rooms', { method: 'POST' });
       const data = await res.json();
+      location.href = `${location.pathname}?room=${data.roomId}&side=player1`;
+    } catch {
+      if (msgEl()) msgEl().textContent = 'Could not reach server. Is it running on port 3000?';
+    }
+  }
+
+  async function doSoloVsAi({ personality, faction, secondaries, targetPts = 1500 }) {
+    const msgEl = () => overlay.querySelector('#solo-msg');
+    try {
+      const res  = await fetch('/api/rooms', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ aiOpponent: true, aiSide: 'player2', aiPersonality: personality, aiFaction: faction, aiSecondaries: secondaries, targetPts }),
+      });
+      const data = await res.json();
+      if (data.error) { if (msgEl()) msgEl().textContent = data.error; return; }
       location.href = `${location.pathname}?room=${data.roomId}&side=player1`;
     } catch {
       if (msgEl()) msgEl().textContent = 'Could not reach server. Is it running on port 3000?';

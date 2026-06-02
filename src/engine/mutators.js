@@ -3,7 +3,7 @@
 
 import { FEATURES, ORDERS, INCH, BOARD_PX, BOARD_IN, ASSET_PROFILES, DROPSITE_BASE, DEPLOYMENTS, APPROACHES, SECONDARY_OBJECTIVES, OBJECTIVES, FOCAL_HIGH, FOCAL_LOW, LAYOUTS } from './constants.js';
 import { rollD6, rollDie } from './rng.js';
-import { fleetForSide, redFleet, blueFleet, factionName, payloadShips, porterShips, allDefs, getDef, getGroup, assetProfile, fighterRerolls, rebuildFleets, buildScenarioState } from './state.js';
+import { fleetForSide, redFleet, blueFleet, factionName, payloadShips, porterShips, allDefs, getDef, getGroup, assetProfile, assetThrust, fighterRerolls, rebuildFleets, buildScenarioState } from './state.js';
 
 const inchToPx = v => v * INCH;
 
@@ -778,6 +778,8 @@ export function sideHasPendingActivation(state, side) {
   return fleet.some(def => {
     const grp = state.groups[def.id];
     if (!grp || grp.activated) return false;
+    // Fully destroyed groups have nothing left to activate.
+    if (!grp.ships.some(s => !s.destroyed)) return false;
     const onTable = grp.ships.some(s => !s.destroyed && !s.offTable);
     if (onTable) return true;
     return canActivateOffTable(state, def).eligible;
@@ -2664,6 +2666,7 @@ export function attackReroll(state, rng, M, which) {
   } else if (which === 'save') {
     const sr = M.saveResult; const s = M.shots[M.shotIdx];
     if (s.dsId) return state; // dropsites have no AP to spend on save re-rolls
+    if (sr.fighterRerolled) return state; // already re-rolled via Close Protection
     const td = getDef(state, s.targetGid); const defSide = td.side;
     const failedIdx = sr.primDice.map((d, i) => (!d.ok ? i : -1)).filter(i => i >= 0);
     const maxRR = Math.min(failedIdx.length, (state.planning && state.planning.ap[defSide]) || 0);
@@ -2683,6 +2686,7 @@ export function attackReroll(state, rng, M, which) {
    that many failed primary saves. */
 export function attackFighterReroll(state, rng, M) {
   const sr = M.saveResult; if (!sr) return state;
+  if (sr.rerolled) return state; // already re-rolled via AP ability
   const s = M.shots[M.shotIdx]; const td = getDef(state, s.targetGid);
   const spend = M.fighterSpend || {};
   const nSpend = Object.keys(spend).reduce((a, k) => a + (spend[k] || 0), 0);
@@ -2914,15 +2918,16 @@ function advanceRoundInternal(state, rng) {
   state.assetMove = null;
   state.battalionCombat = null;
   state.dropsiteActivation = null;
+  state.repairPhase = null;
   // Victory Point scoring for the round just completed (before advancing).
   const completedRound = state.round;
   // runScoring is in mutators too — use internal reference
   const scoreLog = runScoring(state, rng, completedRound);
   if (completedRound >= 6) {
-    const u = state.score.ucm, s2 = state.score.shal;
+    const u = state.score.player1, s2 = state.score.player2;
     let winner;
-    if (u.vp !== s2.vp) winner = u.vp > s2.vp ? 'ucm' : 'shal';
-    else if (u.kp !== s2.kp) winner = u.kp > s2.kp ? 'ucm' : 'shal';
+    if (u.vp !== s2.vp) winner = u.vp > s2.vp ? 'player1' : 'player2';
+    else if (u.kp !== s2.kp) winner = u.kp > s2.kp ? 'player1' : 'player2';
     else winner = 'draw';
     state.gameOver = { winner, scoreLog };
     return state;
@@ -4039,6 +4044,33 @@ function applyFireFeatureWeapon(state, intent) {
   return state;
 }
 
+function applyBeginBomberAttack(state, intent) {
+  const { assetIds, targetGid, targetSi, side, kind: rawKind } = intent;
+  const kind = rawKind || 'bomber';
+  const movers = (state.launchedAssets || []).filter(a => assetIds.includes(a.id) && a.kind === kind);
+  const total = movers.reduce((n, a) => n + a.count, 0);
+  if (!total) return state;
+  const tg = state.groups[targetGid];
+  const ts = tg && tg.ships[targetSi];
+  if (!ts) return state;
+  const prof = assetProfile(state, side, kind);
+  const totalDice = total * (prof.att || 1);
+  const saturation = (kind === 'torpedo') ? 0 : Math.max(0, total - 6);
+  const cripplingFire = (prof.special || '').includes('Crippling-Fire') ? (total >= 7 ? 2 : 1) : 0;
+  const kindLabel = kind === 'torpedo' ? 'Torpedo' : kind === 'fireship' ? 'Fire Ship Wing' : 'Bomber Wing';
+  const w = { name: `${kindLabel} ×${total}`, arc: '—', att: totalDice, lock: prof.lock, dmg: prof.dmg, type: prof.type,
+    special: [prof.special || '', saturation ? `Saturation −${saturation}` : ''].filter(Boolean).join(', ') };
+  state.attackModal = {
+    bomber: true, bomberKind: kind, bomberAssetIds: assetIds, bomberSide: side, saturation, cripplingFire,
+    attackerName: `${kindLabel} ×${total}`,
+    attackerGid: null, attackerSi: null,
+    shots: [{ wi: 0, w, targetGid, targetSi }],
+    step: 'intro', shotIdx: 0, shieldsUp: {}, log: [], pendingDamage: {},
+    hitResult: null, saveResult: null, crippleQueue: [], explodeQueue: []
+  };
+  return state;
+}
+
 /* Place a scenery piece. Server-authoritative so both clients update together. */
 function applyPlaceScenery(state, intent) {
   const { sceneryType, x, y, angle } = intent;
@@ -4073,10 +4105,8 @@ function applyAssetMove(state, rng, intent) {
       asset._preMove = { x: ox, y: oy, t2tRange: asset._t2tRange };
       asset.x = newX; asset.y = newY; asset.moved = true; asset._t2tRange = undefined;
       applyAssetScenery(state, rng, asset, ox, oy);
-      if (asset.count > 0) asset.bomberTarget = { gid: hit.gid, si: hit.si };
-      else state.launchedAssets = state.launchedAssets.filter(a => a.count > 0);
-      state.assetMove = null;
-      afterAssetMove(state);
+      if (asset.count > 0) { asset.bomberTarget = { gid: hit.gid, si: hit.si }; state.assetMove = { id: asset.id, count: asset.count }; }
+      else { state.launchedAssets = state.launchedAssets.filter(a => a.count > 0); state.assetMove = null; }
       return state;
     }
   }
@@ -4102,7 +4132,6 @@ function applyAssetMove(state, rng, intent) {
   if (mover.count <= 0) {
     state.launchedAssets = state.launchedAssets.filter(a => a.count > 0);
     state.assetMove = null;
-    afterAssetMove(state);
     return state;
   }
 
@@ -4118,8 +4147,8 @@ function applyAssetMove(state, rng, intent) {
         attackerBefore: mover.count + rem, attackerAfter: mover.count,
         foeBefore: foe.count + rem, foeAfter: foe.count, removed: rem };
       state.launchedAssets = state.launchedAssets.filter(a => a.count > 0);
-      state.assetMove = null;
-      afterAssetMove(state);
+      // Keep assetMove on the surviving mover so the player can see the result and confirm.
+      state.assetMove = mover.count > 0 ? { id: mover.id, count: mover.count } : null;
       return state;
     }
   }
@@ -4130,23 +4159,12 @@ function applyAssetMove(state, rng, intent) {
   if (merge) {
     merge.count += mover.count; merge.moved = true;
     state.launchedAssets = state.launchedAssets.filter(a => a.id !== mover.id);
-    state.assetMove = null;
-    afterAssetMove(state);
+    state.assetMove = { id: merge.id, count: merge.count };
     return state;
   }
 
-  const sideBefore = state.assetActiveSide, typeBefore = state.assetPhase && state.assetPhase.assetType;
-  state.assetMove = null;
-  afterAssetMove(state);
-
-  // Auto-reselect bomber/fireship that arrived in base contact with an enemy.
-  if (isBomberType && mover.count > 0 && !state.attackModal &&
-      state.assetActiveSide === sideBefore && state.assetPhase && state.assetPhase.assetType === typeBefore &&
-      state.launchedAssets.includes(mover) &&
-      enemyShipsInBaseContact(state, mover.side, mover.x, mover.y).length > 0) {
-    state.assetMove = { id: mover.id, count: mover.count };
-  }
-
+  // Normal move complete — keep assetMove selected so the player sees UNDO/CONFIRM.
+  state.assetMove = { id: mover.id, count: mover.count };
   return state;
 }
 
@@ -4192,7 +4210,10 @@ export function apply(state, intent, rng) {
       }
       return state;
     }
-    case 'attackStep':         return advanceAttack(state, rng, state.attackModal, intent.to);
+    case 'beginBomberAttack':    return applyBeginBomberAttack(state, intent);
+    case 'attackStep':
+      if (state.attackModal && state.attackModal.bomber && intent.to === 'hit') state.dogfightResult = null;
+      return advanceAttack(state, rng, state.attackModal, intent.to);
     case 'attackReroll':       return attackReroll(state, rng, state.attackModal, intent.which);
     case 'attackFighterReroll':return attackFighterReroll(state, rng, state.attackModal);
     case 'finishAttack':       finishAttack(state, state.attackModal); return state;
@@ -4279,6 +4300,7 @@ export function apply(state, intent, rng) {
       const { dsId: faDsId, fi: faFi } = intent;
       if (!state.dropsiteActivation) return state;
       state.featureAttack = { dsId: faDsId, fi: faFi, side: state.dropsiteActivation.side };
+      state.daActiveSide  = state.dropsiteActivation.side; // needed by fireFeatureWeapon gating
       return state;
     }
     case 'daPickDropsite': {
@@ -4328,6 +4350,9 @@ export function apply(state, intent, rng) {
     case 'startBattalionCombat':
       state.battalionCombat = { stage: 'pick', dsId: null, done: [], log: [] };
       return state;
+    case 'skipBattalionCombat':
+      if (state.assetPhase) state.assetPhase.resolved = true;
+      return state;
     case 'bcPickDropsite':
       if (state.battalionCombat) { state.battalionCombat.dsId = intent.dsId; state.battalionCombat.stage = 'init'; }
       return state;
@@ -4370,7 +4395,7 @@ export function apply(state, intent, rng) {
       advanceAssetStage(state, null);
       return state;
     case 'assetStageDone': {
-      const { type: asdType, side: asdSide } = intent;
+      const { assetType: asdType, side: asdSide } = intent;
       if (!state.assetPhase || state.assetPhase.step !== 'assets') return state;
       if (state.assetActiveSide !== asdSide || state.assetPhase.assetType !== asdType) return state;
       (state.launchedAssets || []).forEach(a => {
@@ -4393,6 +4418,7 @@ export function apply(state, intent, rng) {
       return state;
     }
     case 'placeScenery':    return applyPlaceScenery(state, intent);
+    case 'dismissDogfight': state.dogfightResult = null; return state;
     case 'assetMove':       return applyAssetMove(state, rng, intent);
     case 'assetT2T': {
       const at2t = intent.assetId && (state.launchedAssets || []).find(a => a.id === intent.assetId);
@@ -4400,7 +4426,8 @@ export function apply(state, intent, rng) {
       return state;
     }
     case 'selectAssetMove': {
-      const selA = intent.assetId && (state.launchedAssets || []).find(a => a.id === intent.assetId);
+      if (!intent.assetId) { state.assetMove = null; return state; }
+      const selA = (state.launchedAssets || []).find(a => a.id === intent.assetId);
       if (selA && state.assetPhase && state.assetPhase.step === 'assets') {
         state.assetMove = { id: intent.assetId, count: intent.count || selA.count };
       }

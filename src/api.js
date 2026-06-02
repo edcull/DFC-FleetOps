@@ -7,6 +7,8 @@ import { apply } from './engine/mutators.js';
 import { saveRoom, loadSave, loadAllSaves } from './saves.js';
 import { APP_VERSION, RULEBOOK_VERSION, ERRATA_VERSION } from './engine/version.js';
 import { getRoomSlot, setRoomSlot, getSaveOwners, deleteSaveDb } from './db.js';
+import { triggerAi, shouldAiAct } from './ai/index.js';
+import { buildAiFleet } from './ai/fleet-builder.js';
 
 export const router = Router();
 
@@ -16,6 +18,8 @@ router.get('/meta', (_req, res) => {
 });
 
 // POST /api/rooms — create a new room, return its code.
+// Accepts optional body { aiOpponent, aiSide, aiPersonality, aiFaction, aiSecondaries }
+// for solo-vs-AI rooms (Phase A stub — full fleet-builder not yet implemented).
 router.post('/rooms', (req, res) => {
   const room = createRoom();
   console.log(`Room ${room.id} created (seed ${room.seed})`);
@@ -23,6 +27,36 @@ router.post('/rooms', (req, res) => {
     room.creatorUserId = req.user.id;
     setRoomSlot(room.id, 'player1', req.user.id);
   }
+
+  const { aiOpponent, aiSide, aiPersonality, aiFaction, aiSecondaries } = req.body || {};
+  if (aiOpponent) {
+    const side = aiSide === 'player1' ? 'player1' : 'player2';
+    const slot = side === 'player1' ? 'f1' : 'f2';
+    room.aiSide        = side;
+    room.aiPersonality = aiPersonality || 'balanced';
+
+    const PERSONALITY_LABELS = { aggressive:'Aggressive', positional:'Positional', defensive:'Defensive', balanced:'Balanced', opportunist:'Opportunist' };
+    room.state.aiOpponent   = true;
+    room.state.aiPersonality = room.aiPersonality;
+    room.state.fleetChoices[slot]    = aiFaction || null;
+    room.state.secondaryChoice[slot] = Array.isArray(aiSecondaries) ? aiSecondaries.slice(0, 2) : [];
+    room.state.playerNames[slot]     = `AI (${PERSONALITY_LABELS[room.aiPersonality] || 'Balanced'})`;
+
+    if (aiFaction) {
+      const fleet = buildAiFleet({
+        faction:      aiFaction,
+        targetPts:    req.body.targetPts || 1500,
+        admiralLevel: req.body.aiAdmiralLevel || 0,
+        personality:  room.aiPersonality,
+      });
+      if (fleet) {
+        room.state.importedFleets[slot] = fleet;
+        room.aiTactics = fleet.tactics || [];
+      }
+    }
+    console.log(`Room ${room.id} — AI on ${side} (${room.aiPersonality}, ${aiFaction || 'no faction'})`);
+  }
+
   res.json({ roomId: room.id, seed: room.seed });
 });
 
@@ -252,6 +286,36 @@ export function handleConnection(ws, req) {
 }
 
 // ---------------------------------------------------------------------------
+// AI trigger
+// ---------------------------------------------------------------------------
+
+async function maybeAiTurn(room) {
+  if (!room.aiSide || room.aiPending) return;
+  if (!shouldAiAct(room.state, room.aiSide)) return;
+  room.aiPending = true;
+  broadcast(room, { type: 'aiThinking', thinking: true });
+  console.log(`[${room.id}] AI turn — phase:${room.state.phase} activeSide:${room.state.activeSide}`);
+  try {
+    let guard = 200; // planning(2) + deploy(N ships) + activations(N groups) + sub-phases
+    while (shouldAiAct(room.state, room.aiSide) && guard-- > 0) {
+      await triggerAi(room, (intent) => {
+        if (room.playStartState) recordIntent(room, room.aiSide, intent);
+      });
+    }
+    if (guard <= 0) console.warn(`[${room.id}] AI guard exhausted — possible loop`);
+  } catch (err) {
+    console.error(`[${room.id}] AI error:`, err.message, err.stack);
+  } finally {
+    // Always broadcast so the client is never stuck waiting for the AI.
+    broadcast(room, { type: 'aiThinking', thinking: false });
+    broadcast(room, { type: 'full', state: room.state });
+    saveRoom(room, null).catch(err => console.error(`[${room.id}] AI save error:`, err.message));
+    room.aiPending = false;
+    console.log(`[${room.id}] AI done — phase:${room.state.phase} activeSide:${room.state.activeSide}`);
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Message dispatch
 // ---------------------------------------------------------------------------
 
@@ -289,10 +353,34 @@ function onMessage(room, ws, side, msg, userId) {
       }
       if (intent.type === 'endRound') {
         room.endRoundVotes.add(side);
+        if (room.aiSide) room.endRoundVotes.add(room.aiSide);
         const connected = Object.values(room.sockets).filter(Boolean).length;
         broadcast(room, { type: 'endRoundVotes', votes: [...room.endRoundVotes] });
         if (room.endRoundVotes.size < Math.max(connected, 2)) return;
         room.endRoundVotes.clear();
+      }
+      if (intent.type === 'advanceRound') {
+        room.advanceRoundVotes.add(side);
+        if (room.aiSide) room.advanceRoundVotes.add(room.aiSide);
+        const connected = Object.values(room.sockets).filter(Boolean).length;
+        broadcast(room, { type: 'advanceRoundVotes', votes: [...room.advanceRoundVotes] });
+        if (room.advanceRoundVotes.size < Math.max(connected, 2)) return;
+        room.advanceRoundVotes.clear();
+      }
+      const ASSET_PHASE_TRANSITIONS = ['startBattalionCombat', 'skipBattalionCombat', 'resolveBoarding', 'startAssetMove'];
+      if (ASSET_PHASE_TRANSITIONS.includes(intent.type)) {
+        // Different transition types reset the vote (prevents cross-type vote accumulation).
+        if (room.assetPhaseVotes._type !== intent.type) {
+          room.assetPhaseVotes.clear();
+          room.assetPhaseVotes._type = intent.type;
+        }
+        room.assetPhaseVotes.add(side);
+        if (room.aiSide) room.assetPhaseVotes.add(room.aiSide);
+        const connected = Object.values(room.sockets).filter(Boolean).length;
+        broadcast(room, { type: 'assetPhaseVotes', votes: [...room.assetPhaseVotes], voteType: intent.type });
+        if (room.assetPhaseVotes.size < Math.max(connected, 2)) return;
+        room.assetPhaseVotes.clear();
+        room.assetPhaseVotes._type = null;
       }
       apply(room.state, intent, room.rng);
       if (room.state.phase === 'play' && !room.playStartState) {
@@ -302,6 +390,20 @@ function onMessage(room, ws, side, msg, userId) {
       if (room.playStartState) recordIntent(room, side, intent);
       saveRoom(room, userId).catch(err => console.error(`[${room.id}] save error:`, err.message));
       broadcast(room, { type: 'full', state: room.state });
+
+      // AI solo mode: auto-ready the AI side immediately after the human readies.
+      // apply() is called directly (no isLegal) since this is an authoritative server action.
+      if (intent.type === 'readySetup' && room.aiSide &&
+          room.state.phase === 'setup' &&
+          room.state.setupReady?.[intent.side] &&
+          !room.state.setupReady?.[room.aiSide]) {
+        apply(room.state, { type: 'readySetup', side: room.aiSide }, room.rng);
+        saveRoom(room, userId).catch(err => console.error(`[${room.id}] save error:`, err.message));
+        broadcast(room, { type: 'full', state: room.state });
+      }
+
+      // Let the AI act if it's its turn (fire-and-forget — don't block the response).
+      maybeAiTurn(room).catch(err => console.error(`[${room.id}] AI fire error:`, err.message));
       break;
     }
 
