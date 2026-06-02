@@ -68,7 +68,7 @@ Relay path (setup only): `{type:'state'}` → store → rebroadcast. Pre-game se
 
 ## Intent migration status
 
-**Server-authoritative:** turn flow, orders, movement, deploy, weapons, combat modal (including `attackSetReroll` / `attackSetFighterSpend` steppers), launches, scoring/round, asset phase (move, T2T, lock, dogfight, merge, scenery), battalion combat, DA transitions (`daPickDropsite`, `openDAFeatureAttack`), scenery placement (`placeScenery`), asset board movement (`assetMove`), dropsite damage (`adjustDropsiteDamage`), battalion counts (`adjustBattalion`). All in-game mutations go through intents; `netAfterRender()` is stubbed out.
+**Server-authoritative:** turn flow, orders, movement, deploy, weapons, combat modal (including `attackSetReroll` / `attackSetFighterSpend` steppers), launches, scoring/round, asset phase (move, T2T, lock, dogfight, merge, scenery), battalion combat, DA transitions (`daPickDropsite`, `openDAFeatureAttack`), scenery placement (`placeScenery`), asset board movement (`assetMove`), dropsite damage (`adjustDropsiteDamage`), battalion counts (`adjustBattalion`), end-of-activation atmosphere damage confirmation (`confirmEndActivation`). All in-game mutations go through intents; `netAfterRender()` is stubbed out.
 
 **Still relay:** pre-game setup overlay (fleet choices, scenario, names, colours) — intentional.
 

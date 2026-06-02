@@ -25,6 +25,9 @@ function playTurnOk(state, side) {
 
 export function isLegal(state, intent, side) {
   if (!intent || typeof intent !== 'object') return false;
+  // An unconfirmed end-of-activation atmosphere-damage report freezes the game:
+  // the only legal move is the owning side confirming it.
+  if (state.atmoDamage && intent.type !== 'confirmEndActivation') return false;
   switch (intent.type) {
     case 'commitScenery': {
       if (state.phase !== 'scenery') return false;
@@ -176,6 +179,12 @@ export function isLegal(state, intent, side) {
         cgrp.ships.some(cs => cs.deployedByGid === gid && !cs.destroyed && !cs.movedThisRound && !cs.firedThisActivation && !(cs.launchedThisRound > 0))
       );
       return !cellPending;
+    }
+    case 'confirmEndActivation': {
+      if (state.phase !== 'play') return false;
+      const ad = state.atmoDamage;
+      if (!ad) return false;
+      return ad.side === side;
     }
     case 'applyOrder': {
       const { gid, order } = intent;

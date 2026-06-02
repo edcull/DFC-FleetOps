@@ -3430,13 +3430,26 @@ export function finishActivation(state, rng, gid) {
   const d3 = () => Math.ceil(rollDie(rng) / 2);
   const is2D3 = def.tonnage === 'C';
   const dmgLog = [];
+  // Per-ship record of non-Descent atmosphere damage, surfaced to the client as a
+  // dice-roll confirmation modal before the activation passes to the next player.
+  const atmoReport = [];
 
   grp.ships.forEach((s, si) => {
     if (s.destroyed || s.offTable) return;
     let dmg = 0;
+    let atmoDice = null;
 
     if (s.layer === 'atmosphere' && !/Descent/i.test(def.special || '')) {
-      const a = d3() + (is2D3 ? d3() : 0);
+      // Roll D3 (2D3 for Colossal), keeping each raw d6 face so the modal can
+      // render the dice the same way it renders hit/save rolls.
+      atmoDice = [];
+      let a = 0;
+      for (let i = 0; i < (is2D3 ? 2 : 1); i++) {
+        const raw = rollDie(rng);
+        const val = Math.ceil(raw / 2);
+        atmoDice.push({ raw, val });
+        a += val;
+      }
       dmg += a;
       dmgLog.push(`${def.name}: ${a} (atmosphere)`);
     }
@@ -3462,6 +3475,7 @@ export function finishActivation(state, rng, gid) {
       }
     }
 
+    const hullBefore = s.hull;
     if (dmg > 0) {
       s.hull = Math.max(0, s.hull - dmg);
       if (s.hull <= 0 && !s.destroyed) {
@@ -3477,6 +3491,18 @@ export function finishActivation(state, rng, gid) {
     if (reg && !s.destroyed && s.hull < s.maxHull) {
       const heal = Math.min(parseInt(reg[1]), s.maxHull - s.hull);
       if (heal > 0) s.hull += heal;
+    }
+
+    if (atmoDice) {
+      atmoReport.push({
+        si, name: def.name,
+        dice: atmoDice,
+        total: atmoDice.reduce((t, d) => t + d.val, 0),
+        hullBefore,
+        hullAfter: s.hull,
+        maxHull: s.maxHull,
+        destroyed: !!s.destroyed,
+      });
     }
   });
 
@@ -3496,6 +3522,23 @@ export function finishActivation(state, rng, gid) {
 
   state.selectedShipIdx = null;
   state.selectedGroupId = null;
+
+  // Non-Descent ships that ended in the atmosphere took hull damage: pause here
+  // and surface the roll for confirmation. The activation passes to the next
+  // player only once `confirmEndActivation` clears the report.
+  if (atmoReport.length) {
+    state.atmoDamage = { gid, side: def.side, ships: atmoReport };
+  } else {
+    advanceActiveSide(state);
+  }
+  return state;
+}
+
+/* Clear the end-of-activation atmosphere-damage report (after the player has
+   acknowledged the dice roll) and hand the activation to the next player. */
+export function confirmEndActivation(state) {
+  if (!state.atmoDamage) return state;
+  state.atmoDamage = null;
   advanceActiveSide(state);
   return state;
 }
@@ -4188,6 +4231,7 @@ export function apply(state, intent, rng) {
       return state;
     }
     case 'finishActivation':  return finishActivation(state, rng, intent.gid);
+    case 'confirmEndActivation': return confirmEndActivation(state);
     case 'undoMove':          return undoMove(state, intent.gid, intent.si);
     case 'deployShip':        return deployShip(state, intent.gid, intent.si, intent.x, intent.y, intent.heading);
     case 'undoDeploy':        return applyUndoDeploy(state, intent.gid);

@@ -5168,6 +5168,49 @@ function renderAttackModal() {
   if (rerollBtn) rerollBtn.addEventListener('click', () => dispatch({ type: 'attackReroll', which: rerollBtn.dataset.amReroll }));
 }
 
+/* End-of-activation atmosphere damage report — shown in the attack-modal style
+   after a non-Descent group finishes its activation in the atmosphere. The dice
+   are rolled server-side (stored in state.atmoDamage); this only displays them
+   and offers the confirm button that hands the activation to the next player. */
+function renderAtmoModal() {
+  let overlay = document.getElementById('atmo-overlay');
+  if (overlay) overlay.remove();
+  const ad = state.atmoDamage;
+  if (!ad) return;
+  // Only the side that owns the report drives the confirm; the opponent watches.
+  const isOwner = !_netSide || _netSide === ad.side;
+  const sideClass = sideCssKey(ad.side);
+
+  const rows = ad.ships.map(sh => {
+    const dice = sh.dice.map(d =>
+      `<span class="am-die hit" title="d6 ${d.raw} → D3 ${d.val}">${d.val}</span>`).join('');
+    const fate = sh.destroyed
+      ? `<b style="color:var(--hull-crit)">DESTROYED</b>`
+      : `Hull <b>${sh.hullBefore}</b> → <b style="color:var(--hull-crit)">${sh.hullAfter}</b>${sh.maxHull?`<span style="color:var(--text-mute)">/${sh.maxHull}</span>`:''}`;
+    return `<div class="am-line" style="margin-top:8px;"><b>${sh.name}</b> <span style="color:var(--text-mute);font-size:10px;">caught in the atmosphere</span></div>
+      <div class="am-dice">${dice}</div>
+      <div class="am-line"><b>${sh.total}</b> hull damage · ${fate}</div>`;
+  }).join('');
+
+  const body = `<div class="am-step-head">Atmosphere Damage</div>
+    <div class="am-line" style="font-size:10px;color:var(--text-mute)">Non-Descent ships take D3 hull damage (2D3 Colossal) for ending their activation in the atmosphere.</div>
+    ${rows}`;
+  const footer = isOwner
+    ? `<button class="btn-primary ${sideClass==='shal'?'shal':''}" data-atmo-confirm="1">Confirm ▸</button>`
+    : `<div class="am-line" style="color:var(--text-mute)">Waiting for ${playerNameForSide(ad.side)}…</div>`;
+
+  overlay = document.createElement('div');
+  overlay.id = 'atmo-overlay';
+  overlay.className = 'attack-hud';
+  overlay.innerHTML = `<div class="attack-hud-title">⌁ ATMOSPHERE</div>
+    <div class="attack-hud-body">${body}</div>
+    <div class="attack-hud-footer">${footer}</div>`;
+  (document.querySelector('.board-wrap') || document.body).appendChild(overlay);
+
+  const confirmBtn = overlay.querySelector('[data-atmo-confirm]');
+  if (confirmBtn) confirmBtn.addEventListener('click', () => dispatch({ type: 'confirmEndActivation' }));
+}
+
 /* Advance the attack state machine. */
 /* Attack step machine — dispatched as a server-authoritative intent (so the
    server rolls the dice with the room's seeded rng); hotseat applies locally. */
@@ -8919,6 +8962,7 @@ function renderAll(localOnly = false) {
     renderDropsiteActivation();
     renderPayloadAssign();
     renderAttackModal();
+    renderAtmoModal();
     renderRepairPhase();
     renderBattalionDeployModal();
     renderDogfightModal();
@@ -12772,6 +12816,9 @@ function updateHUD() {
    EVENT WIRING
    ========================================================================== */
 document.addEventListener('click', (e) => {
+  // While the end-of-activation atmosphere damage report is up, swallow all
+  // clicks except its own confirm button (wired via a direct listener).
+  if (state.atmoDamage && !e.target.closest('#atmo-overlay')) return;
   // Group card click handled inline
   // Arc view mode toggle (local only — affects board overlays for selected ship)
   // Clicking the already-active mode toggles it off (mode 0 = hide all).
@@ -14066,6 +14113,10 @@ board.addEventListener('click', (e) => {
     }
     return;
   }
+
+  // Freeze board interaction while the end-of-activation atmosphere damage
+  // report is awaiting confirmation.
+  if (state.atmoDamage) return;
 
   // ── PROTECT NOMINATION — click a dropsite on the map ──
   if (state.phase === 'protect' && _nomPicking && _nomPicking.key === '__protect__' && (!_netSide || _nomPicking.side === _netSide)) {
