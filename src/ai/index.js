@@ -44,6 +44,13 @@ export function shouldAiAct(state, side) {
   // the owning side (here, the AI) must acknowledge it.
   if (state.atmoDamage) return state.atmoDamage.side === side;
 
+  // Defender save step: AI must advance the attack modal past the save phase.
+  if (state.attackModal?.step === 'save') {
+    const atkSide = state.attackModal.bomberSide || state.activeSide;
+    const defSide = atkSide === 'player1' ? 'player2' : 'player1';
+    if (side === defSide) return true;
+  }
+
   if (state.repairPhase) return false; // repair is handled client-side
 
   // Battalion combat: AI acts at every stage (gating is permissive, no side lock)
@@ -112,6 +119,22 @@ export async function triggerAi(room, onRecord = null) {
   if (state.atmoDamage && state.atmoDamage.side === aiSide) {
     applyFn({ type: 'confirmEndActivation' });
     return;
+  }
+
+  // Defender save step: apply damage (or roll backup saves first if available).
+  if (state.attackModal?.step === 'save') {
+    const M = state.attackModal;
+    const atkSide = M.bomberSide || state.activeSide;
+    const defSide = atkSide === 'player1' ? 'player2' : 'player1';
+    if (aiSide === defSide) {
+      const sr = M.saveResult;
+      if (sr) {
+        const needBackup = !sr.backupRolled &&
+          sr.hitsList?.some(h => !h.saved && h.sv != null) && sr.backupVal != null;
+        applyFn({ type: 'attackStep', to: needBackup ? 'rollbackup' : 'apply' });
+      }
+      return;
+    }
   }
 
   if (state.repairPhase) {

@@ -96,7 +96,8 @@ export function isLegal(state, intent, side) {
       if (!def || def.side !== side) return false;
       if (state.phase === 'deploy' && !deploySideAllowed(state, side)) return false;
       if (state.phase === 'play' && grp.activated) return false;
-      return grp.ships.some(s => !s.destroyed && !s.offTable && !s.movedThisRound);
+      if (state.phase === 'play' && grp.ships.some(s => s.firedThisActivation || (s.launchedThisRound > 0) || s.detectorUsed)) return false;
+      return grp.ships.some(s => !s.destroyed && !s.offTable);
     }
     case 'arriveShip': {
       const { gid, si } = intent;
@@ -160,6 +161,17 @@ export function isLegal(state, intent, side) {
       if (Object.values(state.groups).some(g => g.ships.some(s => s.deployedByGid === gid))) return false;
       const trail = grp.moveTrail || [];
       return trail.some(t => t.si === si);
+    }
+    case 'cancelOrder': {
+      const { gid } = intent;
+      if (state.phase !== 'play') return false;
+      const grp = state.groups[gid];
+      if (!grp || !grp.order || grp.activated) return false;
+      const def = getDef(state, gid);
+      if (!def || def.side !== side) return false;
+      if (state.activeSide && state.activeSide !== side) return false;
+      if (grp.ships.some(s => !s.destroyed && (s.movedThisRound || s.firedThisActivation || s.detectorUsed || (s.launchedThisRound > 0)))) return false;
+      return true;
     }
     case 'finishActivation': {
       const { gid } = intent;
@@ -294,7 +306,7 @@ export function isLegal(state, intent, side) {
       return true;
     }
     case 'launchGroundAsset': {
-      const { gid, si } = intent;
+      const { gid, si, gateSel } = intent;
       if (state.phase !== 'play') return false;
       const grp = state.groups[gid];
       if (!grp || grp.activated) return false;
@@ -302,6 +314,13 @@ export function isLegal(state, intent, side) {
       if (!def || def.side !== side) return false;
       const ship = grp.ships[si];
       if (!ship || ship.destroyed || ship.offTable) return false;
+      // Voidgate route: the selected Voidgate must not be on MT, WF, or DC order
+      // (those orders disable the gateship network).
+      if (gateSel) {
+        const gateGrp = state.groups[gateSel.gid];
+        const gateOrder = gateGrp && gateGrp.order;
+        if (gateOrder && ['MT', 'WF', 'DC'].includes(gateOrder)) return false;
+      }
       return true;
     }
     case 'deployPayload': {
@@ -377,6 +396,12 @@ export function isLegal(state, intent, side) {
       if (!state.dropsiteActivation || (side && state.dropsiteActivation.side !== side)) return false;
       const ds = state.scenarioData && state.scenarioData.dropsites && state.scenarioData.dropsites.find(d => d.id === intent.dsId);
       return !!ds;
+    }
+    case 'attackSelectShot': {
+      const M = state.attackModal;
+      if (!M || M.step !== 'select') return false;
+      if (intent.shotIdx == null || intent.shotIdx < 0 || intent.shotIdx >= M.shots.length) return false;
+      return !(M.resolvedShots || []).includes(intent.shotIdx);
     }
     case 'attackStep':
     case 'attackReroll':

@@ -813,10 +813,15 @@ export function rollInitiative(state, rng) {
   // max(contributions) + (n-1 extras) replaces the single-admiral formula.
   const calcAdmiralContrib = (side) => {
     const asns = state.admiralAssignments && state.admiralAssignments[side];
-    if (!asns || !asns.length) {
-      // Fallback (no per-admiral assignments): use global admiral level if any ship alive.
+    if (!asns) {
+      // No per-admiral assignments exist: fall back to global admiral level if any ship is alive.
       if (!admiralAlive(state, side)) return { eff: 0, extras: 0 };
       return { eff: baseLvl[side] || 0, extras: 0 };
+    }
+    if (!asns.length) {
+      // Assignments record exists but is empty — admiral data was committed without setup;
+      // grant no bonus rather than falling back to the any-ship-alive check.
+      return { eff: 0, extras: 0 };
     }
     const fleet = fleetForSide(state, side);
     // Only count admirals whose specific assigned ship is still alive on table.
@@ -876,10 +881,24 @@ export function rollInitiative(state, rng) {
   const gc = { player1: groupCount('player1'), player2: groupCount('player2') };
   const most = Math.max(gc.player1, gc.player2);
   const passTokens = { player1: Math.max(0, (gc.player2 - 1) - gc.player1), player2: Math.max(0, (gc.player1 - 1) - gc.player2) };
+  // Whether the admiral's assigned flagship is off-table (undeployed) rather than destroyed.
+  const admiralOffTable = (side) => {
+    const asns = state.admiralAssignments && state.admiralAssignments[side];
+    if (!asns || !asns.length) return false;
+    const fleet = fleetForSide(state, side);
+    return asns.some(a => {
+      const def = fleet.find(d => d.baseId === a.baseId);
+      if (!def) return false;
+      const grp = state.groups[def.id];
+      if (!grp) return false;
+      const ship = grp.ships[a.shipIdx || 0];
+      return ship && !ship.destroyed && ship.offTable;
+    });
+  };
   // Store breakdown for display in the planning overlay.
   const apBreakdown = {
-    player1: { base: 1, admiral: effectiveAdmiral.player1, admiralChosen: Math.max(baseLvl.player1 || 0, effectiveAdmiral.player1), cmd: cmdBonus.player1, comms: comms.player1, extras: ac.player1.extras },
-    player2: { base: 1, admiral: effectiveAdmiral.player2, admiralChosen: Math.max(baseLvl.player2 || 0, effectiveAdmiral.player2), cmd: cmdBonus.player2, comms: comms.player2, extras: ac.player2.extras },
+    player1: { base: 1, admiral: effectiveAdmiral.player1, admiralChosen: Math.max(baseLvl.player1 || 0, effectiveAdmiral.player1), cmd: cmdBonus.player1, comms: comms.player1, extras: ac.player1.extras, admiralOffTable: admiralOffTable('player1') },
+    player2: { base: 1, admiral: effectiveAdmiral.player2, admiralChosen: Math.max(baseLvl.player2 || 0, effectiveAdmiral.player2), cmd: cmdBonus.player2, comms: comms.player2, extras: ac.player2.extras, admiralOffTable: admiralOffTable('player2') },
   };
   state.planning = { ap, passTokens, gc, aLvl, apBreakdown };
   state.initiative = {
@@ -1271,6 +1290,8 @@ export function connectedGateships(state, motherSide, motherX, motherY) {
     if (!grp) return;
     grp.ships.forEach((s, si) => {
       if (s.destroyed || s.offTable) return;
+      // MT / WF / DC orders disable the gateship — exclude from network.
+      if (grp.order && ['MT', 'WF', 'DC'].includes(grp.order)) return;
       gates.push({ ship: s, def, si, x: s.x, y: s.y, layer: s.layer || 'orbit',
                    gateship: def.gateship || 0, connected: false });
     });
@@ -2535,7 +2556,7 @@ export function rollDeferredBackupSaves(state, rng, M) {
    Rendering is the caller's job. Server-driven combat dispatches these as intents. */
 export function advanceAttack(state, rng, M, to) {
   if (!M) return state;
-  if (to === 'hit') { M.step = 'hit'; M.shotIdx = 0; M.hitResult = null; M.rerollN = null; rollHits(state, rng, M); }
+  if (to === 'hit') { M.step = 'hit'; if (M.shotIdx == null) M.shotIdx = 0; M.hitResult = null; M.rerollN = null; rollHits(state, rng, M); }
   else if (to === 'save') {
     M.rerollN = null; M.fighterSpend = {};
     if (M.hitResult.hits > 0) { M.step = 'save'; M.saveResult = null; rollSaves(state, rng, M); }
@@ -2602,11 +2623,19 @@ export function advanceAttack(state, rng, M, to) {
 }
 
 /* Move to the next shot (rolling its hits), or once all shots are done apply
-   damage & queue effects. */
+   damage & queue effects. With multi-shot attacks the player picks the order
+   via the 'select' step, so after each shot resolves we return there. */
 export function nextShotOrResolve(state, rng, M) {
-  if (M.shotIdx < M.shots.length - 1) {
-    M.shotIdx++; M.hitResult = null; M.saveResult = null; M.step = 'hit';
-    rollHits(state, rng, M);
+  // Mark current shot as resolved.
+  if (M.shotIdx != null) {
+    M.resolvedShots = M.resolvedShots || [];
+    if (!M.resolvedShots.includes(M.shotIdx)) M.resolvedShots.push(M.shotIdx);
+  }
+  // Find remaining unresolved shots.
+  const unresolved = M.shots.map((_, i) => i).filter(i => !(M.resolvedShots || []).includes(i));
+  if (unresolved.length > 0) {
+    // Return to selection screen so attacker can choose order.
+    M.shotIdx = null; M.hitResult = null; M.saveResult = null; M.step = 'select';
     return;
   }
   resolveAttackDamage(state, M);
@@ -3104,10 +3133,35 @@ export function finishRepairPhase(state, rng) {
    Damage Control hull recovery). Legality is checked by gating.js#isLegal — this
    only mutates. The DC hull roll uses `rng`, so it resolves on whichever runtime
    applies the intent (seeded server rng online, localRng in hotseat). */
+export function applyCancelOrder(state, gid) {
+  const grp = state.groups[gid];
+  if (!grp || !grp.order) return state;
+  const snap = grp._cancelSnapshot;
+  if (snap) {
+    grp.spikes = snap.spikes;
+    grp.ships.forEach((s, i) => {
+      const ss = snap.ships[i];
+      if (!ss) return;
+      s.hull = ss.hull;
+      s.dcRepaired = ss.dcRepaired;
+      s.dcThisRound = ss.dcThisRound;
+    });
+    grp._cancelSnapshot = null;
+  }
+  const def = getDef(state, gid);
+  logEvent(state, `${def.name} order cancelled`);
+  grp.order = null;
+  return state;
+}
+
 export function applyOrder(state, rng, gid, order) {
   const grp = state.groups[gid];
   if (!grp) return state;
   const def = getDef(state, gid);
+  grp._cancelSnapshot = {
+    spikes: grp.spikes,
+    ships: grp.ships.map(s => ({ hull: s.hull, dcRepaired: s.dcRepaired, dcThisRound: s.dcThisRound })),
+  };
   grp.order = order;
   logEvent(state, `${def.name} → ${ORDERS[order].label}`);
   // Re-activating ends any prior deploy-adjust window and Silent Running reduction.
@@ -3746,9 +3800,13 @@ export function applyUndoDeploy(state, gid) {
   const grp = state.groups[gid];
   const def = getDef(state, gid);
   if (!grp || !def) return state;
+  // Undo any moves first so ships return to their placed positions before going off-table.
+  grp.ships.forEach((ship, si) => {
+    if (!ship.destroyed && !ship.offTable && ship.movedThisRound) undoMove(state, gid, si);
+  });
   let removed = 0;
   grp.ships.forEach(ship => {
-    if (!ship.destroyed && !ship.offTable && !ship.movedThisRound) {
+    if (!ship.destroyed && !ship.offTable) {
       ship.offTable = true;
       ship.x = undefined; ship.y = undefined; ship.heading = undefined;
       ship.deployedRound = undefined; ship.justArrived = false;
@@ -3886,13 +3944,19 @@ function applyNominateLead(state, intent) {
 }
 
 function applyLockWeaponTarget(state, intent) {
-  const { gid, si, wi, targetGid, targetSi } = intent;
+  const { gid, si, wi, targetGid, targetSi, volleySlot } = intent;
   const grp = state.groups[gid];
   if (!grp) return state;
   const ship = grp.ships[si];
   if (!ship) return state;
   ship.weaponTargets = ship.weaponTargets || {};
-  ship.weaponTargets[wi] = { gid: targetGid, si: targetSi };
+  if (volleySlot != null) {
+    const existing = ship.weaponTargets[wi];
+    if (!Array.isArray(existing)) ship.weaponTargets[wi] = existing ? [existing] : [];
+    ship.weaponTargets[wi][volleySlot] = { gid: targetGid, si: targetSi };
+  } else {
+    ship.weaponTargets[wi] = { gid: targetGid, si: targetSi };
+  }
   return state;
 }
 
@@ -3932,12 +3996,17 @@ function applyDeployPayload(state, intent) {
 }
 
 function applyUnlockWeapon(state, intent) {
-  const { gid, si, wi } = intent;
+  const { gid, si, wi, volleySlot } = intent;
   const grp = state.groups[gid];
   if (!grp) return state;
   const ship = grp.ships[si];
   if (!ship || !ship.weaponTargets) return state;
-  delete ship.weaponTargets[wi];
+  if (volleySlot != null && Array.isArray(ship.weaponTargets[wi])) {
+    ship.weaponTargets[wi][volleySlot] = null;
+    if (!ship.weaponTargets[wi].some(Boolean)) delete ship.weaponTargets[wi];
+  } else {
+    delete ship.weaponTargets[wi];
+  }
   return state;
 }
 
@@ -3959,7 +4028,7 @@ function applyFireWeapons(state, intent) {
       if (!w) return;
       const sp = parseWeaponSpecials(w);
       const shipAtt = w.att + ((sp.fusillade && shipEO === 'WF') ? sp.fusillade : 0);
-      if (t.dsId) {
+      if (!Array.isArray(t) && t.dsId) {
         // Bombardment vs dropsite: pool identical weapon+dropsite pairs.
         const key = w.name + '|ds:' + t.dsId;
         if (combined[key]) {
@@ -3969,16 +4038,19 @@ function applyFireWeapons(state, intent) {
         }
         return;
       }
-      const tg = state.groups[t.gid];
-      const ts = tg && tg.ships[t.si];
-      if (!ts || ts.destroyed || ts.offTable) return;
       const reps = sp.volley > 1 ? sp.volley : 1;
       for (let r = 0; r < reps; r++) {
-        const key = w.name + '|' + t.gid + '|' + t.si + (reps > 1 ? '|v' + r : '');
+        // Per-volley target: use slot r if array (different targets), fall back to first valid.
+        const tForRep = Array.isArray(t) ? (t[r] || t.find(Boolean)) : t;
+        if (!tForRep) continue;
+        const tg = state.groups[tForRep.gid];
+        const ts = tg && tg.ships[tForRep.si];
+        if (!ts || ts.destroyed || ts.offTable) continue;
+        const key = w.name + '|' + tForRep.gid + '|' + tForRep.si + (reps > 1 ? '|v' + r : '');
         if (combined[key]) {
           combined[key].w = { ...combined[key].w, att: combined[key].w.att + shipAtt };
         } else {
-          combined[key] = { wi: parseInt(wi), w: { ...w, att: shipAtt }, targetGid: t.gid, targetSi: t.si,
+          combined[key] = { wi: parseInt(wi), w: { ...w, att: shipAtt }, targetGid: tForRep.gid, targetSi: tForRep.si,
             volleyIdx: reps > 1 ? r + 1 : 0, volleyOf: reps, fusilladeBaked: true };
         }
       }
@@ -4000,8 +4072,9 @@ function applyFireWeapons(state, intent) {
     attackerGid: gid, attackerSi: originSi,
     groupFire: true,
     shots,
-    step: 'intro',
-    shotIdx: 0,
+    step: shots.length > 1 ? 'select' : 'intro',
+    shotIdx: shots.length > 1 ? null : 0,
+    resolvedShots: [],
     shieldsUp: {},
     log: [],
     pendingDamage: {},
@@ -4016,18 +4089,25 @@ function daSidesDone(state) {
   return dropsites.every(ds => !dropsiteController(ds) || da.done.includes(ds.id));
 }
 
-function applyDaFinishDropsite(state, intent) {
+function applyDaFinishDropsite(state, intent, rng) {
   const da = state.dropsiteActivation;
   if (!da) return state;
   if (intent.dsId && !da.done.includes(intent.dsId)) da.done.push(intent.dsId);
   da.dsId = null;
   state.launching = null;
   state.featureAttack = null;
-  if (daSidesDone(state)) return applyDaEnd(state);
+  if (daSidesDone(state)) return applyDaEnd(state, rng);
+  // Alternate activation: switch to the other side if they still have dropsites.
+  const dropsites = (state.scenarioData && state.scenarioData.dropsites) || [];
+  const otherSide = da.side === 'player1' ? 'player2' : 'player1';
+  if (dropsites.some(ds => dropsiteController(ds) === otherSide && !da.done.includes(ds.id))) {
+    da.side = otherSide;
+    state.daActiveSide = null;
+  }
   return state;
 }
 
-function applyDaSwitchSide(state) {
+function applyDaSwitchSide(state, rng) {
   const da = state.dropsiteActivation;
   if (!da) return state;
   // Mark any remaining controlled dropsites for the outgoing side as done (skipped)
@@ -4039,15 +4119,36 @@ function applyDaSwitchSide(state) {
   da.dsId = null;
   state.launching = null;
   state.featureAttack = null;
-  if (daSidesDone(state)) return applyDaEnd(state);
+  if (daSidesDone(state)) return applyDaEnd(state, rng);
   return state;
 }
 
-function applyDaEnd(state) {
+function autoAdvanceAssetPhase(state, rng) {
+  const ap = state.assetPhase;
+  if (!ap) return;
+  if (!ap.resolved && contestedDropsites(state).length === 0) ap.resolved = true;
+  if (!ap.resolved) return;
+  if (!ap.boardingResolved) {
+    const boardLog = resolveBoardingActions(state, rng);
+    ap.boardingResolved = true;
+    ap.boardingLog = boardLog.length ? boardLog : ['No boarding damage.'];
+  }
+  if (ap.step !== 'assets') {
+    ap.step = 'assets';
+    state.assetMove = null;
+    (state.launchedAssets || []).forEach(a => { a.moved = false; a.t2t = false; a.bomberTarget = null; a._preMove = null; });
+    state.dogfightResult = null;
+    ap.assetType = null; state.assetActiveSide = null;
+    advanceAssetStage(state, null);
+  }
+}
+
+function applyDaEnd(state, rng) {
   state.dropsiteActivation = null;
   state.featureAttack = null;
   state.launching = null;
   state.assetPhase = { resolved: false, log: [] };
+  autoAdvanceAssetPhase(state, rng);
   return state;
 }
 
@@ -4150,6 +4251,7 @@ function applyAssetMove(state, rng, intent) {
       const ox = asset.x, oy = asset.y;
       asset._preMove = { x: ox, y: oy, t2tRange: asset._t2tRange };
       asset.x = newX; asset.y = newY; asset.moved = true; asset._t2tRange = undefined;
+      asset.facing = Math.atan2(-(newX - ox), -(newY - oy));
       applyAssetScenery(state, rng, asset, ox, oy);
       if (asset.count > 0) { asset.bomberTarget = { gid: hit.gid, si: hit.si }; state.assetMove = { id: asset.id, count: asset.count }; }
       else { state.launchedAssets = state.launchedAssets.filter(a => a.count > 0); state.assetMove = null; }
@@ -4165,11 +4267,12 @@ function applyAssetMove(state, rng, intent) {
   if (actualCount < asset.count) {
     asset.count -= actualCount;
     const newId = 'a' + (state._assetId = (state._assetId || 0) + 1);
-    mover = { id: newId, kind: asset.kind, count: actualCount, side: asset.side, x, y, moved: true };
+    mover = { id: newId, kind: asset.kind, count: actualCount, side: asset.side, x, y, moved: true, facing: Math.atan2(-(x - ox), -(y - oy)) };
     state.launchedAssets.push(mover);
   } else {
     asset._preMove = { x: ox, y: oy, t2tRange: asset._t2tRange };
     asset.x = x; asset.y = y; asset.moved = true; asset._t2tRange = undefined;
+    asset.facing = Math.atan2(-(x - ox), -(y - oy));
     mover = asset;
   }
 
@@ -4242,6 +4345,7 @@ export function apply(state, intent, rng) {
     case 'useDetector':       return useDetector(state, rng, intent.gid, intent.si, intent.wi, intent.targetGid, intent.targetSi);
     case 'pass':         return passActivation(state);
     case 'endRound':     return beginEndRound(state);
+    case 'cancelOrder':     return applyCancelOrder(state, intent.gid);
     case 'applyOrder':      return applyOrder(state, rng, intent.gid, intent.order);
     case 'applyShipOrder':  return applyShipOrderMutator(state, intent.gid, intent.si, intent.order);
     case 'moveShip':     return commitMove(state, rng, intent.gid, intent.si, intent.x, intent.y, intent.layerToggle);
@@ -4258,6 +4362,15 @@ export function apply(state, intent, rng) {
       return state;
     }
     case 'beginBomberAttack':    return applyBeginBomberAttack(state, intent);
+    case 'attackSelectShot': {
+      const M = state.attackModal;
+      if (!M || M.step !== 'select') return state;
+      const idx = intent.shotIdx;
+      if (idx == null || idx < 0 || idx >= M.shots.length) return state;
+      if ((M.resolvedShots || []).includes(idx)) return state;
+      M.shotIdx = idx; M.hitResult = null; M.saveResult = null; M.step = 'intro';
+      return state;
+    }
     case 'attackStep':
       if (state.attackModal && state.attackModal.bomber && intent.to === 'hit') state.dogfightResult = null;
       return advanceAttack(state, rng, state.attackModal, intent.to);
@@ -4368,9 +4481,9 @@ export function apply(state, intent, rng) {
     case 'unlockWeapon':              return applyUnlockWeapon(state, intent);
     case 'fireWeapons':        return applyFireWeapons(state, intent);
     case 'advanceRound':          return advanceRound(state, rng);
-    case 'daFinishDropsite':       return applyDaFinishDropsite(state, intent);
-    case 'daSwitchSide':           return applyDaSwitchSide(state);
-    case 'daEnd':                  return applyDaEnd(state);
+    case 'daFinishDropsite':       return applyDaFinishDropsite(state, intent, rng);
+    case 'daSwitchSide':           return applyDaSwitchSide(state, rng);
+    case 'daEnd':                  return applyDaEnd(state, rng);
     case 'launchDropsiteAsset':    return applyLaunchDropsiteAsset(state, intent);
     case 'fireFeatureWeapon':      return applyFireFeatureWeapon(state, intent);
     case 'extractRecon': {
@@ -4427,6 +4540,7 @@ export function apply(state, intent, rng) {
     case 'bcFinish':
       state.battalionCombat = null;
       if (state.assetPhase) state.assetPhase.resolved = true;
+      autoAdvanceAssetPhase(state, rng);
       return state;
     case 'resolveBoarding': {
       const boardLog = resolveBoardingActions(state, rng);
@@ -4452,6 +4566,7 @@ export function apply(state, intent, rng) {
       const asdRes = advanceAssetStage(state, { type: asdType, side: asdSide });
       state.assetPhase._pendingBomberResolve = asdRes.resolveAttacksFor
         ? { side: asdRes.resolveAttacksFor, type: asdRes.resolveType || asdType } : null;
+      if (asdRes.done && !state.assetPhase._pendingBomberResolve) return advanceRound(state, rng);
       return state;
     }
     case 'assetPhaseDone': {

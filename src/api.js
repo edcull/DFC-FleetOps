@@ -367,7 +367,7 @@ function onMessage(room, ws, side, msg, userId) {
         if (room.advanceRoundVotes.size < Math.max(connected, 2)) return;
         room.advanceRoundVotes.clear();
       }
-      const ASSET_PHASE_TRANSITIONS = ['startBattalionCombat', 'skipBattalionCombat', 'resolveBoarding', 'startAssetMove'];
+      const ASSET_PHASE_TRANSITIONS = ['startBattalionCombat'];
       if (ASSET_PHASE_TRANSITIONS.includes(intent.type)) {
         // Different transition types reset the vote (prevents cross-type vote accumulation).
         if (room.assetPhaseVotes._type !== intent.type) {
