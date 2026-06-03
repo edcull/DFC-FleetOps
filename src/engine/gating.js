@@ -568,17 +568,6 @@ export function isLegal(state, intent, side) {
       return true;
     }
 
-    case 'fireFeatureWeapon': {
-      const da = state.dropsiteActivation;
-      if (!da) return false;
-      if (state.phase !== 'play') return false;
-      // dsId is local-only; validate using intent.dsId
-      const ds = intent.dsId && state.scenarioData && state.scenarioData.dropsites &&
-                 state.scenarioData.dropsites.find(d => d.id === intent.dsId);
-      if (!ds) return false;
-      return true;
-    }
-
     case 'setNomination': {
       const { side: nomSide, key: nomKey } = intent;
       if (!nomSide || !nomKey) return false;
