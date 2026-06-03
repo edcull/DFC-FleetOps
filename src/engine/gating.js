@@ -448,34 +448,25 @@ export function isLegal(state, intent, side) {
     }
     case 'lockWeaponTarget': {
       const { gid, si, wi, targetGid, targetSi } = intent;
-      if (state.phase !== 'play') { console.log('[gate:LWT] fail: phase', state.phase); return false; }
-      if (state.attackModal) { console.log('[gate:LWT] fail: attackModal active'); return false; }
+      if (state.phase !== 'play') return false;
+      if (state.attackModal) return false;
       const grp = state.groups[gid];
-      if (!grp || grp.activated) { console.log('[gate:LWT] fail: no grp or activated', {grp: !!grp, activated: grp && grp.activated}); return false; }
-      // The group's order must permit firing. MT / SR have fireRule 'none'.
-      if (grp.order && ORDERS[grp.order]?.fireRule === 'none') { console.log('[gate:LWT] fail: order forbids firing', grp.order); return false; }
+      if (!grp || grp.activated) return false;
+      if (grp.order && ORDERS[grp.order]?.fireRule === 'none') return false;
       const def = getDef(state, gid);
-      if (!def || def.side !== side) { console.log('[gate:LWT] fail: def.side', def && def.side, 'vs side', side); return false; }
-      if (!playTurnOk(state, side)) { console.log('[gate:LWT] fail: playTurnOk activeSide', state.activeSide, 'side', side); return false; }
+      if (!def || def.side !== side) return false;
+      if (!playTurnOk(state, side)) return false;
       const ship = grp.ships[si];
-      if (!ship || ship.destroyed || ship.offTable) { console.log('[gate:LWT] fail: ship', {si, ship: !!ship, destroyed: ship && ship.destroyed, offTable: ship && ship.offTable}); return false; }
+      if (!ship || ship.destroyed || ship.offTable) return false;
       const w = def.weapons[wi];
-      if (!w) { console.log('[gate:LWT] fail: no weapon wi=', wi, 'weapons=', def.weapons && def.weapons.length); return false; }
+      if (!w) return false;
       const tgrp = state.groups[targetGid];
       const tship = tgrp && tgrp.ships[targetSi];
-      if (!tship || tship.destroyed || tship.offTable) { console.log('[gate:LWT] fail: tship', {targetGid, targetSi, tship: !!tship, destroyed: tship && tship.destroyed, offTable: tship && tship.offTable}); return false; }
+      if (!tship || tship.destroyed || tship.offTable) return false;
       const origin = firingOriginShip(state, def, grp, si);
-      if (!origin) { console.log('[gate:LWT] fail: no origin'); return false; }
+      if (!origin) return false;
       const tDef = getDef(state, targetGid);
-      const canTarget = weaponCanTarget(state, def, origin, w, tDef, tship, tgrp);
-      if (!canTarget) {
-        const aLayer = origin.layer || 'orbit', tLayer = tship.layer || 'orbit';
-        const inArc = pointInWeaponArc(origin, w, tship.x, tship.y);
-        const range = tDef ? targetingRangePx(state, def, tDef, tship, tgrp, origin, w) : 0;
-        const dist = Math.hypot(tship.x - origin.x, tship.y - origin.y);
-        console.log('[gate:LWT] weaponCanTarget FAIL', { arc: w.arc, heading: origin.heading, originXY: [origin.x, origin.y], targetXY: [tship.x, tship.y], inArc, dist: Math.round(dist), range: Math.round(range), aLayer, tLayer, attachedTo: tship.attachedTo });
-      }
-      return canTarget;
+      return weaponCanTarget(state, def, origin, w, tDef, tship, tgrp);
     }
     case 'lockBombardmentTarget': {
       const { gid, si, wi, dsId } = intent;
