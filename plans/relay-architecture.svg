@@ -1,0 +1,128 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1120" height="800" viewBox="0 0 1120 800" font-family="'Roboto Mono', ui-monospace, monospace">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#0a0e0d"/>
+      <stop offset="1" stop-color="#060a0c"/>
+    </linearGradient>
+    <marker id="arrUcm" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6 Z" fill="#d4a647"/>
+    </marker>
+    <marker id="arrShal" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6 Z" fill="#4ad6ff"/>
+    </marker>
+    <marker id="arrMute" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto">
+      <path d="M0,0 L7,3 L0,6 Z" fill="#7a8a94"/>
+    </marker>
+  </defs>
+
+  <rect width="1120" height="800" fill="url(#bg)"/>
+
+  <!-- Title -->
+  <text x="40" y="46" font-family="Oswald, Impact, sans-serif" font-size="26" letter-spacing="3" fill="#d4a647" font-weight="700">DFC FLEET OPS — RELAY ONLINE PLAY</text>
+  <text x="41" y="70" font-size="12.5" fill="#7a8a94">Peer-hosted &amp; authoritative · both machines dial outbound · no port forwarding on either player</text>
+
+  <!-- ───────────────── RELAY (top center) ───────────────── -->
+  <g>
+    <rect x="370" y="108" width="380" height="150" rx="6" fill="rgba(20,12,12,0.9)" stroke="#ff5252" stroke-width="1.5"/>
+    <text x="560" y="134" text-anchor="middle" font-family="Oswald, Impact, sans-serif" font-size="15" letter-spacing="2" fill="#ff5252">CLOUD RELAY</text>
+    <text x="560" y="153" text-anchor="middle" font-size="11" fill="#7a8a94">Raspberry Pi / VPS  ·  Cloudflare Tunnel → wss://</text>
+    <line x1="396" y1="165" x2="724" y2="165" stroke="#233038"/>
+    <text x="560" y="187" text-anchor="middle" font-size="11.5" fill="#d8e3e8">Stateless frame forwarder — pairs sockets by room code</text>
+    <text x="560" y="207" text-anchor="middle" font-size="11.5" fill="#d8e3e8">No game logic · no state · no database</text>
+    <rect x="470" y="222" width="180" height="24" rx="12" fill="rgba(255,181,71,0.12)" stroke="#ffb547"/>
+    <text x="560" y="238" text-anchor="middle" font-size="12" fill="#ffb547" font-weight="700">ROOM CODE · 7K4QP2</text>
+  </g>
+
+  <!-- ───────────────── HOST (bottom left) ───────────────── -->
+  <g>
+    <rect x="55" y="360" width="430" height="380" rx="8" fill="rgba(8,16,15,0.93)" stroke="#d4a647" stroke-width="2"/>
+    <text x="75" y="392" font-family="Oswald, Impact, sans-serif" font-size="16" letter-spacing="2" fill="#d4a647">HOST  ·  Player 1’s PC</text>
+    <text x="75" y="411" font-size="11" fill="#7a8a94">Electron app  (Windows .exe)</text>
+
+    <!-- Renderer -->
+    <rect x="75" y="424" width="390" height="78" rx="5" fill="#11171a" stroke="#2f4250"/>
+    <text x="90" y="446" font-size="12" fill="#d8e3e8" font-weight="700">Renderer (Chromium)</text>
+    <text x="90" y="466" font-size="11" fill="#7a8a94">client/index.html · 2D/3D board</text>
+    <text x="90" y="485" font-size="11" fill="#7a8a94">loads http://127.0.0.1:&lt;port&gt; · Three.js local</text>
+
+    <!-- Embedded authoritative server -->
+    <rect x="75" y="514" width="390" height="150" rx="5" fill="#161e22" stroke="#d4a647" stroke-dasharray="4 3"/>
+    <text x="90" y="536" font-size="12.5" fill="#d4a647" font-weight="700">Embedded server  (authoritative)</text>
+    <text x="90" y="558" font-size="11.5" fill="#d8e3e8">Express + ws + SQLite — runs in main process</text>
+    <rect x="92" y="572" width="356" height="34" rx="4" fill="rgba(212,166,71,0.10)" stroke="#7a5e1f"/>
+    <text x="270" y="594" text-anchor="middle" font-size="12" fill="#d4a647">isLegal → apply(rng) → broadcast “full”</text>
+    <text x="90" y="630" font-size="11" fill="#7a8a94">Owns the one true game state + seeded RNG</text>
+    <text x="90" y="648" font-size="11" fill="#7a8a94">AI runs here too (user’s Anthropic key)</text>
+
+    <!-- local data -->
+    <rect x="75" y="676" width="390" height="44" rx="5" fill="#11171a" stroke="#2f4250"/>
+    <text x="90" y="694" font-size="11" fill="#d8e3e8" font-weight="700">userData/</text>
+    <text x="90" y="711" font-size="10.5" fill="#7a8a94">dfc.db · saves · replays · config (relay URL, API key)</text>
+  </g>
+
+  <!-- ───────────────── JOINER (bottom right) ───────────────── -->
+  <g>
+    <rect x="635" y="360" width="430" height="380" rx="8" fill="rgba(8,16,15,0.93)" stroke="#4ad6ff" stroke-width="2"/>
+    <text x="655" y="392" font-family="Oswald, Impact, sans-serif" font-size="16" letter-spacing="2" fill="#4ad6ff">JOINER  ·  Player 2’s PC</text>
+    <text x="655" y="411" font-size="11" fill="#7a8a94">Electron app  (Windows .exe) — different network</text>
+
+    <!-- Renderer -->
+    <rect x="655" y="424" width="390" height="78" rx="5" fill="#11171a" stroke="#2f4250"/>
+    <text x="670" y="446" font-size="12" fill="#d8e3e8" font-weight="700">Renderer (Chromium)</text>
+    <text x="670" y="466" font-size="11" fill="#7a8a94">client/index.html · 2D/3D board</text>
+    <text x="670" y="485" font-size="11" fill="#7a8a94">same UI · sends intents, renders broadcasts</text>
+
+    <!-- thin client / transport -->
+    <rect x="655" y="514" width="390" height="150" rx="5" fill="#161e22" stroke="#4ad6ff" stroke-dasharray="4 3"/>
+    <text x="670" y="536" font-size="12.5" fill="#4ad6ff" font-weight="700">Thin client  (no authority)</text>
+    <text x="670" y="558" font-size="11.5" fill="#d8e3e8">Dials relay instead of a localhost server</text>
+    <rect x="672" y="572" width="356" height="34" rx="4" fill="rgba(74,214,255,0.10)" stroke="#1f6e8c"/>
+    <text x="850" y="594" text-anchor="middle" font-size="12" fill="#4ad6ff">send {intent} · receive {full} · re-render</text>
+    <text x="670" y="630" font-size="11" fill="#7a8a94">Never mutates locally — waits for host’s state</text>
+    <text x="670" y="648" font-size="11" fill="#7a8a94">Enters the host’s ROOM CODE to connect</text>
+
+    <rect x="655" y="676" width="390" height="44" rx="5" fill="#11171a" stroke="#2f4250"/>
+    <text x="670" y="694" font-size="11" fill="#d8e3e8" font-weight="700">userData/</text>
+    <text x="670" y="711" font-size="10.5" fill="#7a8a94">config (relay URL, display name)</text>
+  </g>
+
+  <!-- ───────────────── CONNECTIONS ───────────────── -->
+  <!-- Host outbound up to relay -->
+  <path d="M270,360 L270,300 Q270,272 320,272 L430,258" fill="none" stroke="#d4a647" stroke-width="2" marker-end="url(#arrUcm)"/>
+  <!-- relay back down to host -->
+  <path d="M455,258 Q300,300 255,360" fill="none" stroke="#d4a647" stroke-width="1.2" stroke-dasharray="5 4" marker-end="url(#arrUcm)"/>
+  <text x="250" y="332" text-anchor="end" font-size="10.5" fill="#d4a647">register host</text>
+
+  <!-- Joiner outbound up to relay -->
+  <path d="M850,360 L850,300 Q850,272 800,272 L690,258" fill="none" stroke="#4ad6ff" stroke-width="2" marker-end="url(#arrShal)"/>
+  <path d="M665,258 Q820,300 865,360" fill="none" stroke="#4ad6ff" stroke-width="1.2" stroke-dasharray="5 4" marker-end="url(#arrShal)"/>
+  <text x="872" y="332" font-size="10.5" fill="#4ad6ff">join by code</text>
+
+  <!-- outbound-only banners -->
+  <g>
+    <rect x="338" y="286" width="180" height="22" rx="11" fill="rgba(255,82,82,0.10)" stroke="#ff5252"/>
+    <text x="428" y="301" text-anchor="middle" font-size="10.5" fill="#ff5252">outbound only ↑ no forwarding</text>
+    <rect x="602" y="286" width="180" height="22" rx="11" fill="rgba(255,82,82,0.10)" stroke="#ff5252"/>
+    <text x="692" y="301" text-anchor="middle" font-size="10.5" fill="#ff5252">outbound only ↑ no forwarding</text>
+  </g>
+
+  <!-- ───────────────── MESSAGE FLOW LEGEND ───────────────── -->
+  <g>
+    <rect x="55" y="92" width="300" height="172" rx="6" fill="rgba(8,16,15,0.85)" stroke="#233038"/>
+    <text x="71" y="114" font-size="12" fill="#d8e3e8" font-weight="700">One action, round-trip</text>
+    <text x="71" y="138" font-size="10.8" fill="#4ad6ff">1 · Joiner taps “Engage” → {intent}</text>
+    <text x="71" y="157" font-size="10.8" fill="#7a8a94">2 · relay forwards frame → Host</text>
+    <text x="71" y="176" font-size="10.8" fill="#d4a647">3 · Host: isLegal → apply → new state</text>
+    <text x="71" y="195" font-size="10.8" fill="#7a8a94">4 · Host broadcasts {full} → relay</text>
+    <text x="71" y="214" font-size="10.8" fill="#4ad6ff">5 · relay → both clients re-render</text>
+    <text x="71" y="240" font-size="10" fill="#4a5862">Turn-based → relay latency is irrelevant</text>
+  </g>
+
+  <!-- footer note -->
+  <text x="765" y="120" font-size="11" fill="#7a8a94" font-weight="700">Same path serves:</text>
+  <text x="765" y="140" font-size="10.6" fill="#7a8a94">· Local / hotseat → renderer ↔ embedded server (no net)</text>
+  <text x="765" y="158" font-size="10.6" fill="#7a8a94">· LAN → joiner dials host directly, skip relay</text>
+  <text x="765" y="176" font-size="10.6" fill="#7a8a94">· Internet → via relay (this diagram)</text>
+  <text x="765" y="194" font-size="10.6" fill="#4a5862">Relay carries opaque frames only — it can</text>
+  <text x="765" y="210" font-size="10.6" fill="#4a5862">never see or alter the game.</text>
+</svg>
