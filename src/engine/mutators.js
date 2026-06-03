@@ -3886,13 +3886,19 @@ function applyNominateLead(state, intent) {
 }
 
 function applyLockWeaponTarget(state, intent) {
-  const { gid, si, wi, targetGid, targetSi } = intent;
+  const { gid, si, wi, targetGid, targetSi, volleySlot } = intent;
   const grp = state.groups[gid];
   if (!grp) return state;
   const ship = grp.ships[si];
   if (!ship) return state;
   ship.weaponTargets = ship.weaponTargets || {};
-  ship.weaponTargets[wi] = { gid: targetGid, si: targetSi };
+  if (volleySlot != null) {
+    const existing = ship.weaponTargets[wi];
+    if (!Array.isArray(existing)) ship.weaponTargets[wi] = existing ? [existing] : [];
+    ship.weaponTargets[wi][volleySlot] = { gid: targetGid, si: targetSi };
+  } else {
+    ship.weaponTargets[wi] = { gid: targetGid, si: targetSi };
+  }
   return state;
 }
 
@@ -3932,12 +3938,17 @@ function applyDeployPayload(state, intent) {
 }
 
 function applyUnlockWeapon(state, intent) {
-  const { gid, si, wi } = intent;
+  const { gid, si, wi, volleySlot } = intent;
   const grp = state.groups[gid];
   if (!grp) return state;
   const ship = grp.ships[si];
   if (!ship || !ship.weaponTargets) return state;
-  delete ship.weaponTargets[wi];
+  if (volleySlot != null && Array.isArray(ship.weaponTargets[wi])) {
+    ship.weaponTargets[wi][volleySlot] = null;
+    if (!ship.weaponTargets[wi].some(Boolean)) delete ship.weaponTargets[wi];
+  } else {
+    delete ship.weaponTargets[wi];
+  }
   return state;
 }
 
@@ -3959,7 +3970,7 @@ function applyFireWeapons(state, intent) {
       if (!w) return;
       const sp = parseWeaponSpecials(w);
       const shipAtt = w.att + ((sp.fusillade && shipEO === 'WF') ? sp.fusillade : 0);
-      if (t.dsId) {
+      if (!Array.isArray(t) && t.dsId) {
         // Bombardment vs dropsite: pool identical weapon+dropsite pairs.
         const key = w.name + '|ds:' + t.dsId;
         if (combined[key]) {
@@ -3969,16 +3980,18 @@ function applyFireWeapons(state, intent) {
         }
         return;
       }
-      const tg = state.groups[t.gid];
-      const ts = tg && tg.ships[t.si];
-      if (!ts || ts.destroyed || ts.offTable) return;
       const reps = sp.volley > 1 ? sp.volley : 1;
       for (let r = 0; r < reps; r++) {
-        const key = w.name + '|' + t.gid + '|' + t.si + (reps > 1 ? '|v' + r : '');
+        const tForRep = Array.isArray(t) ? (t[r] || t.find(Boolean)) : t;
+        if (!tForRep) continue;
+        const tg = state.groups[tForRep.gid];
+        const ts = tg && tg.ships[tForRep.si];
+        if (!ts || ts.destroyed || ts.offTable) continue;
+        const key = w.name + '|' + tForRep.gid + '|' + tForRep.si + (reps > 1 ? '|v' + r : '');
         if (combined[key]) {
           combined[key].w = { ...combined[key].w, att: combined[key].w.att + shipAtt };
         } else {
-          combined[key] = { wi: parseInt(wi), w: { ...w, att: shipAtt }, targetGid: t.gid, targetSi: t.si,
+          combined[key] = { wi: parseInt(wi), w: { ...w, att: shipAtt }, targetGid: tForRep.gid, targetSi: tForRep.si,
             volleyIdx: reps > 1 ? r + 1 : 0, volleyOf: reps, fusilladeBaked: true };
         }
       }

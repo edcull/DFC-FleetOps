@@ -3297,8 +3297,13 @@ function renderDetail() {
       const isDetector = w.arc === 'LoS' || /^Detector$/i.test(w.name);
       const wsp = parseWeaponSpecials(w);
       const tgt = selShip && selShip.weaponTargets[wi];
-      const tgtName = tgt ? (tgt.dsId ? (() => { const _ds = state.scenarioData && state.scenarioData.dropsites && state.scenarioData.dropsites.find(d => d.id === tgt.dsId); return _ds ? _ds.base.name : tgt.dsId; })() : (getDef(tgt.gid) ? getDef(tgt.gid).name + (state.groups[tgt.gid] && state.groups[tgt.gid].ships.length>1 ? ` #${tgt.si+1}` : '') : '?')) : null;
+      const _resolveTgtName = (t) => t ? (t.dsId ? (() => { const _ds = state.scenarioData && state.scenarioData.dropsites && state.scenarioData.dropsites.find(d => d.id === t.dsId); return _ds ? _ds.base.name : t.dsId; })() : (getDef(t.gid) ? getDef(t.gid).name + (state.groups[t.gid] && state.groups[t.gid].ships.length>1 ? ` #${t.si+1}` : '') : '?')) : null;
+      const tgtName = _resolveTgtName(Array.isArray(tgt) ? tgt.find(Boolean) : tgt);
       const isAiming = state.targeting && state.targeting.gid === state.selectedGroupId && state.targeting.si === si && state.targeting.wi === wi;
+      // Volley-N: treat each slot independently
+      const _volleyCount = wsp.volley > 1 ? wsp.volley : 0;
+      const _tgtArr = _volleyCount ? (Array.isArray(tgt) ? tgt : (tgt ? [tgt] : [])) : null;
+      const _filledSlots = _tgtArr ? _tgtArr.filter(Boolean).length : 0;
       const isBombardment = /Bombardment/i.test(w.special || '');
       const isCA = (w.special || '').includes('Close Action');
       const caBlocked = eo === 'DC' && !isCA; // DC only fires a Close Action weapon
@@ -3309,7 +3314,7 @@ function renderDetail() {
       // High Power off Weapons Free costs 2; single-HP-weapon ships need WF to fire it.
       const thisCost = weaponSlotCost(def, wi, eo);
       const fitsLimit = wsp.lowPower ? firingCA : (usedCost + thisCost <= limit);
-      const clickable = !isDetector && canFire && !tgt && fitsLimit && !caBlocked && !limitedBlocked;
+      const clickable = !isDetector && canFire && (_volleyCount ? _filledSlots < _volleyCount : !tgt) && fitsLimit && !caBlocked && !limitedBlocked;
       const detectorUsed = selShip && selShip.detectorUsed;
       const detectorAiming = state.detector && state.detector.gid === state.selectedGroupId && state.detector.si === si && state.detector.wi === wi;
       const canDetect = !isOpponent && !grp.activated && isDetector && state.phase === 'play' && onTable && !selShipOOF && !weaponsOffline && !fired && moveGate && !detectorUsed;
@@ -3318,17 +3323,28 @@ function renderDetail() {
       const enemyWingsExist = (state.launchedAssets || []).some(a => a.side !== def.side && (a.kind === 'fighter' || a.kind === 'bomber'));
       const canAntiWing = !isOpponent && !grp.activated && isAntiWing && canFire && !tgt && fitsLimit && !caBlocked && !limitedBlocked && enemyWingsExist;
       const extraTag = [wsp.highPower && eo!=='WF'?'High Power ×2':'', wsp.lowPower?'Low Power':'', wsp.linked?'Linked':'', limitedMax?`Limited ${limitedUsed}/${limitedMax}`:''].filter(Boolean).join(' · ');
-      weaponsHTML += `<div class="weapon-row${tgt ? ' weapon-locked' : ''}${isAiming ? ' weapon-aiming' : ''}${detectorAiming ? ' weapon-aiming' : ''}${awAiming ? ' weapon-aiming' : ''}"
+      const _hasAnyTarget = _volleyCount ? _filledSlots > 0 : !!tgt;
+      weaponsHTML += `<div class="weapon-row${_hasAnyTarget ? ' weapon-locked' : ''}${isAiming ? ' weapon-aiming' : ''}${detectorAiming ? ' weapon-aiming' : ''}${awAiming ? ' weapon-aiming' : ''}"
           ${clickable ? `data-weapon-target="${state.selectedGroupId}|${si}|${wi}" style="cursor:pointer;"` : canDetect ? `data-detector="${state.selectedGroupId}|${si}|${wi}" style="cursor:pointer;"` : ''}>
-        <div class="weapon-name">${w.name}${tgt ? ` <span style="color:var(--hull-crit);font-size:9px;">▶ ${tgtName}</span>` : ''}${detectorUsed ? ` <span style="color:var(--text-mute);font-size:9px;">✓ used</span>` : ''}${limitedBlocked ? ` <span style="color:var(--hull-crit);font-size:9px;">spent</span>` : ''}</div>
+        <div class="weapon-name">${w.name}${!_volleyCount && tgt ? ` <span style="color:var(--hull-crit);font-size:9px;">▶ ${tgtName}</span>` : ''}${detectorUsed ? ` <span style="color:var(--text-mute);font-size:9px;">✓ used</span>` : ''}${limitedBlocked ? ` <span style="color:var(--hull-crit);font-size:9px;">spent</span>` : ''}</div>
         <div class="weapon-stats">${isDetector ? 'Line of Sight · place Spikes' : `${w.arc} · Att ${w.att} · Lock ${w.lock} · Dmg ${w.dmg} · ${w.type}`}${extraTag?` <span style="color:var(--text-mute)">· ${extraTag}</span>`:''}</div>
         ${w.special && w.special !== '—' ? `<div class="weapon-special">${w.special}</div>` : ''}
-        ${isAiming ? `<div class="weapon-special" style="color:var(--hull-crit)">${isBombardment ? 'Click a Dropsite in arc & range to bombard · right-click cancels' : 'Click an enemy ship in arc & range · right-click cancels'}</div>` : ''}
+        ${_volleyCount ? Array.from({length: _volleyCount}, (_, v) => {
+          const _vt = _tgtArr ? _tgtArr[v] : null;
+          const _vtName = _resolveTgtName(_vt);
+          const _vAiming = isAiming && state.targeting.volleySlot === v;
+          return `<div style="font-size:9px;margin-top:3px;display:flex;align-items:center;gap:4px;">
+            <span style="color:var(--text-mute);flex-shrink:0;">Volley ${v+1}:</span>
+            ${_vt ? `<span style="color:var(--hull-crit);">▶ ${_vtName}</span><button class="hp-btn" data-weapon-unlock="${state.selectedGroupId}|${si}|${wi}|${v}" style="margin-left:auto;">✕</button>`
+                  : `<span style="color:${_vAiming ? 'var(--hull-warn)' : 'var(--text-mute)'};">${_vAiming ? 'click an enemy ship…' : '— no target'}</span>`}
+          </div>`;
+        }).join('') : ''}
+        ${isAiming && !_volleyCount ? `<div class="weapon-special" style="color:var(--hull-crit)">${isBombardment ? 'Click a Dropsite in arc & range to bombard · right-click cancels' : 'Click an enemy ship in arc & range · right-click cancels'}</div>` : ''}
         ${detectorAiming ? `<div class="weapon-special" style="color:#4ad6ff">Click an enemy ship in Line of Sight · right-click cancels</div>` : ''}
         ${canDetect && !detectorAiming ? `<div class="weapon-special" style="color:#4ad6ff">Click to use Detector (forgoes this weapon)</div>` : ''}
         ${awAiming ? `<div class="weapon-special" style="color:#ffb547">Click an enemy Wing (asset) in arc & range · right-click cancels</div>` : ''}
         ${canAntiWing ? `<button class="hp-btn" data-antiwing="${state.selectedGroupId}|${si}|${wi}" style="margin-top:3px;color:#ffb547;border-color:#ffb547;">${awAiming ? '✕ cancel' : '✦ ANTI-WING'}</button>` : ''}
-        ${tgt ? `<button class="hp-btn" data-weapon-unlock="${state.selectedGroupId}|${si}|${wi}" style="margin-top:3px;">✕ clear target</button>` : ''}
+        ${!_volleyCount && tgt ? `<button class="hp-btn" data-weapon-unlock="${state.selectedGroupId}|${si}|${wi}" style="margin-top:3px;">✕ clear target</button>` : ''}
       </div>`;
     });
     // Detector special-rule action card (ships where Detector is in special but have no LoS weapon).
@@ -9649,9 +9665,22 @@ function _handle3dClick(e) {
     if (!weaponCanTarget(state, aDef, originShip, w, hit.def, hit.ship, hit.grp)) {
       flashLaunchMsg('Target not in arc / range / layer'); return;
     }
-    dispatch({ type: 'lockWeaponTarget', gid: t.gid, si: t.si, wi: t.wi, targetGid: hit.gid, targetSi: hit.si });
-    state.targeting = null;
+    dispatch({ type: 'lockWeaponTarget', gid: t.gid, si: t.si, wi: t.wi, targetGid: hit.gid, targetSi: hit.si, volleySlot: t.volleySlot });
     flashLaunchMsg(`${w.name} → ${hit.def.name}`, true);
+    // For Volley-N: auto-advance to next empty slot, or clear targeting if all filled
+    if (t.volleySlot != null) {
+      const _sp = parseWeaponSpecials(w);
+      if (_sp.volley > 1) {
+        const _updShip = state.groups[t.gid] && state.groups[t.gid].ships[t.si];
+        const _updTgt = _updShip && _updShip.weaponTargets && _updShip.weaponTargets[t.wi];
+        const _updArr = Array.isArray(_updTgt) ? _updTgt : (_updTgt ? [_updTgt] : []);
+        const _nextEmpty = _updArr.findIndex(slot => !slot);
+        const _nextSlot = _nextEmpty >= 0 ? _nextEmpty : (_updArr.filter(Boolean).length < _sp.volley ? _updArr.length : -1);
+        state.targeting = _nextSlot >= 0 ? { gid: t.gid, si: t.si, wi: t.wi, volleySlot: _nextSlot } : null;
+        renderAll(); return;
+      }
+    }
+    state.targeting = null;
     return;
   }
 
@@ -13049,13 +13078,25 @@ document.addEventListener('click', (e) => {
   }
   // Weapon targeting — click a weapon to enter target-assignment mode.
   const wtEl = e.target.closest && e.target.closest('[data-weapon-target]');
-  if (wtEl) {
+  if (wtEl && !e.target.closest('[data-weapon-unlock]')) {
     const [gid, si, wi] = wtEl.dataset.weaponTarget.split('|');
     const sIdx = parseInt(si), wIdx = parseInt(wi);
     if (state.targeting && state.targeting.gid === gid && state.targeting.si === sIdx && state.targeting.wi === wIdx) {
       state.targeting = null; // toggle off
     } else {
-      state.targeting = { gid, si: sIdx, wi: wIdx };
+      // For Volley-N weapons, find the first empty slot to target
+      const _wtDef = getDef(gid);
+      const _wtW = _wtDef && _wtDef.weapons[wIdx];
+      const _wtSp = _wtW && parseWeaponSpecials(_wtW);
+      let _volleySlot = undefined;
+      if (_wtSp && _wtSp.volley > 1) {
+        const _wtShip = state.groups[gid] && state.groups[gid].ships[sIdx];
+        const _wtTgt = _wtShip && _wtShip.weaponTargets && _wtShip.weaponTargets[wIdx];
+        const _wtArr = Array.isArray(_wtTgt) ? _wtTgt : (_wtTgt ? [_wtTgt] : []);
+        _volleySlot = _wtArr.findIndex(t => !t);
+        if (_volleySlot < 0) _volleySlot = _wtSp.volley - 1; // all filled, cycle back to last
+      }
+      state.targeting = { gid, si: sIdx, wi: wIdx, volleySlot: _volleySlot };
       state.launching = null;
       flashLaunchMsg('Click an enemy ship in arc & range to lock the target');
     }
@@ -13063,8 +13104,10 @@ document.addEventListener('click', (e) => {
   }
   // Clear a locked weapon target.
   if (e.target.matches('[data-weapon-unlock]')) {
-    const [gid, si, wi] = e.target.dataset.weaponUnlock.split('|');
-    dispatch({ type: 'unlockWeapon', gid, si: parseInt(si), wi: parseInt(wi) });
+    const _unlockParts = e.target.dataset.weaponUnlock.split('|');
+    const [gid, si, wi] = _unlockParts;
+    const _vs = _unlockParts[3];
+    dispatch({ type: 'unlockWeapon', gid, si: parseInt(si), wi: parseInt(wi), volleySlot: _vs !== undefined ? parseInt(_vs) : undefined });
     return;
   }
   // Anti-Wing: toggle the wing-targeting mode.
@@ -14491,9 +14534,21 @@ board.addEventListener('click', (e) => {
     if (!weaponCanTarget(state, aDef, originShip, w, hit.def, hit.ship, hit.grp)) {
       flashLaunchMsg('Target not in arc / range / layer (measured from lead ship)'); return;
     }
-    dispatch({ type: 'lockWeaponTarget', gid: t.gid, si: t.si, wi: t.wi, targetGid: hit.gid, targetSi: hit.si });
-    state.targeting = null;
+    dispatch({ type: 'lockWeaponTarget', gid: t.gid, si: t.si, wi: t.wi, targetGid: hit.gid, targetSi: hit.si, volleySlot: t.volleySlot });
     flashLaunchMsg(`${w.name} → ${hit.def.name}`, true);
+    if (t.volleySlot != null) {
+      const _sp = parseWeaponSpecials(w);
+      if (_sp.volley > 1) {
+        const _updShip = state.groups[t.gid] && state.groups[t.gid].ships[t.si];
+        const _updTgt = _updShip && _updShip.weaponTargets && _updShip.weaponTargets[t.wi];
+        const _updArr = Array.isArray(_updTgt) ? _updTgt : (_updTgt ? [_updTgt] : []);
+        const _nextEmpty = _updArr.findIndex(slot => !slot);
+        const _nextSlot = _nextEmpty >= 0 ? _nextEmpty : (_updArr.filter(Boolean).length < _sp.volley ? _updArr.length : -1);
+        state.targeting = _nextSlot >= 0 ? { gid: t.gid, si: t.si, wi: t.wi, volleySlot: _nextSlot } : null;
+        renderAll(); return;
+      }
+    }
+    state.targeting = null;
     return;
   }
 
