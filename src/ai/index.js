@@ -40,6 +40,10 @@ export function shouldAiAct(state, side) {
 
   if (phase !== 'play') return false;
 
+  // An unconfirmed end-of-activation hazard-damage report freezes the game;
+  // the owning side (here, the AI) must acknowledge it.
+  if (state.atmoDamage) return state.atmoDamage.side === side;
+
   if (state.repairPhase) return false; // repair is handled client-side
 
   // Battalion combat: AI acts at every stage (gating is permissive, no side lock)
@@ -103,6 +107,12 @@ export async function triggerAi(room, onRecord = null) {
   }
 
   if (phase !== 'play') return;
+
+  // Acknowledge an end-of-activation hazard-damage report so play can advance.
+  if (state.atmoDamage && state.atmoDamage.side === aiSide) {
+    applyFn({ type: 'confirmEndActivation' });
+    return;
+  }
 
   if (state.repairPhase) {
     handleRepair(state, rng, aiSide, personality, applyFn);

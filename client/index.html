@@ -395,6 +395,23 @@
   .am-die.crit { background: rgba(255,181,71,0.22); border-color: var(--hull-warn); color: var(--hull-warn); }
   .am-die.miss { opacity: 0.5; }
 
+  /* In-place dice tumble: spins in with an overshoot bounce and settles on its
+     final face. Applied (via the .rolling class) only to dice that changed since
+     the last render, so a re-roll visibly re-tumbles just the affected dice.
+     Colour coding (hit/crit/miss, saved/unsaved) is carried by the die's own
+     class and is preserved throughout. */
+  @keyframes dieRoll {
+    0%   { transform: rotate(-220deg) scale(0.35); opacity: 0.15; filter: blur(1.4px); }
+    45%  { transform: rotate(18deg)   scale(1.22); opacity: 1;    filter: blur(0); }
+    68%  { transform: rotate(-9deg)   scale(0.92); }
+    84%  { transform: rotate(4deg)    scale(1.04); }
+    100% { transform: rotate(0)       scale(1); }
+  }
+  .am-die.rolling, .init-die.rolling { animation: dieRoll 0.52s cubic-bezier(0.2,0.85,0.3,1.15) both; }
+  @media (prefers-reduced-motion: reduce) {
+    .am-die.rolling, .init-die.rolling { animation: none; }
+  }
+
   .attack-hud {
     position: absolute; top: 8px; left: 8px;
     width: 400px; max-height: calc(100% - 16px);
@@ -4709,11 +4726,40 @@ function openFeatureAttackModal(ds, fi, targetGid, targetSi, side) {
   renderAll();
 }
 
+// ── Dice rolling animation ────────────────────────────────────────────────
+// renderAll() rebuilds dice markup from scratch on every state change. To make
+// dice tumble only when they are genuinely (re-)rolled — not on every unrelated
+// re-render — we remember the last face+colour each die showed under a stable
+// key and add the `.rolling` class only to dice whose value changed.
+const _diceAnim = {};
+/* dice: array of { text, cls, title? }. cls ∈ '', 'hit', 'crit', 'miss'. */
+function diceHtml(key, dice) {
+  const prev = _diceAnim[key] || [];
+  const sigs = dice.map(d => `${d.text}:${d.cls || ''}`);
+  const html = dice.map((d, i) => {
+    const roll = prev[i] !== sigs[i];
+    return `<span class="am-die ${d.cls || ''}${roll ? ' rolling' : ''}"`
+      + `${roll ? ` style="animation-delay:${i * 45}ms"` : ''}`
+      + `${d.title ? ` title="${d.title}"` : ''}>${d.text}</span>`;
+  }).join('');
+  _diceAnim[key] = sigs;
+  return html;
+}
+/* Forget remembered dice so the next render re-tumbles them. Pass a key prefix
+   to clear a family (e.g. 'attack:') or nothing to clear all. */
+function resetDiceAnim(prefix) {
+  for (const k in _diceAnim) {
+    if (!prefix || k.startsWith(prefix)) delete _diceAnim[k];
+  }
+}
+
 function renderAttackModal() {
   let overlay = document.getElementById('attack-overlay');
   if (overlay) overlay.remove();
   const M = state.attackModal;
   if (!M) return;
+  // A fresh attack: forget previous attack dice so its first rolls re-tumble.
+  if (M.step === 'intro') resetDiceAnim('attack:');
   // Explosion step is handled by renderDetail (board-view panel), not the overlay.
   if (M.step === 'explosion') return;
   const aDef = M.bomber ? { name: M.attackerName || 'Bombers', side: M.bomberSide } : getDef(M.attackerGid);
@@ -4834,7 +4880,7 @@ function renderAttackModal() {
       const _bdsName = _bds ? _bds.base.name : s.dsId;
       body = `<div class="am-step-head">Shot ${M.shotIdx+1}/${M.shots.length} · Bombardment</div>
         <div class="am-line"><b>${s.w.name}</b> ▶ <b>${_bdsName}</b> · Lock ${hr.lock}+</div>
-        <div class="am-dice">${hr.dice.map(d => `<span class="am-die ${d.isHit?'hit':'miss'}">${d.r}</span>`).join('')}</div>
+        <div class="am-dice">${diceHtml(`attack:bhit:${M.shotIdx}`, hr.dice.map(d => ({ text: d.r, cls: d.isHit?'hit':'miss' })))}</div>
         <div class="am-line"><b>${hr.hits}</b> hit${hr.hits!==1?'s':''}</div>`;
       footer = isAttacker ? `<button class="btn" data-am-cancel="1">Abort</button>
         <button class="btn-primary ${sideClass==='shal'?'shal':''}" data-am-next="save">${hr.hits>0?'Roll City Saves ▸':'No hits — Continue ▸'}</button>` : '';
@@ -4852,7 +4898,7 @@ function renderAttackModal() {
       body = `<div class="am-step-head">Shot ${M.shotIdx+1}/${M.shots.length} · Roll to Hit</div>
         <div class="am-line"><b>${s.w.name}</b>${s.volleyOf>1?` <span style="color:var(--hull-warn);font-size:9px;">Volley ${s.volleyIdx}/${s.volleyOf}</span>`:''} ▶ ${td.name} · ${hr.forceSix?'<span style="color:var(--hull-warn)">Atmosphere: hits 6+ only, no crit</span>':`Lock ${hr.lock}+ (${s.w.type})`}</div>
         ${effNote?`<div class="am-line" style="font-size:9px;color:var(--text-mute)">${effNote}</div>`:''}
-        <div class="am-dice">${hr.dice.map(d => `<span class="am-die ${d.isCrit?'crit':d.isHit?'hit':'miss'}">${d.r}</span>`).join('')}</div>
+        <div class="am-dice">${diceHtml(`attack:hit:${M.shotIdx}`, hr.dice.map(d => ({ text: d.r, cls: d.isCrit?'crit':d.isHit?'hit':'miss' })))}</div>
         <div class="am-line"><b>${hr.hits}</b> hit${hr.hits!==1?'s':''}${hr.crits?` · <span style="color:var(--hull-warn)">${hr.crits} critical</span>`:''}</div>`;
       if (isAttacker) {
         const atkSide = M.bomber ? M.bomberSide : (M.attackerGid ? getDef(M.attackerGid).side : null);
@@ -4887,9 +4933,9 @@ function renderAttackModal() {
       body = `<div class="am-step-head">Shot ${M.shotIdx+1}/${M.shots.length} · Bombardment Saves</div>
         <div class="am-line"><b>${_bdsName}</b> — ${sr.hitsList.length} hit${sr.hitsList.length!==1?'s':''} · ${_svType} ${_svStr}</div>
         ${sr.primDice.length ? `<div class="am-line" style="font-size:9px;color:var(--text-mute)">City saves (${_svStr} each):</div>
-          <div class="am-dice">${sr.primDice.map(d=>`<span class="am-die ${d.ok?'hit':'miss'}" title="vs ${d.sv}+">${d.r}</span>`).join('')}</div>` : `<div class="am-line" style="font-size:9px;color:var(--text-mute)">No saves (${_svType} —)</div>`}
+          <div class="am-dice">${diceHtml(`attack:bsave:${M.shotIdx}`, sr.primDice.map(d=>({ text: d.r, cls: d.ok?'hit':'miss', title: `vs ${d.sv}+` })))}</div>` : `<div class="am-line" style="font-size:9px;color:var(--text-mute)">No saves (${_svType} —)</div>`}
         ${sr.bsDice && sr.bsDice.length ? `<div class="am-line" style="font-size:9px;color:rgba(255,220,80,0.85)">Station BS (${sr.bsVal}+ while city has Power Plant):</div>
-          <div class="am-dice">${sr.bsDice.map(d=>`<span class="am-die ${d.ok?'hit':'miss'}">${d.r}</span>`).join('')}</div>` : ''}
+          <div class="am-dice">${diceHtml(`attack:bbs:${M.shotIdx}`, sr.bsDice.map(d=>({ text: d.r, cls: d.ok?'hit':'miss' })))}</div>` : ''}
         <div class="am-line"><b>${sr.unsaved}</b> unsaved → <b style="color:var(--hull-crit)">${sr.dmg} hull damage</b> · 1 battalion per hull point (collateral)</div>`;
       footer = isAttacker ? `<button class="btn" data-am-cancel="1">Abort</button>
         <button class="btn-primary ${sideClass==='shal'?'shal':''}" data-am-next="apply">Apply Bombardment Damage ▸</button>` : '';
@@ -4944,16 +4990,16 @@ function renderAttackModal() {
         : (sp.critical > 0 && p.crits > 0
             ? `<div class="am-line" style="font-size:9px;color:var(--text-mute)">Saves vs ${p.sv}+ · +${sp.critical} dmg per crit:</div>`
             : '');
-      return plbl + `<div class="am-dice">${p.dice.map(d => `<span class="am-die ${d.ok?'hit':'miss'}" title="vs ${d.sv}+${d.crit?' (crit)':''}">${d.r}</span>`).join('')}</div>`;
+      return plbl + `<div class="am-dice">${diceHtml(`attack:save:${M.shotIdx}:${p.sv}`, p.dice.map(d => ({ text: d.r, cls: d.ok?'hit':'miss', title: `vs ${d.sv}+${d.crit?' (crit)':''}` })))}</div>`;
     }).join('');
     body = `<div class="am-step-head">Shot ${M.shotIdx+1}/${M.shots.length} · ${sr.backupRolled ? 'Saves' : _saveTypeHdr}</div>
       <div class="am-line">${td.name} — ${sr.hitsList.length} hit${sr.hitsList.length!==1?'s':''}${sr.penetrator?' (criticals → Core)':''}</div>
       ${sr.primDice.length?`<div class="am-line" style="font-size:9px;color:var(--text-mute)">${_primSavesLabel}:</div>
         ${_primDiceHtml}`:''}
       ${sr.backupRolled && sr.backDice.length?`<div class="am-line" style="font-size:9px;color:var(--text-mute)">Backup saves (${td.bs}):</div>
-        <div class="am-dice">${sr.backDice.map(d=>`<span class="am-die ${d.ok?'hit':'miss'}">${d.r}</span>`).join('')}</div>`:''}
+        <div class="am-dice">${diceHtml(`attack:back:${M.shotIdx}`, sr.backDice.map(d=>({ text: d.r, cls: d.ok?'hit':'miss' })))}</div>`:''}
       ${sr.backupRolled && sr.aegisDice && sr.aegisDice.length?`<div class="am-line" style="font-size:9px;color:#4ad6ff">Aegis-${sr.aegisY} save dice:</div>
-        <div class="am-dice">${sr.aegisDice.map(d=>`<span class="am-die ${d.ok?'hit':'miss'}">${d.r}</span>`).join('')}</div>`:''}
+        <div class="am-dice">${diceHtml(`attack:aegis:${M.shotIdx}`, sr.aegisDice.map(d=>({ text: d.r, cls: d.ok?'hit':'miss' })))}</div>`:''}
       ${sr.backupRolled
         ? `<div class="am-line"><b>${sr.unsaved}</b> unsaved → <b style="color:var(--hull-crit)">${sr.dmg} damage</b>${sr.flash?` · <span style="color:var(--hull-warn)">Flash-${sr.flash} (${sr.dmg>0?'+'+sr.flash+' spike':'no dmg'})</span>`:''}${sr.crippling&&sr.critDamaged?` · <span style="color:var(--hull-warn)">Crippling!</span>`:''}</div>`
         : `<div class="am-line" style="color:var(--text-mute);font-size:10px;"><b>${primFailedNow}</b> hit${primFailedNow!==1?'s':''} unsaved so far${sr.backupVal != null ? ` — Backup (${td.bs}) still to roll` : (sr.isBomberAtk || sr.isCloseAction) ? ' — Aegis still to roll' : ''}</div>`}`;
@@ -5028,7 +5074,7 @@ function renderAttackModal() {
     } else {
       body = `<div class="am-step-head">Crippling Effect</div>
         <div class="am-line"><b>${c.name}</b> dropped below half Hull${c.braced?' · <span style="color:var(--hull-warn)">Braced</span>':''}:</div>
-        <div class="am-dice">${c.d1!=null?`<span class="am-die">${c.d1}</span><span class="am-die">${c.d2}</span> = `:''}<b>${c.total}</b></div>
+        <div class="am-dice">${c.d1!=null?`${diceHtml(`attack:cripple:${c.gid}:${c.si}`, [{ text: c.d1 }, { text: c.d2 }])} = `:''}<b>${c.total}</b></div>
         <div class="am-line" style="color:var(--hull-warn)"><b>${c.effectName}</b></div>
         <div class="am-line" style="font-size:10px;color:var(--text-dim)">${c.effectDesc}</div>`;
       footer = `<button class="btn-primary ${sideClass==='shal'?'shal':''}" data-am-next="crippling-next">Apply ▸</button>`;
@@ -5050,7 +5096,7 @@ function renderAttackModal() {
     } else {
       body = `<div class="am-step-head">Explosion!</div>
         <div class="am-line"><b>${ex.name}</b> destroyed${ex.contained?' · <span style="color:var(--hull-crit)">Contained</span>':''}:</div>
-        <div class="am-dice">${ex.d1!=null?`<span class="am-die">${ex.d1}</span>`:''}${ex.mod?` + ${ex.mod} = <b>${ex.total}</b>`:''}</div>
+        <div class="am-dice">${ex.d1!=null?diceHtml(`attack:explode:${ex.gid}:${ex.si}`, [{ text: ex.d1 }]):''}${ex.mod?` + ${ex.mod} = <b>${ex.total}</b>`:''}</div>
         <div class="am-line" style="color:var(--hull-crit)"><b>${ex.effectName}</b> (range ${ex.rangeIn}"${ex.effKind==='spike2x'?' ×2':''})</div>
         <div class="am-line" style="font-size:10px;color:var(--text-dim)">${ex.effectDesc}</div>
         <div class="am-line" style="font-size:9px;color:var(--text-mute)">Applied to ships${ex.effAssets?' & assets':''} in range on the ${ex.layer} layer.</div>`;
@@ -5166,6 +5212,61 @@ function renderAttackModal() {
   if (fpRerollBtn) fpRerollBtn.addEventListener('click', () => dispatch({ type: 'attackFighterReroll' }));
   const rerollBtn = overlay.querySelector('[data-am-reroll]');
   if (rerollBtn) rerollBtn.addEventListener('click', () => dispatch({ type: 'attackReroll', which: rerollBtn.dataset.amReroll }));
+}
+
+/* End-of-activation hazard damage report — shown in the attack-modal style after
+   a group finishes its activation having taken atmosphere / orbital-decay /
+   Expansive-Atmosphere damage. The dice are rolled server-side (stored in
+   state.atmoDamage); this only displays them and offers the confirm button that
+   hands the activation to the next player. */
+function renderAtmoModal() {
+  let overlay = document.getElementById('atmo-overlay');
+  if (overlay) overlay.remove();
+  const ad = state.atmoDamage;
+  if (!ad) return;
+  // Only the side that owns the report drives the confirm; the opponent watches.
+  const isOwner = !_netSide || _netSide === ad.side;
+  const sideClass = sideCssKey(ad.side);
+
+  const rows = ad.ships.map(sh => {
+    const srcHtml = sh.sources.map((src, ci) => {
+      // Damage dice (D3/2D3) are neutral magnitude rolls; an Expansive-Atmosphere
+      // die is a save — colour it like the attack modal (saved = gold, failed = dim).
+      const dice = src.dice.map(d => ({
+        text: d.face,
+        cls: src.kind === 'save' ? (d.dmg > 0 ? 'miss' : 'hit') : '',
+        title: src.kind === 'save'
+          ? (d.dmg > 0 ? 'save failed — 1 dmg' : 'saved')
+          : `d6 ${d.face} → ${d.dmg} dmg`,
+      }));
+      return `<div class="am-line" style="font-size:9px;color:var(--text-mute);margin:5px 0 0;">${src.label} · ${src.total} dmg</div>
+        <div class="am-dice">${diceHtml(`atmo:${ad.gid}:${sh.si}:${ci}`, dice)}</div>`;
+    }).join('');
+    const fate = sh.destroyed
+      ? `<b style="color:var(--hull-crit)">DESTROYED</b>`
+      : `Hull <b>${sh.hullBefore}</b> → <b style="color:var(--hull-crit)">${sh.hullAfter}</b>${sh.maxHull?`<span style="color:var(--text-mute)">/${sh.maxHull}</span>`:''}`;
+    return `<div class="am-line" style="margin-top:8px;"><b>${sh.name}</b></div>
+      ${srcHtml}
+      <div class="am-line"><b>${sh.total}</b> hull damage · ${fate}</div>`;
+  }).join('');
+
+  const body = `<div class="am-step-head">End of Activation</div>
+    <div class="am-line" style="font-size:10px;color:var(--text-mute)">Hazard damage for ending the activation in the atmosphere (D3, 2D3 Colossal), under orbital decay, or in an expansive atmosphere.</div>
+    ${rows}`;
+  const footer = isOwner
+    ? `<button class="btn-primary ${sideClass==='shal'?'shal':''}" data-atmo-confirm="1">Confirm ▸</button>`
+    : `<div class="am-line" style="color:var(--text-mute)">Waiting for ${playerNameForSide(ad.side)}…</div>`;
+
+  overlay = document.createElement('div');
+  overlay.id = 'atmo-overlay';
+  overlay.className = 'attack-hud';
+  overlay.innerHTML = `<div class="attack-hud-title">⌁ END OF ACTIVATION</div>
+    <div class="attack-hud-body">${body}</div>
+    <div class="attack-hud-footer">${footer}</div>`;
+  (document.querySelector('.board-wrap') || document.body).appendChild(overlay);
+
+  const confirmBtn = overlay.querySelector('[data-atmo-confirm]');
+  if (confirmBtn) confirmBtn.addEventListener('click', () => dispatch({ type: 'confirmEndActivation' }));
 }
 
 /* Advance the attack state machine. */
@@ -5418,7 +5519,7 @@ function renderRepairPhase() {
         <div class="am-line" style="font-size:10px;color:var(--text-dim)">${t.dc?'2D6':'1D6'} per repairable effect · 4+ removes (Orbital Decay 6+).</div>
         ${t.rolled.map(r => `<div class="am-line">
           <b>${CRIPPLE_LABEL[r.eff]}</b> (need ${r.need}+):
-          <span class="am-dice" style="display:inline-flex;">${r.dice.map(d=>`<span class="am-die ${d>=r.need?'hit':'miss'}">${d}</span>`).join('')}</span>
+          <span class="am-dice" style="display:inline-flex;">${diceHtml(`repair:${t.gid}:${t.si}:${r.eff}`, r.dice.map(d=>({ text: d, cls: d>=r.need?'hit':'miss' })))}</span>
           ${r.success?'<span style="color:var(--hull-good)">✓ repaired</span>':'<span style="color:var(--text-mute)">remains</span>'}
         </div>`).join('')}`;
       const last = R.idx >= R.targets.length - 1;
@@ -7404,7 +7505,11 @@ function renderInitiative() {
   const blueName = playerNameForSide('player2');
   const winName = I.winner === 'player1' ? redName : blueName;
   const holderName = I.holder === 'player1' ? redName : blueName;
-  const die = (raw, bonus, col) => `<div class="init-die" style="border-color:${col};color:${col}">${raw}${bonus?`<span style="font-size:9px;"> +${bonus}</span>`:''}</div>`;
+  // Tumble both initiative dice once, when this round's result first appears.
+  const _initSig = `${I.round}:${I.rRaw}:${I.bRaw}`;
+  const _initRoll = _diceAnim['init'] !== _initSig;
+  _diceAnim['init'] = _initSig;
+  const die = (raw, bonus, col) => `<div class="init-die${_initRoll?' rolling':''}" style="border-color:${col};color:${col}">${raw}${bonus?`<span style="font-size:9px;"> +${bonus}</span>`:''}</div>`;
   const P = state.planning || { ap:{player1:1,player2:1}, passTokens:{player1:0,player2:0}, apBreakdown:null };
   const apDetail = (side) => {
     const col = side === 'player1' ? 'var(--ucm)' : 'var(--shal)';
@@ -8385,7 +8490,7 @@ function renderExplosionHUD() {
     inner += `<div style="font-size:9px;color:var(--text-mute);margin-bottom:6px;">Declare Admiral abilities, then roll.</div>
       <button class="btn-primary" id="expl-roll-btn" style="width:100%;">${ex.contained ? 'Resolve (2) ▸' : 'ROLL 1D6 ▸'}</button>`;
   } else {
-    if (ex.d1 != null) inner += `<div style="margin-bottom:4px;"><span class="am-die" style="font-size:11px;">${ex.d1}</span>${ex.mod ? ` +${ex.mod} = <b>${ex.total}</b>` : ''}</div>`;
+    if (ex.d1 != null) inner += `<div style="margin-bottom:4px;">${diceHtml(`explode:${ex.gid}:${ex.si}`, [{ text: ex.d1 }])}${ex.mod ? ` +${ex.mod} = <b>${ex.total}</b>` : ''}</div>`;
     inner += `<div style="color:var(--hull-crit);font-weight:600;margin-bottom:2px;font-size:10px;">${ex.effectName}</div>
       <div style="font-size:9px;color:var(--text-dim);margin-bottom:8px;">${ex.effectDesc}</div>`;
     if (ex.effKind !== 'none') {
@@ -8919,6 +9024,7 @@ function renderAll(localOnly = false) {
     renderDropsiteActivation();
     renderPayloadAssign();
     renderAttackModal();
+    renderAtmoModal();
     renderRepairPhase();
     renderBattalionDeployModal();
     renderDogfightModal();
@@ -12772,6 +12878,9 @@ function updateHUD() {
    EVENT WIRING
    ========================================================================== */
 document.addEventListener('click', (e) => {
+  // While the end-of-activation atmosphere damage report is up, swallow all
+  // clicks except its own confirm button (wired via a direct listener).
+  if (state.atmoDamage && !e.target.closest('#atmo-overlay')) return;
   // Group card click handled inline
   // Arc view mode toggle (local only — affects board overlays for selected ship)
   // Clicking the already-active mode toggles it off (mode 0 = hide all).
@@ -14066,6 +14175,10 @@ board.addEventListener('click', (e) => {
     }
     return;
   }
+
+  // Freeze board interaction while the end-of-activation atmosphere damage
+  // report is awaiting confirmation.
+  if (state.atmoDamage) return;
 
   // ── PROTECT NOMINATION — click a dropsite on the map ──
   if (state.phase === 'protect' && _nomPicking && _nomPicking.key === '__protect__' && (!_netSide || _nomPicking.side === _netSide)) {
