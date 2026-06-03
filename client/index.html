@@ -1283,7 +1283,7 @@ import { GLTFLoader }    from 'three/addons/loaders/GLTFLoader.js';
 // ─── STATE INIT ───────────────────────────────────────────────────────────────
 const DROPSITE_VP = { S: { control: 2, contest: 0 }, M: { control: 3, contest: 1 }, L: { control: 4, contest: 2 } };
 let state   = createState();
-const rng   = _rng;   // Math.random — hotseat mode, no seed
+let rng     = _rng;   // Math.random — hotseat; switched to seeded RNG when play starts
 
 // ─── AUTH STATE ───────────────────────────────────────────────────────────────
 let currentUser = null; // { loggedIn, username, userId } — set on page load
@@ -15759,11 +15759,27 @@ const _netParams = new URLSearchParams(location.search);
 const _netRoom   = (_netParams.get('room') || '').toUpperCase();
 const _netSide   = (_netParams.get('side') || '').toLowerCase(); // 'player1' | 'player2' | '' (hotseat)
 // Hotseat save room ID — generated once when the game moves past setup, persists for that session.
-let _hotseatRoomId = null;
+let _hotseatRoomId          = null;
+let _hotseatSeed             = null;
+let _hotseatPlayStartState   = null;
+let _hotseatPlayStartRngState = null;
+let _hotseatIntentLog        = [];
 function _genId() { return Array.from({length:4}, () => 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'[Math.floor(Math.random()*32)]).join(''); }
 function _hotseatSave() {
   if (_netSide || !_hotseatRoomId || state.phase === 'setup') return;
-  fetch('/api/saves/hotseat', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ roomId: _hotseatRoomId, state }) }).catch(() => {});
+  fetch('/api/saves/hotseat', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      roomId:            _hotseatRoomId,
+      state,
+      seed:              _hotseatSeed,
+      currentRngState:   rng.getState?.() ?? null,
+      playStartState:    _hotseatPlayStartState,
+      playStartRngState: _hotseatPlayStartRngState,
+      intentLog:         _hotseatIntentLog,
+    }),
+  }).catch(() => {});
 }
 // Return the local player's board-side key ('player1' | 'player2').
 function _gs() { return _netSide; }
@@ -16079,6 +16095,16 @@ function dispatch(intent) {
     renderAll();
     // Generate a hotseat room ID the first time the game moves past setup.
     if (!_hotseatRoomId && state.phase !== 'setup') _hotseatRoomId = _genId();
+    // On first transition to play: switch to a seeded RNG and capture the start state for replay.
+    if (!_hotseatPlayStartState && state.phase === 'play') {
+      _hotseatSeed = Math.floor(Math.random() * 2147483647);
+      rng = _makeRng(_hotseatSeed);
+      _hotseatPlayStartState    = structuredClone(state);
+      _hotseatPlayStartRngState = rng.getState();
+    } else if (_hotseatPlayStartState && state.phase === 'play') {
+      // Record intent for replay (skip the commitScenario that triggered the transition).
+      _hotseatIntentLog.push({ ts: Date.now(), side: _intentSide(intent) || 'player1', intent });
+    }
     _hotseatSave();
     // Bug 4: after a ship action, auto-finish the activation if all ships have acted.
     const autoFinishTriggers = ['moveShip', 'holdPosition', 'endVectoredMove', 'fireWeapons', 'launchAsset', 'surveySite'];
@@ -16386,13 +16412,15 @@ async function showModeSelector() {
         </div>`;
       const sectionHdr = label => `<div style="font-size:9px;letter-spacing:0.1em;color:var(--text-mute);padding:4px 2px 2px;border-bottom:1px solid rgba(255,255,255,0.07);margin-bottom:2px;">${label}</div>`;
       const hotseatSaves = saves.filter(s => s.isHotseat);
-      const onlineSaves  = saves.filter(s => !s.isHotseat);
-      const hsSection  = hotseatSaves.length ? sectionHdr('HOTSEAT') + hotseatSaves.map(makeRow).join('') : '';
-      const netSection = onlineSaves.length  ? sectionHdr('ONLINE')  + onlineSaves.map(makeRow).join('')  : '';
+      const soloSaves    = saves.filter(s => s.isAi && !s.isHotseat);
+      const onlineSaves  = saves.filter(s => !s.isHotseat && !s.isAi);
+      const hsSection  = hotseatSaves.length ? sectionHdr('HOTSEAT')    + hotseatSaves.map(makeRow).join('') : '';
+      const aiSection  = soloSaves.length    ? sectionHdr('SOLO vs AI') + soloSaves.map(makeRow).join('')    : '';
+      const netSection = onlineSaves.length  ? sectionHdr('ONLINE')     + onlineSaves.map(makeRow).join('')  : '';
       html = `<div class="setup-card" style="max-width:440px;">
         <div class="setup-header"><h2 class="setup-title">SAVED GAMES</h2></div>
         <div class="setup-body" style="padding:16px;display:flex;flex-direction:column;gap:8px;max-height:60vh;overflow-y:auto;">
-          ${hsSection}${netSection}
+          ${hsSection}${aiSection}${netSection}
         </div>
         <div class="setup-footer"><button class="btn" id="ms-back">← Back</button></div>
       </div>`;
@@ -16492,7 +16520,12 @@ async function showModeSelector() {
           return;
         }
         dismiss();
-        _hotseatRoomId = null;
+        _hotseatRoomId           = null;
+        _hotseatSeed             = null;
+        _hotseatPlayStartState   = null;
+        _hotseatPlayStartRngState = null;
+        _hotseatIntentLog        = [];
+        rng = _rng;
         Object.assign(state, createState());
         rebuildFleets();
         renderAll();
@@ -16513,7 +16546,17 @@ async function showModeSelector() {
             btn.disabled = true; btn.textContent = '…';
             try {
               const save = await fetch(`/api/saves/${id}`).then(r => r.json());
-              _hotseatRoomId = id;
+              _hotseatRoomId           = id;
+              _hotseatSeed             = save.seed ?? null;
+              _hotseatPlayStartState   = save.playStartState   ?? null;
+              _hotseatPlayStartRngState = save.playStartRngState ?? null;
+              _hotseatIntentLog        = save.intentLog        ?? [];
+              if (save.seed != null) {
+                rng = _makeRng(save.seed);
+                if (save.currentRngState != null) rng.setState(save.currentRngState);
+              } else {
+                rng = _rng;
+              }
               dismiss();
               Object.assign(state, save.currentState);
               rebuildFleets();
