@@ -34,6 +34,7 @@ router.post('/rooms', (req, res) => {
     const slot = side === 'player1' ? 'f1' : 'f2';
     room.aiSide        = side;
     room.aiPersonality = aiPersonality || 'balanced';
+    room.state.aiSide  = side; // persisted in state JSON for resume
 
     const PERSONALITY_LABELS = { aggressive:'Aggressive', positional:'Positional', defensive:'Defensive', balanced:'Balanced', opportunist:'Opportunist' };
     room.state.aiOpponent   = true;
@@ -87,6 +88,7 @@ router.get('/saves', async (req, res) => {
         factions:    s.factions    ?? {},
         sideColors:  s.sideColors  ?? null,
         isHotseat:   s.isHotseat || false,
+        isAi:        s.isAi      || false,
         hasReplay:   !!s.hasReplay,
       }))
   );
@@ -94,17 +96,17 @@ router.get('/saves', async (req, res) => {
 
 // POST /api/saves/hotseat — save a hotseat game state snapshot.
 router.post('/saves/hotseat', async (req, res) => {
-  const { roomId, state } = req.body;
+  const { roomId, state, seed, currentRngState, playStartState, playStartRngState, intentLog } = req.body;
   if (!roomId || !state) return res.status(400).json({ error: 'Missing roomId or state.' });
   const room = {
     id: roomId,
     state,
-    seed: null,
+    seed: seed ?? null,
     createdAt: state.createdAt || Date.now(),
-    rng: { getState: () => null },
-    playStartState: null,
-    playStartRngState: null,
-    intentLog: [],
+    rng: { getState: () => currentRngState ?? null },
+    playStartState: playStartState || null,
+    playStartRngState: playStartRngState ?? null,
+    intentLog: intentLog || [],
     isHotseat: true,
   };
   try {
@@ -186,6 +188,8 @@ router.post('/rooms/resume', async (req, res) => {
     room.playStartState    = save.playStartState    || null;
     room.playStartRngState = save.playStartRngState ?? null;
     room.createdAt         = save.createdAt         || room.createdAt;
+    room.aiSide        = save.currentState?.aiSide        || null;
+    room.aiPersonality = save.currentState?.aiPersonality || null;
   }
 
   // Restore slot ownership from the save's stored user IDs.
@@ -208,8 +212,9 @@ router.post('/rooms/resume', async (req, res) => {
     }
   }
 
-  console.log(`Room ${room.id} resumed from save ${save.roomId} (round ${save.round})`);
+  console.log(`Room ${room.id} resumed from save ${save.roomId} (round ${save.round})${room.aiSide ? ` — AI on ${room.aiSide}` : ''}`);
   res.json({ roomId: room.id, seed: room.seed, userSide });
+  if (room.aiSide) setImmediate(() => maybeAiTurn(room).catch(err => console.error(`[${room.id}] resume AI error:`, err.message)));
 });
 
 // ---------------------------------------------------------------------------
@@ -283,6 +288,8 @@ export function handleConnection(ws, req) {
   send(ws, { type: 'joined', side, roomId, state: room.state });
   if ((room.chatHistory || []).length > 0) send(ws, { type: 'chatHistory', messages: room.chatHistory });
   broadcast(room, { type: 'peerJoined', side }, ws);
+  // Re-trigger AI in case it should act (e.g. after a resume where it was the AI's turn).
+  if (room.aiSide) setImmediate(() => maybeAiTurn(room).catch(err => console.error(`[${room.id}] connect AI error:`, err.message)));
 }
 
 // ---------------------------------------------------------------------------

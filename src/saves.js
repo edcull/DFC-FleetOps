@@ -22,6 +22,7 @@ export async function saveRoom(room, userId = null) {
     factions:          room.state.factions,
     sideColors:        room.state.sideColors || null,
     isHotseat:         room.isHotseat || false,
+    isAi:              !!room.aiSide,
     playStartState:    room.playStartState,
     playStartRngState: room.playStartRngState,
     currentState:      structuredClone(room.state),
