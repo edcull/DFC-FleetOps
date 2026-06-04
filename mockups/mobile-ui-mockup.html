@@ -1,0 +1,319 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>DFC Fleet Ops — Mobile UI Mockup</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Roboto+Mono:wght@400;500;700&family=Oswald:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#0a0e0d; --bg-elev:#11171a; --bg-card:#161e22; --bg-card-2:#1a242a;
+    --border:#233038; --border-bright:#2f4250;
+    --text:#d8e3e8; --text-dim:#7a8a94; --text-mute:#4a5862;
+    --ucm:#d4a647; --ucm-dim:#7a5e1f; --ucm-glow:rgba(212,166,71,0.30);
+    --shal:#4ad6ff; --shal-dim:#1f6e8c;
+    --crit:#ff5252; --warn:#ffb547;
+    --mono:'Roboto Mono',ui-monospace,monospace;
+    --display:'Oswald','Arial Narrow',sans-serif;
+  }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent;}
+  button{touch-action:manipulation;}
+  html,body{margin:0;height:100%;background:#05080a;color:var(--text);font-family:var(--mono);}
+  .page{min-height:100%;display:flex;flex-direction:column;align-items:center;gap:14px;padding:18px 10px 30px;}
+  .page h1{font-family:var(--display);color:var(--ucm);letter-spacing:3px;font-size:20px;margin:4px 0 0;text-transform:uppercase;}
+  .page p.sub{color:var(--text-dim);font-size:12px;margin:0;text-align:center;max-width:420px;line-height:1.5;}
+
+  /* ---- phone frame (desktop). On a real phone it goes full-bleed. ---- */
+  .device{
+    position:relative;width:390px;height:780px;flex:0 0 auto;
+    background:#000;border:12px solid #000;border-radius:42px;
+    box-shadow:0 0 0 2px #1a2228, 0 30px 70px rgba(0,0,0,0.7);
+    overflow:hidden;
+  }
+  .screen{position:absolute;inset:0;border-radius:30px;overflow:hidden;
+    background:linear-gradient(to bottom,var(--bg),#060a0c);}
+
+  /* ---- top bar ---- */
+  .topbar{position:absolute;top:0;left:0;right:0;height:48px;z-index:60;
+    background:linear-gradient(180deg,#0e1518,#0a1014);border-bottom:1px solid var(--border-bright);
+    display:flex;align-items:center;justify-content:space-between;
+    padding:0 max(8px,env(safe-area-inset-left)) 0 max(8px,env(safe-area-inset-right));}
+  .brand{font-family:var(--display);font-weight:700;font-size:15px;letter-spacing:1.5px;}
+  .brand .vs{color:var(--text-mute);font-size:10px;}
+  .brand .u{color:var(--ucm);} .brand .s{color:var(--shal);}
+  .tbtns{display:flex;gap:6px;}
+  .btn{background:linear-gradient(180deg,#1a242a,#11181c);border:1px solid var(--border-bright);
+    color:var(--text);padding:8px 11px;font-family:var(--mono);font-size:11px;letter-spacing:1px;
+    text-transform:uppercase;cursor:pointer;border-radius:3px;}
+  .btn:active{transform:scale(0.96);}
+  .btn.active{border-color:var(--ucm-dim);color:var(--ucm);background:var(--ucm-glow);}
+  .btn-primary{background:linear-gradient(180deg,var(--ucm),var(--ucm-dim));border:1px solid var(--ucm);color:#1a1108;font-weight:700;}
+
+  /* ---- board ---- */
+  .board{position:absolute;top:48px;left:0;right:0;bottom:0;background:#08100f;}
+  .board svg{width:100%;height:100%;display:block;}
+  .ship{cursor:pointer;}
+  .ship.sel path{stroke:#fff;stroke-width:2;}
+  .hud{position:absolute;top:56px;left:8px;z-index:20;background:rgba(10,15,14,0.92);
+    border:1px solid var(--border-bright);border-radius:4px;padding:7px 9px;max-width:72%;}
+  .hud .t{font-size:9px;letter-spacing:1px;color:var(--text-mute);}
+  .hud .n{font-size:13px;font-weight:700;color:var(--text);margin-top:1px;}
+  .hud .o{font-size:10px;color:var(--ucm);margin-top:2px;}
+  .banner{position:absolute;top:56px;right:8px;z-index:20;background:rgba(10,15,14,0.85);
+    border:1px solid var(--border);border-radius:3px;padding:5px 8px;text-align:right;}
+  .banner b{font-family:var(--display);color:var(--ucm);letter-spacing:1px;font-size:11px;display:block;}
+  .banner span{font-size:9px;color:var(--text-dim);}
+  .hint{position:absolute;bottom:14px;left:50%;transform:translateX(-50%);z-index:20;
+    background:rgba(10,15,14,0.92);border:1px solid var(--border-bright);border-radius:3px;
+    padding:8px 12px;font-size:10px;color:var(--text-dim);white-space:nowrap;}
+  .hint b{color:var(--text);}
+
+  /* ---- drawers ---- */
+  .scrim{position:absolute;inset:48px 0 0 0;background:rgba(0,0,0,0.5);z-index:80;display:none;}
+  .scrim.show{display:block;}
+  .drawer{position:absolute;top:48px;bottom:0;width:84%;max-width:330px;z-index:90;
+    background:var(--bg-elev);overflow-y:auto;overscroll-behavior:contain;
+    transition:transform .22s ease;box-shadow:0 0 40px rgba(0,0,0,0.65);
+    padding-bottom:calc(10px + env(safe-area-inset-bottom,0px));}
+  .drawer.left{left:0;transform:translateX(-103%);border-right:1px solid var(--border-bright);}
+  .drawer.right{right:0;transform:translateX(103%);border-left:1px solid var(--border-bright);}
+  .drawer.open{transform:translateX(0);}
+  .sect{padding:10px 12px;border-bottom:1px solid var(--border);}
+  .sect-title{font-family:var(--display);font-size:12px;letter-spacing:2px;margin:0 0 8px;text-transform:uppercase;}
+  .sect-title.u{color:var(--ucm);} .sect-title.s{color:var(--shal);}
+  .sect-title .c{font-family:var(--mono);font-size:10px;color:var(--text-mute);}
+
+  .card{background:var(--bg-card);border:1px solid var(--border);border-left:3px solid transparent;
+    border-radius:3px;padding:10px;margin-bottom:7px;cursor:pointer;}
+  .card.u{border-left-color:var(--ucm-dim);} .card.s{border-left-color:var(--shal-dim);}
+  .card.sel{border-color:var(--ucm);background:var(--bg-card-2);}
+  .card.off{opacity:.45;}
+  .card .nm{font-size:13px;font-weight:600;color:var(--text);}
+  .card .meta{font-size:9.5px;color:var(--text-dim);margin-top:2px;}
+  .card.sel .meta{color:var(--ucm);}
+
+  /* ---- detail drawer content ---- */
+  .d-name{font-family:var(--display);font-size:16px;color:var(--text);letter-spacing:1px;}
+  .d-sub{font-size:10px;color:var(--text-dim);margin-top:1px;}
+  .orders{display:grid;grid-template-columns:1fr 1fr 1fr;gap:4px;margin:8px 0;}
+  .ord{background:var(--bg-card);border:1px solid var(--border);color:var(--text-dim);
+    padding:11px 4px;font-size:11px;border-radius:2px;text-align:center;cursor:pointer;}
+  .ord.active{background:linear-gradient(180deg,#1f3a47,#143040);border-color:var(--ucm-dim);color:var(--ucm);}
+  .lbl{font-size:9px;letter-spacing:1px;color:var(--text-mute);text-transform:uppercase;margin:10px 0 5px;}
+  .wpn{background:var(--bg-card);border:1px solid var(--border);border-radius:2px;padding:9px 8px;margin-bottom:5px;cursor:pointer;}
+  .wpn.aim{border-color:var(--crit);box-shadow:0 0 0 1px var(--crit);}
+  .wpn.lock{border-color:var(--crit);background:rgba(255,82,82,0.08);}
+  .wpn .wn{font-size:12px;font-weight:600;color:var(--text);}
+  .wpn .ws{font-size:9.5px;color:var(--text-dim);margin-top:1px;}
+  .wpn .wl{font-size:9px;color:var(--crit);margin-top:2px;display:none;}
+  .wpn.lock .wl{display:block;}
+  .engage{display:none;width:100%;margin-top:10px;padding:13px;font-size:13px;letter-spacing:1px;}
+  .engage.show{display:block;}
+
+  /* ---- bottom sheet ---- */
+  .sheet{position:absolute;left:0;right:0;bottom:0;z-index:95;
+    background:rgba(10,15,14,0.98);border:1px solid var(--border-bright);border-bottom:none;
+    border-radius:12px 12px 0 0;max-height:82%;overflow-y:auto;overscroll-behavior:contain;
+    transform:translateY(103%);transition:transform .24s ease;
+    padding:0 14px calc(14px + env(safe-area-inset-bottom,0px));}
+  .sheet.open{transform:translateY(0);}
+  .grip{width:46px;height:5px;border-radius:3px;background:#3a4a54;margin:9px auto 4px;}
+  .sheet h2{font-family:var(--display);color:var(--crit);font-size:13px;letter-spacing:2px;margin:2px 0 6px;}
+  .sheet .tline{font-size:11px;color:var(--text);} .sheet .tsub{font-size:10px;color:var(--text-dim);margin:2px 0 8px;}
+  .dice{display:flex;gap:6px;flex-wrap:wrap;margin:4px 0 2px;}
+  .die{width:30px;height:30px;border-radius:4px;background:var(--bg-card);border:1px solid var(--border);
+    display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:700;color:var(--text-mute);}
+  .die.hit{border-color:var(--shal);color:var(--shal);} .die.save{border-color:var(--warn);color:var(--warn);}
+  .row{display:flex;justify-content:space-between;align-items:center;margin-top:10px;}
+  .footer{display:flex;gap:8px;margin-top:14px;padding-top:10px;border-top:1px solid var(--border);}
+  .footer .btn{flex:1;padding:13px;font-size:12px;text-align:center;}
+  .badge{background:var(--ucm);color:#000;font-size:9px;font-weight:700;border-radius:8px;padding:1px 6px;margin-left:4px;}
+
+  @media (max-width:480px){
+    .page{padding:0;gap:0;}
+    .page h1,.page p.sub,.page .legend{display:none;}
+    .device{width:100vw;height:100dvh;border:none;border-radius:0;box-shadow:none;}
+    .screen{border-radius:0;}
+  }
+  .legend{color:var(--text-dim);font-size:11px;max-width:420px;line-height:1.6;}
+  .legend b{color:var(--text);}
+</style>
+</head>
+<body>
+<div class="page">
+  <h1>DFC Fleet Ops — Mobile UI</h1>
+  <p class="sub">Interactive mockup of the phone-first layout. Tap the toggles, pick a unit, lock a weapon on an enemy, then ENGAGE. Resize narrow or open on a phone for full-screen.</p>
+
+  <div class="device"><div class="screen">
+
+    <!-- top bar -->
+    <div class="topbar">
+      <div class="brand"><span class="u">UCMF</span> <span class="vs">VS</span> <span class="s">SHAL</span></div>
+      <div class="tbtns">
+        <button class="btn" id="tFleet">☰ Fleet</button>
+        <button class="btn" id="tDetail">▤ Detail</button>
+      </div>
+    </div>
+
+    <!-- board -->
+    <div class="board">
+      <svg viewBox="0 0 390 600" preserveAspectRatio="xMidYMid slice">
+        <defs>
+          <pattern id="g" width="30" height="30" patternUnits="userSpaceOnUse">
+            <path d="M30 0H0V30" fill="none" stroke="#d4a647" stroke-opacity="0.06"/>
+          </pattern>
+        </defs>
+        <rect width="390" height="600" fill="url(#g)"/>
+        <circle id="ring" cx="150" cy="330" r="95" fill="none" stroke="#7a8a94" stroke-opacity="0.22" stroke-dasharray="3 4"/>
+        <!-- UCM units (friendly) -->
+        <g class="ship u" data-unit="avalon" transform="translate(150,330)"><path d="M0 -14 L11 12 L0 6 L-11 12 Z" fill="#d4a647" stroke="#161e22"/></g>
+        <g class="ship u" data-unit="toulon" transform="translate(95,460)"><path d="M0 -12 L10 10 L0 5 L-10 10 Z" fill="#d4a647" stroke="#161e22"/></g>
+        <!-- Shaltari (enemy targets) -->
+        <g class="ship s" data-enemy="Diamond Grav-cruiser" transform="translate(250,170)"><path d="M0 -12 L10 10 L0 5 L-10 10 Z" fill="#4ad6ff" stroke="#161e22"/></g>
+        <g class="ship s" data-enemy="Emerald Warstrider" transform="translate(300,300)"><path d="M0 -12 L10 10 L0 5 L-10 10 Z" fill="#4ad6ff" stroke="#161e22"/></g>
+      </svg>
+      <div class="hud" id="hud" style="display:none;"></div>
+      <div class="banner"><b>Chance Engagement</b><span>Round 4 / 6 · UCM turn</span></div>
+      <div class="hint" id="hint"><b>Tap a gold ship</b> or ☰ Fleet to begin</div>
+    </div>
+
+    <!-- scrim + drawers + sheet -->
+    <div class="scrim" id="scrim"></div>
+
+    <aside class="drawer left" id="drawerLeft">
+      <div class="sect">
+        <div class="sect-title u">Fleet <span class="c">· UCMF · 6/8</span></div>
+        <div class="card u" data-unit="avalon"><div class="nm">Avalon Battlecruiser</div><div class="meta">Heavy · ×1 · HP 12/12</div></div>
+        <div class="card u" data-unit="toulon"><div class="nm">Toulon Frigates</div><div class="meta">Light · ×3 · HP 8/8</div></div>
+        <div class="card u off"><div class="nm">New Cairo Cruisers</div><div class="meta">Activated · ×3</div></div>
+      </div>
+      <div class="sect">
+        <div class="sect-title s">Fleet <span class="c">· SHALTARI · 7/8</span></div>
+        <div class="card s off"><div class="nm">Diamond Grav-cruisers</div><div class="meta">Medium · ×2 · HP 6/6</div></div>
+        <div class="card s off"><div class="nm">Emerald Warstriders</div><div class="meta">Heavy · ×1 · HP 10/10</div></div>
+      </div>
+    </aside>
+
+    <aside class="drawer right" id="drawerRight">
+      <div class="sect" id="detail">
+        <div class="d-name">No unit selected</div>
+        <div class="d-sub">Tap a unit in the Fleet drawer or on the board.</div>
+      </div>
+    </aside>
+
+    <section class="sheet" id="sheet">
+      <div class="grip"></div>
+      <h2>Attack</h2>
+      <div class="tline" id="sheetTitle">—</div>
+      <div class="tsub" id="sheetSub">—</div>
+      <div class="lbl">To hit (3+)</div>
+      <div class="dice" id="hitDice"></div>
+      <div class="row"><span class="lbl" style="margin:0;">Saves (5+)</span><span id="dmg" style="color:var(--crit);font-weight:700;">—</span></div>
+      <div class="dice" id="saveDice"></div>
+      <div class="footer">
+        <button class="btn" id="sheetCancel">Cancel</button>
+        <button class="btn btn-primary" id="sheetConfirm">Confirm hits</button>
+      </div>
+    </section>
+
+  </div></div>
+
+  <div class="legend">
+    <b>What this demonstrates:</b> ☰/▤ toggles slide the side panels over the board (scrim or selecting a unit closes them, active toggle highlighted). Choosing a unit from Fleet auto-opens Detail. In Detail: tap a weapon → tap an enemy ship to lock → <b>Engage</b> opens the attack bottom sheet. ~44px tap targets, safe-area insets, 100dvh.
+  </div>
+</div>
+
+<script>
+const UNITS = {
+  avalon:{name:'Avalon Battlecruiser',sub:'Heavy · ×1 · HP 12/12 · Scan 12"',side:'u',
+    weapons:[{n:'Heavy Mass Driver',s:'2 shots · Lock 2+ · Dmg 3 · 24"'},{n:'Broadsides',s:'6 shots · Lock 4+ · Dmg 1 · 9"'}]},
+  toulon:{name:'Toulon Frigates',sub:'Light · ×3 · HP 8/8 · Scan 10"',side:'u',
+    weapons:[{n:'Mass Driver',s:'4 shots · Lock 3+ · Dmg 1 · 18"'},{n:'Close Action Turrets',s:'3 shots · Lock 4+ · Dmg 1 · 4"'}]},
+};
+let sel=null, aimWeapon=null, locked=null, order=null;
+
+const $=id=>document.getElementById(id);
+const drawerL=$('drawerLeft'), drawerR=$('drawerRight'), scrim=$('scrim'), sheet=$('sheet');
+
+function syncToggles(){
+  $('tFleet').classList.toggle('active',drawerL.classList.contains('open'));
+  $('tDetail').classList.toggle('active',drawerR.classList.contains('open'));
+}
+function closeDrawers(){drawerL.classList.remove('open');drawerR.classList.remove('open');scrim.classList.remove('show');syncToggles();}
+function openDrawer(which){
+  const el=which==='left'?drawerL:drawerR; const willOpen=!el.classList.contains('open');
+  closeDrawers();
+  if(willOpen){el.classList.add('open');scrim.classList.add('show');}
+  syncToggles();
+}
+$('tFleet').onclick=()=>openDrawer('left');
+$('tDetail').onclick=()=>openDrawer('right');
+scrim.onclick=()=>{closeDrawers();closeSheet();};
+
+function selectUnit(id){
+  sel=id; aimWeapon=null; locked=null; order=order||null;
+  renderDetail(); renderHud(); markBoard();
+  $('hint').style.display='none';
+}
+function renderHud(){
+  const u=UNITS[sel]; const hud=$('hud');
+  if(!u){hud.style.display='none';return;}
+  hud.style.display='block';
+  hud.innerHTML=`<div class="t">ACTIVATION</div><div class="n">${u.name}</div><div class="o">Order · ${order||'— choose —'}</div>`;
+}
+function renderDetail(){
+  const u=UNITS[sel]; const d=$('detail');
+  if(!u){d.innerHTML=`<div class="d-name">No unit selected</div><div class="d-sub">Tap a unit in the Fleet drawer or on the board.</div>`;return;}
+  d.innerHTML=
+    `<div class="d-name">${u.name}</div><div class="d-sub">${u.sub}</div>`+
+    `<div class="lbl">Order</div><div class="orders">`+
+      ['Course','Weapons Free','Station'].map(o=>`<div class="ord ${order===o?'active':''}" data-order="${o}">${o}</div>`).join('')+
+    `</div>`+
+    `<div class="lbl">Weapons — tap to aim</div>`+
+    u.weapons.map((w,i)=>`<div class="wpn ${aimWeapon===i?'aim':''} ${locked&&aimWeapon===i?'lock':''}" data-w="${i}">
+        <div class="wn">${w.n}</div><div class="ws">${w.s}</div><div class="wl">▶ Target: ${locked||''}</div></div>`).join('')+
+    `<button class="btn btn-primary engage ${locked?'show':''}" id="engageBtn">⊕ Engage (1)</button>`;
+  d.querySelectorAll('.ord').forEach(b=>b.onclick=()=>{order=b.dataset.order;renderDetail();renderHud();});
+  d.querySelectorAll('.wpn').forEach(b=>b.onclick=()=>{aimWeapon=+b.dataset.w;locked=null;renderDetail();
+    $('hint').style.display='block';$('hint').innerHTML='<b>Tap a cyan enemy ship</b> to lock the target';closeDrawers();});
+  const eb=$('engageBtn'); if(eb) eb.onclick=openSheet;
+}
+function markBoard(){
+  document.querySelectorAll('.ship').forEach(s=>s.classList.toggle('sel',s.dataset.unit===sel));
+}
+// board taps
+document.querySelectorAll('.ship.u').forEach(s=>s.onclick=()=>{selectUnit(s.dataset.unit);openDrawer('right');});
+document.querySelectorAll('.ship.s').forEach(s=>s.onclick=()=>{
+  if(sel&&aimWeapon!=null){locked=s.dataset.enemy;renderDetail();
+    $('hint').style.display='block';$('hint').innerHTML='Target locked — open ▤ Detail and <b>Engage</b>';
+    $('tDetail').classList.add('active');openDrawer('right');}
+});
+// fleet cards
+document.querySelectorAll('.card[data-unit]').forEach(c=>c.onclick=()=>{
+  selectUnit(c.dataset.unit); closeDrawers(); openDrawer('right');
+});
+
+function d6(){return 1+Math.floor(Math.random()*6);}
+function openSheet(){
+  const u=UNITS[sel]; const w=u.weapons[aimWeapon];
+  $('sheetTitle').textContent=`${u.name}  →  ${locked}`;
+  $('sheetSub').textContent=w.n+' · '+w.s;
+  const shots=parseInt(w.s)||4;
+  let hits=0;
+  $('hitDice').innerHTML=Array.from({length:shots},()=>{const r=d6();const hit=r>=3;if(hit)hits++;
+    return `<div class="die ${hit?'hit':''}">${r}</div>`;}).join('');
+  let dmg=0;
+  $('saveDice').innerHTML=Array.from({length:hits},()=>{const r=d6();const saved=r>=5;if(!saved)dmg++;
+    return `<div class="die ${r>=5?'save':''}">${r}</div>`;}).join('')||'<span style="color:var(--text-mute);font-size:11px;">no hits</span>';
+  $('dmg').textContent=dmg+' DMG';
+  closeDrawers(); sheet.classList.add('open');
+}
+function closeSheet(){sheet.classList.remove('open');}
+$('sheetCancel').onclick=closeSheet;
+$('sheetConfirm').onclick=()=>{closeSheet();aimWeapon=null;locked=null;renderDetail();
+  $('hint').style.display='block';$('hint').innerHTML='Hits applied. Pick another weapon or <b>finish activation</b>';};
+</script>
+</body>
+</html>
