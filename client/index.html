@@ -1078,6 +1078,11 @@
     /* Single column — the board fills the screen; the two side panels become
        slide-over drawers toggled from the top bar. */
     .app { grid-template-columns: 1fr; grid-template-rows: 48px auto 1fr; }
+    /* During setup, .app.panels-hidden forces a 0/1fr/0 grid. With the panels
+       removed from flow (position:fixed) the board would auto-place into the
+       0-width first column and the setup overlay would render invisibly — keep
+       a single full-width column instead. */
+    .app.panels-hidden { grid-template-columns: 1fr; }
     .mobile-only { display: inline-flex !important; align-items: center; }
     /* Honour the notch / rounded-corner safe areas on the fixed top bar. */
     .topbar { padding: 0 max(8px, env(safe-area-inset-right)) 0 max(8px, env(safe-area-inset-left)); gap: 6px; }
