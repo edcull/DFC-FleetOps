@@ -1057,21 +1057,109 @@
   ::-webkit-scrollbar-thumb { background: var(--border-bright); border-radius: 3px; }
   ::-webkit-scrollbar-thumb:hover { background: var(--text-mute); }
 
+  /* ============== MOBILE / TOUCH ============== */
+  /* Mobile-only chrome (drawer toggles, scrim) — hidden on desktop. */
+  .mobile-only { display: none !important; }
+  #mobile-scrim {
+    display: none; position: fixed; inset: 48px 0 0 0;
+    background: rgba(0,0,0,0.5); z-index: 110;
+  }
+  #mobile-scrim.show { display: block; }
+
   /* Small screens */
   @media (max-width: 1100px) {
     .app { grid-template-columns: 200px 1fr 240px; }
   }
   @media (max-width: 860px) {
+    /* Single column — the board fills the screen; the two side panels become
+       slide-over drawers toggled from the top bar. */
     .app { grid-template-columns: 1fr; grid-template-rows: 48px auto 1fr; }
-    .panel { display: none; }
-    .panel.mobile-visible { display: block; position: fixed; top: 48px; bottom: 0; width: 80%; z-index: 100; }
-    .panel.left.mobile-visible { left: 0; border-right: 1px solid var(--border); }
-    .panel.right.mobile-visible { right: 0; border-left: 1px solid var(--border); }
+    .mobile-only { display: inline-flex !important; align-items: center; }
+    .topbar { padding: 0 8px; gap: 6px; }
+    .brand { font-size: 14px; letter-spacing: 0.08em; gap: 5px; }
+    #topbar-user { display: none !important; }
+
+    .panel {
+      display: block;
+      position: fixed; top: 48px; bottom: 0;
+      width: min(86vw, 360px); max-width: 360px;
+      z-index: 120;
+      box-shadow: 0 0 40px rgba(0,0,0,0.65);
+      transition: transform 0.22s ease;
+      will-change: transform;
+    }
+    .panel.left  { left: 0; right: auto; transform: translateX(-103%); border-right: 1px solid var(--border-bright); }
+    .panel.right { right: 0; left: auto; transform: translateX(103%); border-left: 1px solid var(--border-bright); }
+    .panel.left.mobile-open, .panel.right.mobile-open { transform: translateX(0); }
+    /* During setup the board overlay covers everything — keep drawers parked. */
+    .app.panels-hidden .panel { visibility: hidden; }
+    /* The docked chat/log lives inside the right drawer here — undo desktop float. */
+    #event-log-dock.chat-dock-float { position: static; width: auto; max-height: 40vh; }
+
+    /* Floating in-game popups → full-width bottom sheets (drag is a no-op on touch). */
+    .dfc-panel {
+      position: fixed !important;
+      left: 0 !important; right: 0 !important; bottom: 0 !important; top: auto !important;
+      width: 100% !important; max-width: 100% !important;
+      max-height: 80vh;
+      border-radius: 10px 10px 0 0;
+      border-left: none; border-right: none; border-bottom: none;
+      z-index: 130;
+    }
+    .dfc-panel-handle { cursor: default; padding: 9px 12px; }
+    .dfc-panel-handle::before { content: '▬'; opacity: 0.5; }
+    .attack-hud, .fleet-view-panel, .nom-panel {
+      width: 100% !important; max-width: 100% !important; min-width: 0 !important;
+      font-size: 13px;
+    }
+    /* The compact activation/asset/scoring HUDs stay small near the top so they
+       don't fight the main bottom-sheet modal during the attack flow. */
+    .dfc-panel.act-hud {
+      top: 52px !important; bottom: auto !important;
+      left: 4px !important; right: auto !important;
+      width: auto !important; max-width: 72vw !important;
+      border: 1px solid var(--border-bright); border-radius: 4px;
+    }
+
+    /* Bigger tap targets (~44px) and readable text. */
+    body { font-size: 13px; }
+    .btn { padding: 9px 12px; font-size: 12px; }
+    .btn-icon { width: 38px; height: 38px; font-size: 16px; }
+    .hud-icon-btn { width: 38px; height: 38px; font-size: 18px; line-height: 36px; }
+    .hud-btn { padding: 8px 10px; font-size: 12px; }
+    .ship-row .hp-btn, .hp-btn { width: 34px; height: 34px; font-size: 17px; }
+    .spike-btn { width: 34px; height: 34px; font-size: 17px; }
+    .order-btn { padding: 11px 4px; font-size: 12px; }
+    .faction-btn { padding: 10px 8px; font-size: 12px; }
+    .log-tab-btn { padding: 9px 8px; font-size: 11px; }
+    .chat-send-btn { padding: 9px 14px; font-size: 12px; }
+    .chat-input { padding: 9px 8px; font-size: 13px; }
+    .nom-row-btn { padding: 9px 9px; }
+    .nom-row-btn .nom-obj { font-size: 12px; }
+    .weapon-row { padding: 9px 8px; }
+    .group-card { padding: 10px 10px; }
+    .am-die { width: 30px; height: 30px; }
+
+    /* Setup overlay fits a phone. */
+    .setup-overlay { padding: 8px; }
+    .setup-card { max-width: 100%; }
+    .fleet-dropdown, .scen-dropdown { font-size: 14px; padding: 10px; }
+  }
+
+  /* On touch devices neutralise hover-only feedback so a tapped element doesn't
+     stick in its hover appearance — tap/selected (.active/.sel) states drive feedback. */
+  @media (hover: none) {
+    .group-card:hover { background: var(--bg-card); }
+    .weapon-row[data-weapon-target]:hover,
+    .weapon-row[data-da-fire]:hover { border-color: var(--border); background: var(--bg-card); }
+    .nom-row-btn:hover { border-color: var(--border); background: none; }
+    .order-btn:hover { border-color: var(--border); color: var(--text-dim); }
   }
 </style>
 </head>
 <body>
 <div id="app-cover" style="position:fixed;inset:0;background:var(--bg);z-index:9999;pointer-events:none;"></div>
+<div id="mobile-scrim"></div>
 <div class="app">
 
   <header class="topbar">
@@ -2324,6 +2412,12 @@ function makeGroupCard(def) {
       const firstAlive = grp.ships.findIndex(s => !s.destroyed);
       state.selectedShipIdx = firstAlive >= 0 ? firstAlive : 0;
       renderAll(true);
+    }
+    // On mobile, drilling into a unit from the fleet drawer swaps over to the
+    // detail/actions drawer so orders and weapons are immediately reachable.
+    if (_isMobileLayout() && state.selectedGroupId === def.id) {
+      closeMobileDrawers();
+      toggleMobileDrawer('right');
     }
   });
 
@@ -9289,20 +9383,49 @@ function renderPhaseNav() {
   });
 }
 
+/* ── Mobile drawers ─────────────────────────────────────────────────────────
+   At ≤860px the two side panels are off-screen slide-overs; the top bar exposes
+   a toggle for each. Tapping the scrim, selecting a unit, or confirming an
+   action closes them. */
+function _isMobileLayout() {
+  return window.matchMedia && window.matchMedia('(max-width: 860px)').matches;
+}
+function closeMobileDrawers() {
+  document.querySelectorAll('.panel.mobile-open').forEach(p => p.classList.remove('mobile-open'));
+  const sc = document.getElementById('mobile-scrim');
+  if (sc) sc.classList.remove('show');
+}
+function toggleMobileDrawer(which) {
+  const el = document.getElementById(which === 'left' ? 'panel-left' : 'panel-right');
+  if (!el) return;
+  const willOpen = !el.classList.contains('mobile-open');
+  closeMobileDrawers();
+  if (willOpen) {
+    el.classList.add('mobile-open');
+    const sc = document.getElementById('mobile-scrim');
+    if (sc) sc.classList.add('show');
+  }
+}
+{
+  const _sc = document.getElementById('mobile-scrim');
+  if (_sc) _sc.addEventListener('click', closeMobileDrawers);
+  // Drop the drawer state if the viewport grows back to desktop width.
+  window.addEventListener('resize', () => { if (!_isMobileLayout()) closeMobileDrawers(); });
+}
+
 function renderTopbarControls() {
   const ctrl = document.getElementById('topbar-controls');
   if (!ctrl) return;
-  if (state.phase === 'setup') {
-    ctrl.innerHTML = ``;
-  } else if (state.phase === 'scenery') {
-    ctrl.innerHTML = ``;
-  } else if (state.phase === 'nominations') {
-    ctrl.innerHTML = ``;
-  } else if (state.phase === 'deploy') {
-    ctrl.innerHTML = ``;
-  } else { // play
-    ctrl.innerHTML = ``;
-  }
+  // The only top-bar controls are the mobile drawer toggles; hidden on desktop
+  // via .mobile-only, and suppressed entirely during pre-game setup.
+  if (state.phase === 'setup') { ctrl.innerHTML = ``; return; }
+  ctrl.innerHTML =
+    `<button class="btn mobile-only" id="m-toggle-left" title="Fleet">☰ FLEET</button>` +
+    `<button class="btn mobile-only" id="m-toggle-right" title="Detail">▤ DETAIL</button>`;
+  const l = document.getElementById('m-toggle-left');
+  const r = document.getElementById('m-toggle-right');
+  if (l) l.onclick = () => toggleMobileDrawer('left');
+  if (r) r.onclick = () => toggleMobileDrawer('right');
 }
 
 
