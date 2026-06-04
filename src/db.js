@@ -5,7 +5,7 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const DB_DIR  = join(__dirname, '..', 'data');
+const DB_DIR  = process.env.DFC_DATA_DIR || join(__dirname, '..', 'data');
 const DB_PATH = join(DB_DIR, 'dfc.db');
 
 mkdirSync(DB_DIR, { recursive: true });
