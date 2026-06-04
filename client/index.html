@@ -1140,8 +1140,9 @@
     #scen-banner.scen-banner { top: auto !important; bottom: 8px; right: 8px; max-width: 60vw; }
     .board-legend { display: none; }
 
-    /* Mobile stays in 2D (pinch-zoom + pan) — hide the 3D toggle. */
-    #btn-3d-toggle { display: none; }
+    /* Mobile stays in 2D (pinch-zoom + pan); hide the 3D toggle and declutter the
+       board by removing the arc / signature / trails toggles (keep zoom-reset). */
+    #btn-3d-toggle, #btn-arc-toggle, #btn-sig-toggle, #btn-trails-toggle { display: none; }
 
     /* Bigger tap targets (~44px) and readable text. */
     body { font-size: 13px; }
@@ -9438,11 +9439,31 @@ function toggleMobileDrawer(which) {
   }
   _syncDrawerToggles();
 }
+// On mobile, reserve space at the bottom of the board for whatever bottom-docked
+// popup is open so the map sits fully above it (no overlap). Pads .board-wrap by
+// the tallest bottom sheet's height; the SVG board re-fits into the area above.
+function _syncBoardBottomInset() {
+  const wrap = document.querySelector('.board-wrap');
+  if (!wrap) return;
+  if (!_isMobileLayout()) { wrap.style.paddingBottom = ''; return; }
+  const vh = window.innerHeight;
+  let inset = 0;
+  document.querySelectorAll('.dfc-panel').forEach(p => {
+    const r = p.getBoundingClientRect();
+    // Bottom sheets sit flush with the bottom of the viewport.
+    if (r.height > 0 && r.bottom >= vh - 2) inset = Math.max(inset, r.height);
+  });
+  wrap.style.paddingBottom = inset ? inset + 'px' : '';
+}
 {
   const _sc = document.getElementById('mobile-scrim');
   if (_sc) _sc.addEventListener('click', closeMobileDrawers);
   // Drop the drawer state if the viewport grows back to desktop width.
-  window.addEventListener('resize', () => { if (!_isMobileLayout()) closeMobileDrawers(); });
+  window.addEventListener('resize', () => {
+    if (!_isMobileLayout()) closeMobileDrawers();
+    _syncBoardBottomInset();
+    if (!_view3d) _applyViewBox();
+  });
 }
 
 function renderTopbarControls() {
@@ -9525,6 +9546,8 @@ function renderAll(localOnly = false) {
   } catch(e) {
     console.error('[renderAll]', e);
   }
+  // Keep the board clear of the bottom-docked popup on mobile.
+  try { _syncBoardBottomInset(); } catch(e) {}
   // Selection-only renders skip the relay — both clients manage their own view state.
   // Replay mode never relays — we're rendering a historical state copy.
   if (!localOnly && !_replayMode) {
@@ -15802,9 +15825,11 @@ const _MAP_BOARD    = 576; // total board size in SVG units
 
 function _applyViewBox() {
   const size = _MAP_BOARD / _mapZoom;
-  // Clamp pan so the viewport never shows area outside the board.
-  _mapPanX = Math.max(0, Math.min(_MAP_BOARD - size, _mapPanX));
-  _mapPanY = Math.max(0, Math.min(_MAP_BOARD - size, _mapPanY));
+  // On mobile allow panning past the edges (overscroll up to half a viewport) so
+  // the corners/edges are easy to centre and zoom into; clamp tightly on desktop.
+  const margin = _isMobileLayout() ? size * 0.5 : 0;
+  _mapPanX = Math.max(-margin, Math.min(_MAP_BOARD - size + margin, _mapPanX));
+  _mapPanY = Math.max(-margin, Math.min(_MAP_BOARD - size + margin, _mapPanY));
   board.setAttribute('viewBox', `${_mapPanX} ${_mapPanY} ${size} ${size}`);
 }
 
