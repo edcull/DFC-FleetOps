@@ -82,6 +82,7 @@
     transition: all 0.12s;
   }
   .btn:hover { border-color: var(--ucm-dim); color: var(--ucm); }
+  .btn.active { border-color: var(--ucm-dim); color: var(--ucm); background: var(--ucm-glow); }
   .btn:active { transform: scale(0.96); }
   .btn.shal:hover { border-color: var(--shal-dim); color: var(--shal); }
   .btn-icon {
@@ -9404,10 +9405,19 @@ function renderPhaseNav() {
 function _isMobileLayout() {
   return window.matchMedia && window.matchMedia('(max-width: 860px)').matches;
 }
+function _syncDrawerToggles() {
+  const lp = document.getElementById('panel-left');
+  const rp = document.getElementById('panel-right');
+  const l = document.getElementById('m-toggle-left');
+  const r = document.getElementById('m-toggle-right');
+  if (l) l.classList.toggle('active', !!(lp && lp.classList.contains('mobile-open')));
+  if (r) r.classList.toggle('active', !!(rp && rp.classList.contains('mobile-open')));
+}
 function closeMobileDrawers() {
   document.querySelectorAll('.panel.mobile-open').forEach(p => p.classList.remove('mobile-open'));
   const sc = document.getElementById('mobile-scrim');
   if (sc) sc.classList.remove('show');
+  _syncDrawerToggles();
 }
 function toggleMobileDrawer(which) {
   const el = document.getElementById(which === 'left' ? 'panel-left' : 'panel-right');
@@ -9419,6 +9429,7 @@ function toggleMobileDrawer(which) {
     const sc = document.getElementById('mobile-scrim');
     if (sc) sc.classList.add('show');
   }
+  _syncDrawerToggles();
 }
 {
   const _sc = document.getElementById('mobile-scrim');
@@ -9440,6 +9451,7 @@ function renderTopbarControls() {
   const r = document.getElementById('m-toggle-right');
   if (l) l.onclick = () => toggleMobileDrawer('left');
   if (r) r.onclick = () => toggleMobileDrawer('right');
+  _syncDrawerToggles(); // keep the active highlight after a re-render
 }
 
 
