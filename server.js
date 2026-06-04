@@ -42,7 +42,7 @@ app.use(express.json());
 // Session middleware — extracted to a named variable so it can also be used
 // in the WebSocket upgrade handler below (Express middleware does not run there).
 const sessionMiddleware = session({
-  store: new ConnectSqlite3({ db: 'dfc.db', dir: './data' }),
+  store: new ConnectSqlite3({ db: 'sessions.db', dir: process.env.DFC_DATA_DIR || './data' }),
   secret: process.env.SESSION_SECRET || 'change-me-in-production',
   resave: false,
   saveUninitialized: false,
