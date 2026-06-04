@@ -1143,6 +1143,8 @@
     /* Mobile stays in 2D (pinch-zoom + pan); hide the 3D toggle and declutter the
        board by removing the arc / signature / trails toggles (keep zoom-reset). */
     #btn-3d-toggle, #btn-arc-toggle, #btn-sig-toggle, #btn-trails-toggle { display: none; }
+    /* Let our JS own all board touch gestures (drag-pan + pinch-zoom). */
+    #board { touch-action: none; }
 
     /* Bigger tap targets (~44px) and readable text. */
     body { font-size: 13px; }
@@ -14857,6 +14859,8 @@ function _doMoveShip(gid, si, x, y, layerToggle) {
 }
 
 board.addEventListener('click', (e) => {
+  // Ignore the click synthesised at the end of a single-finger drag-to-pan.
+  if (_touchPanned) { _touchPanned = false; return; }
   if (state.phase === 'setup') {
     // Moonswipe: allow large object repositioning during setup.
     if (state.moonswipe && !state.moonswipe.done) {
@@ -15882,15 +15886,42 @@ board.addEventListener('pointermove', (e) => {
 board.addEventListener('pointerup',   () => { _panDrag = null; });
 board.addEventListener('pointercancel', () => { _panDrag = null; });
 
-// Touch: pinch-to-zoom + two-finger pan
+// Touch: single-finger drag → pan; two-finger → pinch-zoom + pan
 let _touches = {};
+let _touchPanStart = null;   // { x, y, panX, panY } for single-finger pan
+let _touchPanned   = false;  // set once a single-finger drag passes the move threshold
 board.addEventListener('touchstart', (e) => {
   if (_view3d) return;
   Array.from(e.changedTouches).forEach(t => { _touches[t.identifier] = { x: t.clientX, y: t.clientY }; });
+  // Prime single-finger drag-to-pan (a small move stays a tap so selection still works).
+  if (e.touches.length === 1) {
+    const t = e.touches[0];
+    _touchPanStart = { x: t.clientX, y: t.clientY, panX: _mapPanX, panY: _mapPanY };
+    _touchPanned = false;
+  } else {
+    _touchPanStart = null; // a second finger cancels single-finger pan → pinch takes over
+  }
 }, { passive: true });
 board.addEventListener('touchmove', (e) => {
   if (_view3d) return;
   const ids = Object.keys(_touches);
+  // ── Single-finger drag → pan ──
+  if (e.touches.length === 1 && _touchPanStart) {
+    const t  = e.touches[0];
+    const dx = t.clientX - _touchPanStart.x;
+    const dy = t.clientY - _touchPanStart.y;
+    if (!_touchPanned && Math.hypot(dx, dy) < 8) return; // below threshold → still a tap
+    const first = !_touchPanned;
+    _touchPanned = true;
+    if (first && state.hoverPoint) { state.hoverPoint = null; renderBoard(); }
+    e.preventDefault();
+    const rect  = board.getBoundingClientRect();
+    const scale = (_MAP_BOARD / _mapZoom) / rect.width; // client px → SVG units
+    _mapPanX = _touchPanStart.panX - dx * scale;
+    _mapPanY = _touchPanStart.panY - dy * scale;
+    _applyViewBox();
+    return;
+  }
   if (ids.length === 2 && e.touches.length >= 2) {
     e.preventDefault();
     const [a, b] = [e.touches[0], e.touches[1]];
@@ -15919,6 +15950,7 @@ board.addEventListener('touchmove', (e) => {
 }, { passive: false });
 board.addEventListener('touchend', (e) => {
   Array.from(e.changedTouches).forEach(t => { delete _touches[t.identifier]; });
+  if (e.touches.length === 0) _touchPanStart = null; // _touchPanned cleared by the click guard / next touchstart
 }, { passive: true });
 // ────────────────────────────────────────────────────────────────────────────
 
