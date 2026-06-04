@@ -10,7 +10,7 @@ A browser-based tactical assistant for **Dropfleet Commander**. The client (`cli
 
 An interactive 48"×48" virtual battlemat that implements the full DFC rules engine. It handles the fiddly parts of the game — tracking hull, spikes, crippling effects, weapon arcs, AP, VP, asset launches, battalion landing, and all the rules interactions — so players can focus on tactics rather than administration.
 
-Designed for **two player hotseat**, and **full online two-player** support via the Node server.
+Designed for **two player hotseat**, and **full online two-player** support via the Node server. 
 
 ---
 
