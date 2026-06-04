@@ -1132,14 +1132,13 @@
        adding the home-indicator inset so footer buttons stay tappable. */
     .attack-hud { padding: 12px 14px calc(14px + env(safe-area-inset-bottom, 0px)) !important; }
     .nom-panel  { padding: 10px 10px calc(8px + env(safe-area-inset-bottom, 0px)) !important; }
-    /* The compact activation/asset/scoring HUDs stay small near the top so they
-       don't fight the main bottom-sheet modal during the attack flow. */
-    .dfc-panel.act-hud {
-      top: 52px !important; bottom: auto !important;
-      left: 4px !important; right: auto !important;
-      width: auto !important; max-width: 72vw !important;
-      border: 1px solid var(--border-bright); border-radius: 4px;
-    }
+    .act-hud    { padding: 8px 10px calc(10px + env(safe-area-inset-bottom, 0px)) !important; }
+
+    /* Keep the centre of the board clear: the scenario banner docks to the
+       bottom and the colour-key legend is hidden on small screens. The board
+       HUD controls (zoom/arc/sig/trails) stay top-left — small and essential. */
+    #scen-banner.scen-banner { top: auto !important; bottom: 8px; right: 8px; max-width: 60vw; }
+    .board-legend { display: none; }
 
     /* Mobile stays in 2D (pinch-zoom + pan) — hide the 3D toggle. */
     #btn-3d-toggle { display: none; }
