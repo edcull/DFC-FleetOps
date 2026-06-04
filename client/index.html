@@ -1136,6 +1136,9 @@
       border: 1px solid var(--border-bright); border-radius: 4px;
     }
 
+    /* Mobile stays in 2D (pinch-zoom + pan) — hide the 3D toggle. */
+    #btn-3d-toggle { display: none; }
+
     /* Bigger tap targets (~44px) and readable text. */
     body { font-size: 13px; }
     .btn { padding: 9px 12px; font-size: 12px; }
@@ -2428,11 +2431,11 @@ function makeGroupCard(def) {
       state.selectedShipIdx = firstAlive >= 0 ? firstAlive : 0;
       renderAll(true);
     }
-    // On mobile, drilling into a unit from the fleet drawer swaps over to the
-    // detail/actions drawer so orders and weapons are immediately reachable.
+    // On mobile, selecting a unit from the fleet drawer just closes the drawer so
+    // the board (with the now-highlighted selection) is visible. The detail/actions
+    // drawer stays closed until the player taps ▤ DETAIL.
     if (_isMobileLayout() && state.selectedGroupId === def.id) {
       closeMobileDrawers();
-      toggleMobileDrawer('right');
     }
   });
 
@@ -9477,9 +9480,13 @@ function renderAll(localOnly = false) {
     // 2D↔3D auto-switching:
     // → 3D on entering deploy or play (first planning phase)
     // → 2D on entering nominations or protect nomination
-    const _to3d = (state.phase === 'deploy' && _prevPhase !== 'deploy') ||
-                  (state.phase === 'play'   && _prevPhase !== 'play');
-    const _to2d = (state.phase === 'nominations' && _prevPhase !== 'nominations') ||
+    // On mobile we stay in 2D throughout (pinch-zoom + pan); never auto-switch to
+    // 3D, and force back to 2D if somehow in it.
+    const _mob = _isMobileLayout();
+    const _to3d = !_mob && ((state.phase === 'deploy' && _prevPhase !== 'deploy') ||
+                  (state.phase === 'play'   && _prevPhase !== 'play'));
+    const _to2d = (_mob && _view3d) ||
+                  (state.phase === 'nominations' && _prevPhase !== 'nominations') ||
                   (state.phase === 'protect' && _prevPhase !== 'protect');
     _prevPhase = state.phase;
     if (_to3d && !_view3d) toggle3d();

@@ -221,7 +221,7 @@
   </div></div>
 
   <div class="legend">
-    <b>What this demonstrates:</b> ☰/▤ toggles slide the side panels over the board (scrim or selecting a unit closes them, active toggle highlighted). Choosing a unit from Fleet auto-opens Detail. In Detail: tap a weapon → tap an enemy ship to lock → <b>Engage</b> opens the attack bottom sheet. ~44px tap targets, safe-area insets, 100dvh.
+    <b>What this demonstrates:</b> ☰/▤ toggles slide the side panels over the board (scrim or selecting a unit closes them, active toggle highlighted). Choosing a unit from Fleet selects it and reveals it on the board — Detail stays closed until you tap ▤. In Detail: tap a weapon → tap an enemy ship to lock → <b>Engage</b> opens the attack bottom sheet. 2D board only (pinch-zoom + pan), ~44px tap targets, safe-area insets, 100dvh.
   </div>
 </div>
 
@@ -255,7 +255,8 @@ scrim.onclick=()=>{closeDrawers();closeSheet();};
 function selectUnit(id){
   sel=id; aimWeapon=null; locked=null; order=order||null;
   renderDetail(); renderHud(); markBoard();
-  $('hint').style.display='none';
+  $('hint').style.display='block';
+  $('hint').innerHTML='Selected — tap <b>▤ Detail</b> for orders &amp; weapons';
 }
 function renderHud(){
   const u=UNITS[sel]; const hud=$('hud');
@@ -283,8 +284,8 @@ function renderDetail(){
 function markBoard(){
   document.querySelectorAll('.ship').forEach(s=>s.classList.toggle('sel',s.dataset.unit===sel));
 }
-// board taps
-document.querySelectorAll('.ship.u').forEach(s=>s.onclick=()=>{selectUnit(s.dataset.unit);openDrawer('right');});
+// board taps — selecting just highlights the ship; Detail stays closed until ▤ tapped
+document.querySelectorAll('.ship.u').forEach(s=>s.onclick=()=>{selectUnit(s.dataset.unit);});
 document.querySelectorAll('.ship.s').forEach(s=>s.onclick=()=>{
   if(sel&&aimWeapon!=null){locked=s.dataset.enemy;renderDetail();
     $('hint').style.display='block';$('hint').innerHTML='Target locked — open ▤ Detail and <b>Engage</b>';
@@ -292,7 +293,7 @@ document.querySelectorAll('.ship.s').forEach(s=>s.onclick=()=>{
 });
 // fleet cards
 document.querySelectorAll('.card[data-unit]').forEach(c=>c.onclick=()=>{
-  selectUnit(c.dataset.unit); closeDrawers(); openDrawer('right');
+  selectUnit(c.dataset.unit); closeDrawers();
 });
 
 function d6(){return 1+Math.floor(Math.random()*6);}
