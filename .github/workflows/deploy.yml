@@ -21,6 +21,9 @@ jobs:
     runs-on: self-hosted
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/cache@v4
+        with:
+          path: node_modules
+          key: deps-${{ hashFiles('package-lock.json') }}
       - run: npm ci --omit=dev
       - run: sudo systemctl restart dfc
-
