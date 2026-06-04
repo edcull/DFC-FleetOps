@@ -125,5 +125,5 @@ function scheduleExpiry(id) {
     rooms.delete(id);
     deleteSaveDb(id);
     console.log(`Room ${id} expired and removed.`);
-  }, ROOM_TTL_MS);
+  }, ROOM_TTL_MS).unref();
 }

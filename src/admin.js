@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import bcrypt from 'bcryptjs';
-import { getAllUsers, getUserById, setUserRole, setUserPassword, deleteUser, getAllSaves, deleteSaveDb } from './db.js';
+import { getAllUsers, getUserById, setUserRole, setUserAiAccess, setUserPassword, deleteUser, getAllSaves, deleteSaveDb } from './db.js';
 import { getAllRooms } from './rooms.js';
 
 export const adminRouter = Router();
@@ -15,7 +15,7 @@ adminRouter.use((req, res, next) => {
 
 // GET /api/admin/users
 adminRouter.get('/users', (_req, res) => {
-  res.json(getAllUsers().map(u => ({ id: u.id, username: u.username, role: u.role, createdAt: u.created_at * 1000 })));
+  res.json(getAllUsers().map(u => ({ id: u.id, username: u.username, role: u.role, aiAccess: !!u.ai_access, createdAt: u.created_at * 1000 })));
 });
 
 // DELETE /api/admin/users/:id
@@ -35,6 +35,15 @@ adminRouter.patch('/users/:id/role', (req, res) => {
   if (!['player', 'admin'].includes(role)) return res.status(400).json({ error: 'Role must be player or admin.' });
   if (!getUserById(id)) return res.status(404).json({ error: 'User not found.' });
   setUserRole(id, role);
+  res.json({ ok: true });
+});
+
+// PATCH /api/admin/users/:id/ai-access
+adminRouter.patch('/users/:id/ai-access', (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  const { aiAccess } = req.body || {};
+  if (!getUserById(id)) return res.status(404).json({ error: 'User not found.' });
+  setUserAiAccess(id, aiAccess);
   res.json({ ok: true });
 });
 

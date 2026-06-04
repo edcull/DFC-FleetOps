@@ -7,6 +7,9 @@ saves/
 # Local environment (secrets — never commit)
 .env
 
+# Generated coverage (regenerate with `npm run coverage`)
+coverage/
+
 # Logs / OS cruft
 *.log
 .DS_Store

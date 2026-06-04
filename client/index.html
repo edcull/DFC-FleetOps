@@ -16289,7 +16289,7 @@ function showAuthScreen() {
           submitBtn.textContent = isReg ? 'CREATE ACCOUNT' : 'SIGN IN';
           return;
         }
-        currentUser = { loggedIn: true, username: data.username, userId: data.userId, role: data.role || 'player' };
+        currentUser = { loggedIn: true, username: data.username, userId: data.userId, role: data.role || 'player', aiAccess: !!data.aiAccess };
         overlay.remove();
         renderAll();
         showModeSelector();
@@ -16393,10 +16393,10 @@ async function showModeSelector() {
             🔗 JOIN ONLINE GAME
             <div style="font-size:10px;font-weight:400;color:var(--text-mute);margin-top:3px;">Enter a room code to connect</div>
           </button>
-          <button class="btn" id="ms-solo" style="padding:14px 10px;font-size:13px;">
+          ${(currentUser?.aiAccess || currentUser?.role === 'admin') ? `<button class="btn" id="ms-solo" style="padding:14px 10px;font-size:13px;">
             🤖 SOLO vs AI
             <div style="font-size:10px;font-weight:400;color:var(--text-mute);margin-top:3px;">Single-player — play against an AI opponent</div>
-          </button>
+          </button>` : ''}
           ${savesBtn}
         </div>
       </div>`;
@@ -16532,7 +16532,8 @@ async function showModeSelector() {
       };
       overlay.querySelector('#ms-host').onclick    = () => { render('hosting'); doHost(); };
       overlay.querySelector('#ms-join').onclick    = () => render('join');
-      overlay.querySelector('#ms-solo').onclick    = () => render('solo');
+      const soloBtn = overlay.querySelector('#ms-solo');
+      if (soloBtn) soloBtn.onclick = () => render('solo');
       const savesBtn = overlay.querySelector('#ms-saves');
       if (savesBtn) savesBtn.onclick = () => render('saves');
     }
@@ -16718,7 +16719,7 @@ async function showModeSelector() {
         if (existing) { existing.remove(); return; }
 
         if (currentUser?.role === 'admin') {
-          openAdminPanel(userBtn);
+          openAdminPanel(userBtn, false);
         } else {
           _openUserModal(btnContainer, userBtn);
         }
@@ -16772,7 +16773,7 @@ document.getElementById('btn-3d-toggle').addEventListener('click', toggle3d);
 // Admin panel — opened from mode selector menu OR in-game topbar chip
 // ---------------------------------------------------------------------------
 
-async function openAdminPanel(anchor) {
+async function openAdminPanel(anchor, inGame = false) {
   const existing = document.getElementById('admin-panel-backdrop');
   if (existing) { existing.remove(); return; }
 
@@ -16798,7 +16799,7 @@ async function openAdminPanel(anchor) {
         <div><div style="font-size:11px;font-weight:700;color:var(--text);">${currentUser.username}</div><div style="font-size:8px;color:var(--hull-warn);letter-spacing:0.12em;">⬡ ADMIN</div></div>
       </div>
       <div style="display:flex;gap:6px;">
-        <button id="adm-exit-game" class="btn" style="padding:5px 10px;font-size:9px;">← EXIT GAME</button>
+        ${inGame ? `<button id="adm-exit-game" class="btn" style="padding:5px 10px;font-size:9px;">← EXIT GAME</button>` : ''}
         <button id="adm-logout" class="btn" style="padding:5px 10px;font-size:9px;color:var(--hull-crit);border-color:var(--hull-crit);">⏏ SIGN OUT</button>
       </div>
     </div>
@@ -16810,7 +16811,7 @@ async function openAdminPanel(anchor) {
     </div>`;
   document.body.appendChild(modal);
 
-  modal.querySelector('#adm-exit-game').addEventListener('click', () => {
+  if (inGame) modal.querySelector('#adm-exit-game').addEventListener('click', () => {
     backdrop.remove();
     location.href = location.pathname;
   });
@@ -16836,10 +16837,12 @@ async function openAdminPanel(anchor) {
             <div style="flex:1;min-width:0;">
               <span style="color:var(--text);font-weight:700;">${u.username}</span>
               <span style="margin-left:6px;font-size:8px;color:${u.role==='admin'?'var(--hull-warn)':'var(--text-mute)'};">${u.role.toUpperCase()}</span>
+              ${u.aiAccess ? '<span style="margin-left:4px;font-size:8px;color:var(--shal);">🤖 AI</span>' : ''}
               <div style="font-size:8px;color:var(--text-mute);">User #${u.id}</div>
             </div>
             ${u.id !== currentUser.userId ? `
               <button class="btn adm-reset-pw" data-uid="${u.id}" data-uname="${u.username}" style="padding:3px 7px;font-size:8px;">🔑 RESET PW</button>
+              <button class="btn adm-toggle-ai" data-uid="${u.id}" data-ai="${u.aiAccess}" style="padding:3px 7px;font-size:8px;${u.aiAccess?'color:var(--shal);border-color:var(--shal);':''}">${u.aiAccess?'🤖 AI ON':'🤖 AI OFF'}</button>
               <button class="btn adm-toggle-role" data-uid="${u.id}" data-role="${u.role}" style="padding:3px 7px;font-size:8px;">${u.role==='admin'?'▽ PLAYER':'▲ ADMIN'}</button>
               <button class="btn adm-del-user" data-uid="${u.id}" data-uname="${u.username}" style="padding:3px 7px;font-size:8px;color:var(--hull-crit);border-color:var(--hull-crit);">✕</button>
             ` : '<span style="font-size:8px;color:var(--text-mute);">(you)</span>'}
@@ -16851,6 +16854,13 @@ async function openAdminPanel(anchor) {
             const r = await fetch(`/api/admin/users/${btn.dataset.uid}/reset-password`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ newPassword: pw }) });
             const d = await r.json();
             if (d.ok) btn.textContent = '✓'; else alert(d.error);
+          });
+        });
+        body.querySelectorAll('.adm-toggle-ai').forEach(btn => {
+          btn.addEventListener('click', async () => {
+            const newVal = btn.dataset.ai === 'true' ? false : true;
+            await fetch(`/api/admin/users/${btn.dataset.uid}/ai-access`, { method:'PATCH', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ aiAccess: newVal }) });
+            loadTab('users');
           });
         });
         body.querySelectorAll('.adm-toggle-role').forEach(btn => {
@@ -16944,7 +16954,7 @@ function renderUserChip() {
     e.stopPropagation();
 
     if (currentUser?.role === 'admin') {
-      openAdminPanel(chipBtn);
+      openAdminPanel(chipBtn, true);
       return;
     }
 

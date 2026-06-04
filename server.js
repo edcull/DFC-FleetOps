@@ -36,6 +36,7 @@ if (!process.env.SESSION_SECRET || process.env.SESSION_SECRET === 'change-me-in-
 // ---------------------------------------------------------------------------
 
 const app = express();
+app.set('trust proxy', 1); // trust nginx X-Forwarded-Proto for secure cookies
 app.use(express.json());
 
 // Session middleware — extracted to a named variable so it can also be used
@@ -48,6 +49,7 @@ const sessionMiddleware = session({
   cookie: {
     httpOnly: true,
     sameSite: 'lax',
+    secure: process.env.NODE_ENV === 'production',
     maxAge: 12 * 60 * 60 * 1000, // 12 hours
   },
 });

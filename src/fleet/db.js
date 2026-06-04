@@ -516,7 +516,10 @@ export const FACTION_ADMIRAL_PERSONAL = {
   },
   shaltari: {
     'skychief':  [{ cost: 2, name: 'Cunning Positioning', desc: 'When you move a Group of M Tonnage, that Group gains Vectored for that movement.' }],
-    'starchief': [],
+    'starchief': [
+      { cost: 2, name: 'Overclock Gates',  desc: 'At the start of the Activation Phase, pick a friendly Ship with the Gateship-X rule. That Ship doubles its X value until the end of the round. A Ship can only be affected by this Ability once each round.' },
+      { cost: 3, name: 'Espionage',        desc: 'When an opponent declares the use of an Ability, negate that use of that Ability (AP is still spent as usual and subsequent uses are unaffected).' },
+    ],
   },
   resistance: {
     'engineer':  [{ cost: 2, name: 'Artillery Strike',      desc: 'When assigning targets for an Artillery weapon, its damage type becomes Core for those attacks. Costs 3AP if the ship is H or C tonnage.' }],
@@ -601,22 +604,22 @@ export const FAMOUS_ADMIRAL_ABILITIES = {
   'Javelin':             [{ cost: 2, name: 'Experimental Munitions',  desc: 'When assigning weapon targets, select one Calibre-X weapon. It gains the benefits of its Calibre-X rule regardless of target tonnage for that attack.' }],
   'Helena of Asgard':    [{ cost: 2, name: 'High-G Manoeuvre',        desc: 'When a friendly Group is given Max Thrust, it may turn as if on General Quarters.' }],
   'Claudia Rhee':        [{ cost: 2, name: 'Backup Systems Engaged',  desc: 'When a friendly Ship would roll for Crippling Damage, roll a die. On a 4+, that Ship does not roll on the Crippling table but is still Crippled.' }],
-  'Gaius Chau':          [],
+  'Gaius Chau':          [{ cost: 2, name: 'Backup Systems Engaged',  desc: 'When a friendly Ship would roll for Crippling Damage, roll a die. On a 4+, that Ship does not roll on the Crippling table but is still Crippled.' }],
   // Shaltari
-  'Twins of Aaru':       [],
+  'Twins of Aaru':       [{ cost: 2, name: 'Cunning Positioning',     desc: 'When you move a Group of M Tonnage, that Group gains Vectored for that movement.' }],
   'Seth':                [{ cost: 2, name: 'Cunning Positioning',     desc: 'When you move a Group of M Tonnage, that Group gains Vectored for that movement.' }],
-  'Mergen the Learned':  [],
-  'Quetzalcoatl':        [],
+  'Mergen the Learned':  [{ cost: 1, name: 'Ancient Teleportation Node', desc: 'Once per round, at the end of the Planning Phase, target a Dropsite with friendly Battalions on it. That Dropsite gains the Gateship-1 special rule until the end of the round, treating the Dropsite as a Ship for this rule (any other rules are unaffected).' }],
+  'Quetzalcoatl':        [{ cost: 2, name: 'Radioactivity',           desc: 'Before any player rolls for Explosion (friendly or enemy), make the final result of that roll a 5.' }],
   // Resistance
   'Typhoon Vasquez':     [{ cost: 2, name: 'Artillery Strike',        desc: 'When assigning targets for an Artillery weapon, its damage type becomes Core. Costs 3AP if the firing ship is H or C tonnage.' }],
-  'Hagen':               [],
-  'Nguen':               [],
-  'Magellan':            [],
+  'Hagen':               [{ cost: 3, name: 'Reinforce Systems',       desc: 'When a friendly Ship of H or C tonnage would roll its Backup save due to an attack, improve its Backup save for that attack by 1.' }],
+  'Nguen':               [{ cost: 2, name: 'Vent Cannon Mastery',     desc: 'When you Overcharge a Group\'s weapon with \'Vent\' in its name, each Ship in the firing Group may Overcharge a second weapon this activation.' }],
+  'Magellan':            [{ cost: 2, name: 'Magellan Expedition',     desc: 'When you launch Bulk Landers from this Ship or a Ship within 6" of it, you may have that Ship launch an additional 2 or 4 Bulk Landers. Any Ship that does takes that much damage (causing Crippling Effects and Explosions where applicable).' }],
   // Bioficer
   'Atlas':               [{ cost: 1, name: 'One Upsmanship',          desc: 'If this Admiral is your highest-level Admiral, whenever your opponent uses an Ability, roll a die. On a 4+, gain 1AP.' }],
-  'Atom':                [],
-  'Agency':              [],
-  'Ascendant':           [],
+  'Atom':                [{ cost: 1, name: 'Vice Lightly',             desc: 'When you assign targets to a weapon with \'Lightvice\' in its name, that weapon ignores its Focused rule for that attack.' }],
+  'Agency':              [{ cost: 2, name: 'Synthetic Grav Waves',    desc: 'When you inflict damage to an enemy Ship with a weapon with the Arrest-X special rule, each Ship in the damaged Group is affected by the Arrest rule and increases its X value by 2 for that attack.' }],
+  'Ascendant':           [{ cost: 2, name: 'Overwatch',               desc: 'When you activate this Ship on General Quarters, you may choose to forgo attacking. If you do, this Ship goes on Overwatch until end of round or until it declares Overwatch. At the end of any enemy Group\'s activation, if that Group moved through this Ship\'s Front arc and was in weapons range, you may declare Overwatch: this Ship immediately attacks as if on General Quarters against that Group, even if it is out of arc and weapon range.' }],
 };
 
 // ── Ship special rule descriptions ───────────────────────────────────────────

@@ -74,6 +74,7 @@ export function initDb() {
   try { _db.exec(`ALTER TABLE saves ADD COLUMN player2_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL`); } catch {}
   _db.exec(`CREATE INDEX IF NOT EXISTS idx_saves_player2 ON saves(player2_user_id)`);
   try { _db.exec(`ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'player'`); } catch {}
+  try { _db.exec(`ALTER TABLE users ADD COLUMN ai_access INTEGER NOT NULL DEFAULT 0`); } catch {}
   try { _db.exec(`ALTER TABLE saves ADD COLUMN is_ai INTEGER NOT NULL DEFAULT 0`); } catch {}
 
   return _db;
@@ -97,11 +98,15 @@ export function createUser(username, passwordHash) {
 }
 
 export function getAllUsers() {
-  return getDb().prepare('SELECT id, username, role, created_at FROM users ORDER BY id').all();
+  return getDb().prepare('SELECT id, username, role, ai_access, created_at FROM users ORDER BY id').all();
 }
 
 export function setUserRole(userId, role) {
   getDb().prepare('UPDATE users SET role = ? WHERE id = ?').run(role, userId);
+}
+
+export function setUserAiAccess(userId, aiAccess) {
+  getDb().prepare('UPDATE users SET ai_access = ? WHERE id = ?').run(aiAccess ? 1 : 0, userId);
 }
 
 export function setUserPassword(userId, passwordHash) {
