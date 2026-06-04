@@ -25,6 +25,8 @@
     --display: 'Oswald', 'Impact', sans-serif;
   }
   * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  /* Remove the 300ms tap delay / double-tap-zoom on controls (app-like feel). */
+  button, .btn, .group-card, .weapon-row, .order-btn, .faction-btn, .hud-btn, .hud-icon-btn { touch-action: manipulation; }
   html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; }
   * { font-feature-settings: "zero" 0; }
   body {
@@ -42,6 +44,7 @@
     grid-template-columns: 240px 1fr 280px;
     grid-template-rows: 48px auto 1fr;
     height: 100vh;
+    height: 100dvh; /* track the dynamic viewport so mobile browser chrome doesn't clip the bottom row */
     gap: 0;
   }
   /* Pin panels and board to row 3 so they always occupy the 1fr row even when
@@ -1062,7 +1065,7 @@
   .mobile-only { display: none !important; }
   #mobile-scrim {
     display: none; position: fixed; inset: 48px 0 0 0;
-    background: rgba(0,0,0,0.5); z-index: 110;
+    background: rgba(0,0,0,0.5); z-index: 135;
   }
   #mobile-scrim.show { display: block; }
 
@@ -1075,7 +1078,8 @@
        slide-over drawers toggled from the top bar. */
     .app { grid-template-columns: 1fr; grid-template-rows: 48px auto 1fr; }
     .mobile-only { display: inline-flex !important; align-items: center; }
-    .topbar { padding: 0 8px; gap: 6px; }
+    /* Honour the notch / rounded-corner safe areas on the fixed top bar. */
+    .topbar { padding: 0 max(8px, env(safe-area-inset-right)) 0 max(8px, env(safe-area-inset-left)); gap: 6px; }
     .brand { font-size: 14px; letter-spacing: 0.08em; gap: 5px; }
     #topbar-user { display: none !important; }
 
@@ -1083,10 +1087,12 @@
       display: block;
       position: fixed; top: 48px; bottom: 0;
       width: min(86vw, 360px); max-width: 360px;
-      z-index: 120;
+      z-index: 140; /* sit above in-game bottom sheets (z 130) when open */
       box-shadow: 0 0 40px rgba(0,0,0,0.65);
       transition: transform 0.22s ease;
       will-change: transform;
+      overscroll-behavior: contain;
+      padding-bottom: calc(8px + env(safe-area-inset-bottom, 0px));
     }
     .panel.left  { left: 0; right: auto; transform: translateX(-103%); border-right: 1px solid var(--border-bright); }
     .panel.right { right: 0; left: auto; transform: translateX(103%); border-left: 1px solid var(--border-bright); }
@@ -1096,15 +1102,19 @@
     /* The docked chat/log lives inside the right drawer here — undo desktop float. */
     #event-log-dock.chat-dock-float { position: static; width: auto; max-height: 40vh; }
 
-    /* Floating in-game popups → full-width bottom sheets (drag is a no-op on touch). */
+    /* Floating in-game popups → full-width bottom sheets (drag is a no-op on touch).
+       z-index !important so it beats the per-panel inline z (which climbs from 100),
+       keeping the slide-over drawers (z 140) reliably on top when both are open. */
     .dfc-panel {
       position: fixed !important;
       left: 0 !important; right: 0 !important; bottom: 0 !important; top: auto !important;
       width: 100% !important; max-width: 100% !important;
-      max-height: 80vh;
+      max-height: 80vh; max-height: 80dvh;
       border-radius: 10px 10px 0 0;
       border-left: none; border-right: none; border-bottom: none;
-      z-index: 130;
+      z-index: 130 !important;
+      overscroll-behavior: contain;
+      padding-bottom: env(safe-area-inset-bottom, 0px);
     }
     .dfc-panel-handle { cursor: default; padding: 9px 12px; }
     .dfc-panel-handle::before { content: '▬'; opacity: 0.5; }
@@ -1112,6 +1122,10 @@
       width: 100% !important; max-width: 100% !important; min-width: 0 !important;
       font-size: 13px;
     }
+    /* Re-assert bottom padding for the panels that set it via the padding shorthand,
+       adding the home-indicator inset so footer buttons stay tappable. */
+    .attack-hud { padding: 12px 14px calc(14px + env(safe-area-inset-bottom, 0px)) !important; }
+    .nom-panel  { padding: 10px 10px calc(8px + env(safe-area-inset-bottom, 0px)) !important; }
     /* The compact activation/asset/scoring HUDs stay small near the top so they
        don't fight the main bottom-sheet modal during the attack flow. */
     .dfc-panel.act-hud {
