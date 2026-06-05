@@ -1061,6 +1061,16 @@
   ::-webkit-scrollbar-thumb { background: var(--border-bright); border-radius: 3px; }
   ::-webkit-scrollbar-thumb:hover { background: var(--text-mute); }
 
+  /* Setup mobile tab bar (Player 1 / Player 2 / Scenario) — shown only ≤860px. */
+  .setup-mtabs { display: none; gap: 5px; margin-bottom: 12px; }
+  .setup-mtabs button {
+    flex: 1; padding: 11px 4px; background: var(--bg-card);
+    border: 1px solid var(--border); color: var(--text-dim);
+    font-family: var(--display); font-size: 11px; letter-spacing: 1px;
+    text-transform: uppercase; border-radius: 3px; cursor: pointer;
+  }
+  .setup-mtabs button.active { color: var(--ucm); border-color: var(--ucm-dim); background: var(--ucm-glow); }
+
   /* ============== MOBILE / TOUCH ============== */
   /* Mobile-only chrome (drawer toggles, scrim) — hidden on desktop. */
   .mobile-only { display: none !important; }
@@ -1188,9 +1198,35 @@
     .am-die { width: 30px; height: 30px; }
 
     /* Setup overlay fits a phone. */
-    .setup-overlay { padding: 8px; }
+    .setup-overlay { padding: 8px 8px 0; }
     .setup-card { max-width: 100%; }
     .fleet-dropdown, .scen-dropdown { font-size: 14px; padding: 10px; }
+
+    /* Setup as swipeable tabs: Player 1 / Player 2 / Scenario — show only the
+       active pane (panes live at different nesting levels). */
+    .setup-mtabs { display: flex !important; }
+    .setup-card[data-mtab="p1"]   .setup-pane:not([data-pane="p1"]),
+    .setup-card[data-mtab="p2"]   .setup-pane:not([data-pane="p2"]),
+    .setup-card[data-mtab="scen"] .setup-pane:not([data-pane="scen"]) { display: none !important; }
+    .setup-body { padding-bottom: 84px; } /* clear the fixed footer */
+
+    /* Back / Ready fixed to the bottom of the screen. */
+    .setup-footer {
+      position: fixed; left: 0; right: 0; bottom: 0; z-index: 60; margin: 0;
+      background: var(--bg-elev); border-top: 1px solid var(--border-bright);
+      padding: 10px 12px calc(10px + env(safe-area-inset-bottom, 0px));
+      display: flex; gap: 8px;
+    }
+    .setup-footer .btn, .setup-footer .btn-primary { flex: 1; }
+
+    /* Show the account chip in the top bar during setup. */
+    .app.panels-hidden #topbar-user { display: flex !important; }
+
+    /* The admin account panel fits the screen width. */
+    #admin-panel-modal {
+      left: 6px !important; right: 6px !important; top: 54px !important;
+      min-width: 0 !important; max-width: none !important; width: auto !important;
+    }
   }
 
   /* On touch devices neutralise hover-only feedback so a tapped element doesn't
@@ -8172,6 +8208,17 @@ const SCEN_PRESETS = {
   entrapmoont:          { deployment:'encirclement', approach:'home_fleet_disadvantage', layout:'entrapmoont', variant:'entrapmoont', objective:'raze', objectives:{ player1:'protect', player2:'raze' } }
 };
 
+// Mobile setup tabs (Player 1 / Player 2 / Scenario). View-only state — kept in a
+// module var so it survives the setup overlay being rebuilt each render.
+let _setupMtab = 'p1';
+function _setSetupMtab(t) {
+  _setupMtab = t;
+  const card = document.querySelector('#setup-overlay .setup-card');
+  if (card) card.setAttribute('data-mtab', t);
+  document.querySelectorAll('#setup-overlay .setup-mtabs [data-mtab]')
+    .forEach(b => b.classList.toggle('active', b.dataset.mtab === t));
+}
+
 function renderSetupOverlay() {
   const board = document.querySelector('.board-wrap');
   let overlay = document.getElementById('setup-overlay');
@@ -8408,14 +8455,19 @@ function renderSetupOverlay() {
   overlay.id = 'setup-overlay';
   overlay.className = 'setup-overlay';
   overlay.innerHTML = `
-    <div class="setup-card">
+    <div class="setup-card" data-mtab="${_setupMtab}">
       <div class="setup-header">
         <h2 class="setup-title">SCENARIO SETUP</h2>
         <div class="setup-sub">D6 · 6-Round Game${_netRoom ? ` · <span style="font-family:var(--mono);letter-spacing:0.08em;font-size:14px;color:var(--shal);">${_netRoom}</span>` : ''}</div>
       </div>
       <div class="setup-body">
+        <div class="setup-mtabs">
+          <button data-mtab="p1"   class="${_setupMtab==='p1'?'active':''}">Player 1</button>
+          <button data-mtab="p2"   class="${_setupMtab==='p2'?'active':''}">Player 2</button>
+          <button data-mtab="scen" class="${_setupMtab==='scen'?'active':''}">Scenario</button>
+        </div>
         <div class="faction-select">
-          <div class="faction-slot">
+          <div class="faction-slot setup-pane" data-pane="p1">
             <div class="faction-lbl" style="color:var(--ucm)">${_netSide === 'player1' ? '▶ YOUR NAME' : _netSide === 'player2' ? 'Opponent' : 'Player 1'}${p1Ready ? ' <span style="color:var(--hull-good);font-size:9px;">✓ READY</span>' : ''}</div>
             <input class="fleet-dropdown" type="text" data-player-name="f1" value="${state.playerNames ? state.playerNames.f1 : 'Player 1'}" placeholder="Player 1 name" style="margin-bottom:5px;font-size:10px;" ${f1Lock ? 'disabled' : ''}>
             <select class="fleet-dropdown" data-fleet-choice="f1" ${f1Lock ? 'disabled' : ''}>
@@ -8436,7 +8488,7 @@ function renderSetupOverlay() {
             <button class="btn" data-import-fleet="f1" style="width:100%;margin-top:5px;font-size:10px;" ${f1Lock ? 'disabled' : ''}>${state.importedFleets&&state.importedFleets.f1 ? '✏ EDIT IMPORT' : '≡ IMPORT LIST'}</button>
             ${state.fleetChoices?.f1 ? `<button class="btn${fleetAssignmentsReady('f1')?'':' btn-primary'}" data-view-fleet="f1" style="width:100%;margin-top:3px;font-size:10px;" ${f1ViewLock ? 'disabled' : ''}>${fleetAssignmentsReady('f1')?'👁':'⚠'} ${state.importedFleets?.f1||(fleetHasPayloads(state.fleetChoices.f1)&&!state.importedFleets?.f1)?'SETUP / ':''}VIEW FLEET${state.importedFleets&&state.importedFleets.f1?' ('+_fleetTotalPts(state.importedFleets.f1)+' pts)':''}</button>` : ''}
           </div>
-          <div class="faction-slot">
+          <div class="faction-slot setup-pane" data-pane="p2">
             <div class="faction-lbl" style="color:var(--shal)">${state.aiOpponent ? '🤖 AI OPPONENT' : (_netSide === 'player2' ? '▶ YOUR NAME' : _netSide === 'player1' ? 'Opponent' : 'Player 2')}${p2Ready ? ' <span style="color:var(--hull-good);font-size:9px;">✓ READY</span>' : ''}</div>
             ${state.aiOpponent ? `<div style="font-size:9px;color:var(--text-mute);font-family:var(--mono);margin-bottom:4px;">${FACTIONS[state.fleetChoices?.f2]?.name || '—'} · ${state.aiPersonality || 'balanced'}</div>` : ''}
             <input class="fleet-dropdown" type="text" data-player-name="f2" value="${state.playerNames ? state.playerNames.f2 : 'Player 2'}" placeholder="Player 2 name" style="margin-bottom:5px;font-size:10px;" ${f2Lock ? 'disabled' : ''}>
@@ -8459,6 +8511,7 @@ function renderSetupOverlay() {
             ${state.fleetChoices?.f2 && !state.aiOpponent ? `<button class="btn${fleetAssignmentsReady('f2')?'':' btn-primary'}" data-view-fleet="f2" style="width:100%;margin-top:3px;font-size:10px;" ${f2ViewLock ? 'disabled' : ''}>${fleetAssignmentsReady('f2')?'👁':'⚠'} ${state.importedFleets?.f2||(fleetHasPayloads(state.fleetChoices.f2)&&!state.importedFleets?.f2)?'SETUP / ':''}VIEW FLEET${state.importedFleets&&state.importedFleets.f2?' ('+_fleetTotalPts(state.importedFleets.f2)+' pts)':''}</button>` : ''}
           </div>
         </div>
+        <div class="setup-pane" data-pane="scen">
         <div style="font-size:9px;color:var(--text-mute);margin:-4px 0 10px;text-align:center;">Red and Blue deployment sides are assigned randomly when you confirm.</div>
         ${(() => {
           const ms = state.moonswipe;
@@ -8481,6 +8534,7 @@ function renderSetupOverlay() {
         </div>` : ''}
         ${tabsBar}
         ${setupTab === 'custom' ? customTab : setupTab === 'expansion' ? expansionTab : standardTab}
+        </div>
       </div>
       <div class="setup-footer">
         <button class="btn" id="exit-to-menu">← Back</button>
@@ -8507,6 +8561,29 @@ function renderSetupOverlay() {
     </div>
   `;
   board.appendChild(overlay);
+
+  // Mobile setup tabs: click a tab, or swipe horizontally across the body, to move
+  // between Player 1 / Player 2 / Scenario. Pure view state — no relay/re-render.
+  overlay.querySelectorAll('.setup-mtabs [data-mtab]').forEach(b => {
+    b.addEventListener('click', () => _setSetupMtab(b.dataset.mtab));
+  });
+  {
+    const _mtOrder = ['p1', 'p2', 'scen'];
+    const _sbody = overlay.querySelector('.setup-body');
+    let _swx = 0, _swy = 0;
+    _sbody.addEventListener('touchstart', (e) => {
+      if (e.touches.length === 1) { _swx = e.touches[0].clientX; _swy = e.touches[0].clientY; }
+    }, { passive: true });
+    _sbody.addEventListener('touchend', (e) => {
+      const t = e.changedTouches[0]; if (!t) return;
+      const dx = t.clientX - _swx, dy = t.clientY - _swy;
+      if (Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy) * 1.4) {
+        let i = _mtOrder.indexOf(_setupMtab);
+        i = dx < 0 ? Math.min(_mtOrder.length - 1, i + 1) : Math.max(0, i - 1);
+        _setSetupMtab(_mtOrder[i]);
+      }
+    }, { passive: true });
+  }
 
   // Switching tabs resets the scenario selections (keeps each mode simple) and
   // relays — so the opponent follows to the same tab with a cleared scenario.
@@ -9110,7 +9187,9 @@ function renderActivationHUD() {
     cg.ships.some(cs => cs.deployedByGid === gid && !cs.destroyed && !cs.movedThisRound && !cs.firedThisActivation && !(cs.launchedThisRound > 0))
   );
 
-  const anyOnTableNotMoved = grp.ships.some(s => !s.destroyed && !s.offTable && !s.movedThisRound && s.deployedRound === state.round);
+  // Only reserve arrivals this activation (justArrived) can be undone — a group that
+  // started the turn already deployed on the table must not show UNDO DEPLOY.
+  const anyOnTableNotMoved = grp.ships.some(s => !s.destroyed && !s.offTable && !s.movedThisRound && s.deployedRound === state.round && s.justArrived);
   let undoBtn = '';
   if (ship && locked) {
     undoBtn = `<button class="btn" disabled style="width:100%;opacity:0.45;margin-bottom:4px;" title="Can't undo after firing/detecting/launching">⟲ UNDO MOVE (locked)</button>`;
@@ -9338,6 +9417,7 @@ function renderScenBanner() {
   const btnStyle  = (active) => `display:inline-block;margin:0 2px 0 0;padding:2px 6px;font-family:var(--mono);font-size:9px;letter-spacing:0.08em;cursor:pointer;border-radius:2px;border:1px solid ${active ? 'var(--border-bright)' : 'var(--border)'};background:rgba(8,16,15,0.85);color:${active ? 'var(--text)' : 'var(--text-mute)'};`;
   bn.innerHTML = `<div class="scen-banner-text"><b>${_bnAsym ? 'Asymmetric' : (obj ? obj.name : '')}</b>${lines}</div>
     <div class="scen-banner-btns" style="margin-top:5px;border-top:1px solid rgba(255,255,255,0.07);padding-top:5px;">
+      <button id="btn-view-toggle" class="mobile-only" style="${btnStyle(!!_view3d)}" title="Toggle 2D / 3D view">3D</button>
       <button id="btn-vp-toggle" style="${btnStyle(vpActive)}" title="Toggle VP breakdown">VP</button>
       <button id="btn-ap-toggle" style="${btnStyle(apActive)}" title="Toggle Ability Points">AP</button>
       <button id="btn-fleet-toggle" style="${btnStyle(flActive)}" title="Toggle Fleet View">FL</button>
@@ -9542,13 +9622,9 @@ function renderAll(localOnly = false) {
     // 2D↔3D auto-switching:
     // → 3D on entering deploy or play (first planning phase)
     // → 2D on entering nominations or protect nomination
-    // On mobile we stay in 2D throughout (pinch-zoom + pan); never auto-switch to
-    // 3D, and force back to 2D if somehow in it.
-    const _mob = _isMobileLayout();
-    const _to3d = !_mob && ((state.phase === 'deploy' && _prevPhase !== 'deploy') ||
-                  (state.phase === 'play'   && _prevPhase !== 'play'));
-    const _to2d = (_mob && _view3d) ||
-                  (state.phase === 'nominations' && _prevPhase !== 'nominations') ||
+    const _to3d = (state.phase === 'deploy' && _prevPhase !== 'deploy') ||
+                  (state.phase === 'play'   && _prevPhase !== 'play');
+    const _to2d = (state.phase === 'nominations' && _prevPhase !== 'nominations') ||
                   (state.phase === 'protect' && _prevPhase !== 'protect');
     _prevPhase = state.phase;
     if (_to3d && !_view3d) toggle3d();
@@ -13522,6 +13598,8 @@ document.addEventListener('click', (e) => {
   }
   // Zoom reset
   if (e.target.matches('#btn-zoom-reset')) { _resetMapView(); return; }
+  // 2D / 3D view toggle (mobile scen-banner button)
+  if (e.target.matches('#btn-view-toggle')) { toggle3d(); return; }
   // Panel toggles
   if (e.target.matches('#btn-vp-toggle')) {
     if (state.phase !== 'play') return;
