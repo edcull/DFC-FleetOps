@@ -1065,6 +1065,10 @@
      this 3×2 grid is shown only on mobile. */
   .act-orders { display: none; grid-template-columns: repeat(3, 1fr); gap: 4px; margin: 4px 0 6px; }
   .act-atmo { display: none; margin: 0 0 6px; }
+  .act-actions { display: none; }
+  /* Action cards reused from the detail panel render fine in the activation HUD;
+     trim the panel-section chrome so they sit flush in the bottom sheet. */
+  .act-actions .panel-section { padding: 6px 0; border-bottom: none; }
 
   /* Setup mobile tab bar (Player 1 / Player 2 / Scenario) — shown only ≤860px. */
   .setup-mtabs { display: none; gap: 5px; margin-bottom: 12px; }
@@ -1176,6 +1180,7 @@
     #hud-active, #hud-turn-info { display: none !important; }
     .act-orders { display: grid; }
     .act-atmo { display: block; }
+    .act-actions { display: block; }
     .board-legend { display: none; }
 
     /* The scenery-placement and deployment phase HUDs live in the top-left board
@@ -3027,8 +3032,12 @@ function renderAssetDetail(a) {
   return html;
 }
 
+// Action cards (weapons/launch/detector/survey/extract/payload) from the last detail
+// render — reused by the mobile activation HUD at the "select actions" stage.
+let _actionPanelHTML = '';
 function renderDetail() {
   const div = document.getElementById('detail-panel');
+  _actionPanelHTML = ''; // cleared unless a group/ship detail is rendered below
 
   // ── EXPLOSION: moved to board HUD (renderExplosionHUD). Clear panel when active. ──
   if (state.attackModal && state.attackModal.step === 'explosion' && state.attackModal.explodeQueue && state.attackModal.explodeQueue[0]) {
@@ -3970,6 +3979,8 @@ function renderDetail() {
     }
   }
 
+  // Stash the action cards for the mobile activation HUD (select-actions stage).
+  _actionPanelHTML = weaponsHTML + surveyHTML + assessHTML + extractHTML + launchHTML + payloadHTML;
   div.innerHTML = statsHTML + deployPromptHTML + deployGateHTML + ordersHTML + formationHTML + weaponsHTML + surveyHTML + assessHTML + extractHTML + launchHTML + payloadHTML + shipsHTML + moveHTML;
 }
 
@@ -9243,6 +9254,7 @@ function renderActivationHUD() {
   let hintLine = '';
   let ordersGrid = '';
   let atmoBtn = '';
+  let actionsHTML = '';
   const _allOnTable = grp.ships.every(s => s.destroyed || !s.offTable);
   const _isMine = netIsMySide(def.side);
   const _noOrderStage = !grp.order && _allOnTable;
@@ -9253,6 +9265,11 @@ function renderActivationHUD() {
     hintLine = `<div style="font-size:10px;color:var(--hull-warn);margin-bottom:4px;">Click to set movement order</div>`;
   } else if (grp.order && (!_orderNeedsMove || anyMoved)) {
     hintLine = `<div style="font-size:10px;color:var(--hull-warn);margin-bottom:4px;">Select actions</div>`;
+    // Surface the detail panel's action cards (weapons/launch/detector/survey/extract)
+    // here on mobile so the player can act without opening the Detail drawer.
+    if (_isMine && gid === state.selectedGroupId && _actionPanelHTML) {
+      actionsHTML = `<div class="act-actions">${_actionPanelHTML}</div>`;
+    }
   }
   // On mobile, surface the six order buttons here (3×2 grid). They stay through the
   // movement-order stage (so the order can still be changed) and hide once actions
@@ -9281,6 +9298,7 @@ function renderActivationHUD() {
     ${hintLine}
     ${ordersGrid}
     ${atmoBtn}
+    ${actionsHTML}
     ${undoBtn}
     ${finishBtn}
     ${cancelOrderBtn}
