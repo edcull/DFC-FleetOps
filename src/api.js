@@ -32,6 +32,50 @@ function _needsRoundEnd(state) {
   return true;
 }
 
+// AI vs AI: apply an intent as whichever side it's legal for (both sides are AI,
+// so e.g. the defender's save and the attacker's advances each resolve correctly).
+function _applyAnySide(room, intent) {
+  for (const who of ['player1', 'player2']) {
+    if (isLegal(room.state, intent, who)) {
+      apply(room.state, intent, room.rng);
+      if (room.playStartState) recordIntent(room, who, intent);
+      return true;
+    }
+  }
+  return false;
+}
+
+// AI vs AI: fully resolve a stuck attack modal, applying each step as the legal side
+// (a human normally drives the defender's part). Mirrors translator.js#resolveAttackModal.
+function _resolveAttackModalBoth(room) {
+  let guard = 200;
+  while (room.state.attackModal && guard-- > 0) {
+    const M = room.state.attackModal;
+    let to = null;
+    switch (M.step) {
+      case 'intro': to = 'hit'; break;
+      case 'hit': to = M.hitResult ? 'save' : 'hit'; break;
+      case 'save': {
+        if (!M.saveResult) { to = 'save'; break; }
+        const sr = M.saveResult;
+        const needBackup = !sr.backupRolled && sr.hitsList?.some(h => !h.saved && h.sv != null) && sr.backupVal != null;
+        to = needBackup ? 'rollbackup' : 'apply'; break;
+      }
+      case 'crippling': { const c = M.crippleQueue?.[0]; to = c ? (c.rolled ? 'crippling-next' : 'crippling-roll') : null; break; }
+      case 'explosion': { const e = M.explodeQueue?.[0]; to = e ? (e.rolled ? 'explosion-next' : 'explosion-roll') : null; break; }
+      case 'impel': { if (!_applyAnySide(room, { type: 'attackDeclare', what: 'impel', choice: 'turn' })) return; continue; }
+      case 'bombardCollateral': {
+        if (!M.bombardCollateralQueue?.[0]) { to = null; break; }
+        if (!_applyAnySide(room, { type: 'resolveBombardCollateral', loc: 'ground' }) &&
+            !_applyAnySide(room, { type: 'resolveBombardCollateral', loc: 'orbit' })) return;
+        continue;
+      }
+      default: to = null;
+    }
+    if (to ? !_applyAnySide(room, { type: 'attackStep', to }) : !_applyAnySide(room, { type: 'finishAttack' })) return;
+  }
+}
+
 export const router = Router();
 
 // GET /api/meta — app and ruleset version info.
@@ -505,28 +549,51 @@ async function maybeAiTurn(room) {
   broadcast(room, { type: 'aiThinking', thinking: true });
   console.log(`[${room.id}] AI${room.aiSide === 'both' ? ' vs AI' : ''} turn — phase:${room.state.phase} activeSide:${room.state.activeSide}`);
   try {
-    let guard = room.aiSide === 'both' ? 400 : 200;
+    const both = room.aiSide === 'both';
+    // AI vs AI runs the whole game in one call (no human to re-trigger it), so the
+    // guard is large; solo only runs until it's the human's turn.
+    let guard = both ? 200000 : 200;
+    let iters = 0;
     while (guard-- > 0) {
+      if (room.state.gameOver) break;
       // Capture the play-start snapshot as soon as we enter play phase.
       // (Normally done in onMessage, but AI vs AI bypasses the WS handler.)
       if (room.state.phase === 'play' && !room.playStartState) {
         room.playStartState    = structuredClone(room.state);
         room.playStartRngState = room.rng.getState();
       }
+
+      if (both) {
+        // Resolve the interrupt states a human/client normally drives.
+        if (room.state.attackModal)      { _resolveAttackModalBoth(room); }
+        else if (room.state.atmoDamage)  { if (!_applyAnySide(room, { type: 'confirmEndActivation' })) break; }
+        else if (room.state.repairPhase) { if (!_applyAnySide(room, { type: 'advanceRound' })) break; } // finishes repair → advances
+        else {
+          const side = effectiveAiSide();
+          if (shouldAiAct(room.state, side)) {
+            await triggerAi({ ...room, aiSide: side }, (intent) => {
+              if (room.playStartState) recordIntent(room, side, intent);
+            });
+          } else if (_needsRoundEnd(room.state)) {
+            if (!_applyAnySide(room, { type: 'endRound' })) break; // begin the end-of-round sequence
+          } else break;
+        }
+        // Stay responsive and let spectators watch progress: yield to the event loop
+        // periodically and broadcast the running state.
+        if ((++iters % 40) === 0) {
+          if ((iters % 200) === 0) broadcast(room, { type: 'full', state: room.state });
+          await new Promise(r => setImmediate(r));
+        }
+        continue;
+      }
+
+      // Solo vs AI — run until it's the human's turn.
       const side = effectiveAiSide();
       if (shouldAiAct(room.state, side)) {
         await triggerAi({ ...room, aiSide: side }, (intent) => {
           if (room.playStartState) recordIntent(room, side, intent);
         });
-      } else if (room.aiSide === 'both' && _needsRoundEnd(room.state)) {
-        // All activations complete — advance the round so play continues.
-        if (isLegal(room.state, { type: 'endRound' }, 'player1')) {
-          apply(room.state, { type: 'endRound' }, room.rng);
-          if (room.playStartState) recordIntent(room, 'player1', { type: 'endRound' });
-        } else break;
-      } else {
-        break;
-      }
+      } else break;
     }
     if (guard <= 0) console.warn(`[${room.id}] AI guard exhausted — possible loop`);
   } catch (err) {

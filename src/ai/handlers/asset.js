@@ -60,10 +60,12 @@ export function handleAsset(state, aiSide, personality, applyFn) {
   if (!ap || ap.step !== 'assets') return;
 
   if (state.assetActiveSide === aiSide && ap.assetType) {
+    const stageType = ap.assetType;
     const assets = (state.launchedAssets || []).filter(a =>
       a.side === aiSide && !a.moved && a.count > 0 && a.kind !== 'mine'
     );
 
+    let movedAny = false;
     for (const asset of assets) {
       const kind = asset.kind; // 'fighter', 'bomber', 'torpedo', 'fireship', etc.
       let dest = { x: asset.x, y: asset.y }; // default: hold
@@ -88,8 +90,13 @@ export function handleAsset(state, aiSide, personality, applyFn) {
         if (target) dest = moveToward(asset, target.x, target.y, thrustPx, margin);
       }
 
-      applyFn({ type: 'assetMove', assetId: asset.id, x: Math.round(dest.x), y: Math.round(dest.y) });
+      if (applyFn({ type: 'assetMove', assetId: asset.id, x: Math.round(dest.x), y: Math.round(dest.y) })) movedAny = true;
+      // assetMove may auto-advance the stage mid-loop — stop if it has.
+      if (state.assetActiveSide !== aiSide || state.assetPhase?.assetType !== stageType) return;
     }
+    // Nothing productive to move (only mines left, or moves rejected) — force the
+    // stage to advance so the asset phase can't stall.
+    if (!movedAny) applyFn({ type: 'assetStageDone', side: aiSide, assetType: stageType });
     return;
   }
 

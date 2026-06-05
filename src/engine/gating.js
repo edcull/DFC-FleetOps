@@ -412,7 +412,10 @@ export function isLegal(state, intent, side) {
       // Bomber attacks in the asset phase: the attacker is the bomber's side, which may
       // differ from assetActiveSide (opponent's bombers resolve during your stage turn).
       const atk = (state.attackModal.bomber ? state.attackModal.bomberSide : null)
-                  || state.assetActiveSide || state.activeSide;
+                  || state.assetActiveSide || state.activeSide
+                  // Fall back to the attacking group's side so an orphaned modal
+                  // (activeSide already cleared, e.g. AI vs AI) can still be finished.
+                  || (state.attackModal.attackerGid && state.groups[state.attackModal.attackerGid]?.def?.side) || null;
       let def = atk === 'player1' ? 'player2' : atk === 'player2' ? 'player1' : null; // defender owns defensive choices
       // Defensive decisions (Shields / Brace / Contain, save re-rolls, Close
       // Protection) belong to the defender; the rest (advances, hit re-rolls,
