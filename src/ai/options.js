@@ -9,6 +9,35 @@ import { moveCone, weaponCanTarget, dropsiteController, canDeployNow } from '../
 const BOARD_PX = 48 * INCH;
 const TONNAGE_ORDER = { C: 0, H: 1, M: 2, L: 3 };
 
+// Ground-asset launch ranges (inches). gate_dropship needs the Voidgate network
+// (handled separately in the activation handler), so it's excluded here.
+const LAUNCH_RANGE = { dropship: 3, bulk_lander: 6, drop_pod: 6 };
+const NO_LAUNCH_ORDERS = new Set(['MT', 'DC']);
+
+function defIsDropper(def) {
+  return !!def && (def.launch || []).some(l => LAUNCH_RANGE[l.type] != null);
+}
+
+// Plan to drop battalions at the nearest contestable dropsite this group can reach
+// (launch range + a move's worth of slack). Returns { li, dsId, count, type } | null.
+function dropLaunchPlan(state, grp, ship, aiSide) {
+  if (!ship) return null;
+  const launches = grp.def?.launch || [];
+  const dropsites = state.scenarioData?.dropsites || [];
+  for (let li = 0; li < launches.length; li++) {
+    const l = launches[li];
+    const r = LAUNCH_RANGE[l.type];
+    if (r == null) continue;
+    const rangePx = (r + 10) * INCH; // launch range + ~one move
+    const ds = dropsites
+      .filter(d => !d.destroyed && dropsiteController(d) !== aiSide)
+      .filter(d => dist2d(ship.x, ship.y, d.x * INCH, d.y * INCH) <= rangePx)
+      .sort((a, b) => dist2d(ship.x, ship.y, a.x * INCH, a.y * INCH) - dist2d(ship.x, ship.y, b.x * INCH, b.y * INCH))[0];
+    if (ds) return { li, dsId: ds.id, count: l.n, type: l.type };
+  }
+  return null;
+}
+
 function dist2d(ax, ay, bx, by) {
   const dx = ax - bx, dy = ay - by;
   return Math.sqrt(dx * dx + dy * dy);
@@ -107,7 +136,9 @@ function findBestTarget(state, gid, si, wi, aiSide) {
       const tship = tgrp.ships[tsi];
       if (tship.destroyed || tship.offTable || tship.attachedTo) continue;
       if (!weaponCanTarget(state, def, ship, w, tgrp.def, tship, tgrp)) continue;
-      const score = (tgrp.def.pts || 0) + (tship.hull < (tship.maxHull || 1) / 2 ? 50 : 0); // prefer crippled
+      const score = (tgrp.def.pts || 0)
+        + (tship.hull < (tship.maxHull || 1) / 2 ? 50 : 0)   // prefer crippled
+        + (defIsDropper(tgrp.def) ? 150 : 0);                // prioritise enemy drop ships to stop landings
       if (score > bestScore) { bestScore = score; best = { gid: targetGid, si: tsi }; }
     }
   }
@@ -132,7 +163,15 @@ export function generateActivationOptions(state, aiSide) {
     const moveCandidates = candidateTargets(state, gid, aiSide);
     const si = grp.ships.findIndex(s => !s.destroyed && !s.offTable);
 
-    for (const order of validOrders.slice(0, 2)) { // cap to 2 orders per group
+    // Drop-capable groups: plan to land battalions at the nearest reachable dropsite,
+    // and try launch-permitting orders first so that option actually gets generated.
+    const dropper  = defIsDropper(grp.def);
+    const dropPlan = dropper ? dropLaunchPlan(state, grp, grp.ships[si], aiSide) : null;
+    const orderList = dropper
+      ? [...validOrders].sort((a, b) => (NO_LAUNCH_ORDERS.has(a) ? 1 : 0) - (NO_LAUNCH_ORDERS.has(b) ? 1 : 0))
+      : validOrders;
+
+    for (const order of orderList.slice(0, 2)) { // cap to 2 orders per group
       if (options.length >= 8) break;
       for (const dest of moveCandidates.slice(0, 2)) {
         if (options.length >= 8) break;
@@ -157,6 +196,8 @@ export function generateActivationOptions(state, aiSide) {
           movePlan: dest,      // {x, y, reason}
           movePos,             // best reachable pixel pos (pre-move check)
           weapTargets,         // [{wi, targetGid, targetSi}]
+          // Drop battalions when this order can launch and we're heading to a dropsite.
+          launchPlan: (dropPlan && !NO_LAUNCH_ORDERS.has(order) && dest.reason === 'vp') ? dropPlan : null,
         });
       }
     }

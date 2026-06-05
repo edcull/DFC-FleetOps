@@ -3,7 +3,7 @@
 import { Router } from 'express';
 import { createRoom, getRoom, getAllRooms, joinRoom, leaveRoom, broadcast, send, recordIntent } from './rooms.js';
 import { isLegal } from './engine/gating.js';
-import { apply } from './engine/mutators.js';
+import { apply, dsBattalions } from './engine/mutators.js';
 import { saveRoom, loadSave, loadAllSaves } from './saves.js';
 import { APP_VERSION, RULEBOOK_VERSION, ERRATA_VERSION } from './engine/version.js';
 import { getRoomSlot, setRoomSlot, getSaveOwners, deleteSaveDb } from './db.js';
@@ -65,10 +65,15 @@ function _resolveAttackModalBoth(room) {
       case 'explosion': { const e = M.explodeQueue?.[0]; to = e ? (e.rolled ? 'explosion-next' : 'explosion-roll') : null; break; }
       case 'impel': { if (!_applyAnySide(room, { type: 'attackDeclare', what: 'impel', choice: 'turn' })) return; continue; }
       case 'bombardCollateral': {
-        if (!M.bombardCollateralQueue?.[0]) { to = null; break; }
-        if (!_applyAnySide(room, { type: 'resolveBombardCollateral', loc: 'ground' }) &&
-            !_applyAnySide(room, { type: 'resolveBombardCollateral', loc: 'orbit' })) return;
-        continue;
+        const q = M.bombardCollateralQueue?.[0];
+        if (!q) { to = null; break; }
+        // Gating requires dsId to match the queue head and loc to hold ≥1 of q.side's
+        // battalions — pick any such location (ground/orbit or a feature key).
+        const ds = room.state.scenarioData?.dropsites?.find(d => d.id === q.dsId);
+        const b = ds ? dsBattalions(ds) : {};
+        const loc = Object.keys(b).find(L => (b[L]?.[q.side] || 0) > 0);
+        if (loc && _applyAnySide(room, { type: 'resolveBombardCollateral', dsId: q.dsId, loc })) continue;
+        return; // nothing removable (shouldn't happen) — bail rather than spin
       }
       default: to = null;
     }
@@ -568,6 +573,14 @@ async function maybeAiTurn(room) {
         if (room.state.attackModal)      { _resolveAttackModalBoth(room); }
         else if (room.state.atmoDamage)  { if (!_applyAnySide(room, { type: 'confirmEndActivation' })) break; }
         else if (room.state.repairPhase) { if (!_applyAnySide(room, { type: 'advanceRound' })) break; } // finishes repair → advances
+        // Battalion-combat init: the asset phase opened (step !== 'assets') but isn't
+        // resolved — contested dropsites remain (autoAdvanceAssetPhase sets resolved=true
+        // only when none are contested). A human clicks "BATTALION COMBAT ▸" here; the
+        // driver casts it, then handleBattalion drives the bc* sub-steps to completion.
+        else if (room.state.assetPhase && room.state.assetPhase.step !== 'assets'
+                 && !room.state.assetPhase.resolved && !room.state.battalionCombat) {
+          if (!_applyAnySide(room, { type: 'startBattalionCombat' })) break;
+        }
         else {
           const side = effectiveAiSide();
           if (shouldAiAct(room.state, side)) {
