@@ -1143,6 +1143,8 @@
     .attack-hud { padding: 12px 14px calc(14px + env(safe-area-inset-bottom, 0px)) !important; }
     .nom-panel  { padding: 10px 10px calc(8px + env(safe-area-inset-bottom, 0px)) !important; }
     .act-hud    { padding: 8px 10px calc(10px + env(safe-area-inset-bottom, 0px)) !important; }
+    /* VP / AP / Fleet panels sit in front of every other element. */
+    #vpbreak-overlay, #ap-edit-overlay, #fleet-view-overlay { z-index: 200 !important; }
 
     /* Keep the centre of the board clear: hide the colour-key legend, and show the
        scenario/VP banner top-right with ONLY the VP / AP / FL buttons (no text). */
@@ -9571,6 +9573,11 @@ function _syncBoardBottomInset() {
   });
   wrap.style.paddingBottom = inset ? inset + 'px' : '';
 }
+// Close the Fleet View overlay + its backdrop (used to keep VP/AP/Fleet mutually exclusive).
+function _closeFleetViewPanels() {
+  document.getElementById('fleet-view-backdrop')?.remove();
+  document.getElementById('fleet-view-overlay')?.remove();
+}
 {
   const _sc = document.getElementById('mobile-scrim');
   if (_sc) _sc.addEventListener('click', closeMobileDrawers);
@@ -13600,11 +13607,12 @@ document.addEventListener('click', (e) => {
   if (e.target.matches('#btn-zoom-reset')) { _resetMapView(); return; }
   // 2D / 3D view toggle (mobile scen-banner button)
   if (e.target.matches('#btn-view-toggle')) { toggle3d(); return; }
-  // Panel toggles
+  // Panel toggles — VP / AP / Fleet are mutually exclusive (opening one closes the others).
   if (e.target.matches('#btn-vp-toggle')) {
     if (state.phase !== 'play') return;
     state.vpBreakdownOpen = !state.vpBreakdownOpen;
-    if (!state.vpBreakdownOpen) { state.vpObjOpen = false; state.vpSecOpen = false; }
+    if (state.vpBreakdownOpen) { state.apEditOpen = null; _closeFleetViewPanels(); }
+    else { state.vpObjOpen = false; state.vpSecOpen = false; }
     renderAll(true); return;
   }
   if (e.target.matches('#btn-ap-toggle')) {
@@ -13613,6 +13621,8 @@ document.addEventListener('click', (e) => {
       state.apEditOpen = null;
     } else {
       state.apEditOpen = _netSide || 'player1';
+      state.vpBreakdownOpen = false; state.vpObjOpen = false; state.vpSecOpen = false;
+      _closeFleetViewPanels();
     }
     renderAll(); return;
   }
@@ -13620,9 +13630,10 @@ document.addEventListener('click', (e) => {
     if (state.phase !== 'play') return;
     const existing = document.getElementById('fleet-view-overlay');
     if (existing) {
-      document.getElementById('fleet-view-backdrop')?.remove();
-      existing.remove();
+      _closeFleetViewPanels();
     } else {
+      state.vpBreakdownOpen = false; state.vpObjOpen = false; state.vpSecOpen = false;
+      state.apEditOpen = null;
       openFleetViewForSide(_netSide || 'player1');
     }
     renderAll(true); return;
