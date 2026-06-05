@@ -360,6 +360,7 @@ async function maybeAiTurn(room) {
     if (s.phase === 'scenery')     return (s.sceneryReady    ||{}).player1 ? 'player2' : 'player1';
     if (s.phase === 'nominations') return (s.nominationsReady||{}).player1 ? 'player2' : 'player1';
     if (s.phase === 'protect')     return (s.protectNomReady ||{}).player1 ? 'player2' : 'player1';
+    if (s.phase === 'deploy')      return (s.deployDone||{}).player1 ? 'player2' : 'player1';
     if (s.activeSide) return s.activeSide;
     if (s.dropsiteActivation) return s.dropsiteActivation.side;
     if (s.assetPhase?.step === 'assets') {
