@@ -1,7 +1,7 @@
 // REST routes and WebSocket connection handler.
 
 import { Router } from 'express';
-import { createRoom, getRoom, joinRoom, leaveRoom, broadcast, send, recordIntent } from './rooms.js';
+import { createRoom, getRoom, getAllRooms, joinRoom, leaveRoom, broadcast, send, recordIntent } from './rooms.js';
 import { isLegal } from './engine/gating.js';
 import { apply } from './engine/mutators.js';
 import { saveRoom, loadSave, loadAllSaves } from './saves.js';
@@ -48,7 +48,8 @@ router.post('/rooms', (req, res) => {
     setRoomSlot(room.id, 'player1', req.user.id);
   }
 
-  const { aiOpponent, aiVsAi, aiSide, aiPersonality, aiFaction, aiSecondaries } = req.body || {};
+  const { aiOpponent, aiVsAi, aiSide, aiPersonality, aiFaction, aiSecondaries, allowSpectators } = req.body || {};
+  if (allowSpectators) room.allowSpectators = true;
 
   if (aiVsAi) {
     const personality = aiPersonality || 'balanced';
@@ -59,6 +60,7 @@ router.post('/rooms', (req, res) => {
     room.aiSide        = 'both';
     room.aiPersonality = personality;
     room.noLlm         = true; // use fallback-only AI — avoids rate-limiting both sides
+    room.allowSpectators = true; // AI vs AI games are always public
     room.state.aiSide  = 'both';
     room.state.aiVsAi  = true;
     room.state.aiPersonality = personality;
@@ -116,14 +118,31 @@ router.post('/rooms', (req, res) => {
   res.json({ roomId: room.id, seed: room.seed });
 });
 
+// GET /api/rooms/live — rooms open to spectators, currently in play.
+router.get('/rooms/live', (req, res) => {
+  const live = getAllRooms()
+    .filter(r => r.allowSpectators && r.state.phase === 'play' && !r.state.gameOver)
+    .map(r => ({
+      roomId:     r.id,
+      round:      r.state.round || 1,
+      factions:   r.state.factions || {},
+      p1:         r.state.playerNames?.f1 || r.state.playerNames?.player1 || 'Player 1',
+      p2:         r.state.playerNames?.f2 || r.state.playerNames?.player2 || 'Player 2',
+      spectators: r.spectators.length,
+      isAiVsAi:   r.aiSide === 'both',
+    }));
+  res.json(live);
+});
+
 // GET /api/rooms/:id — check whether a room exists and who has joined.
 router.get('/rooms/:id', (req, res) => {
   const room = getRoom(req.params.id.toUpperCase());
   if (!room) return res.status(404).json({ error: 'Room not found.' });
   res.json({
-    roomId: room.id,
-    sides: { player1: !!room.sockets.player1, player2: !!room.sockets.player2 },
-    phase: room.state.phase,
+    roomId:          room.id,
+    sides:           { player1: !!room.sockets.player1, player2: !!room.sockets.player2 },
+    phase:           room.state.phase,
+    allowSpectators: room.allowSpectators,
   });
 });
 
