@@ -8986,9 +8986,10 @@ function _layerToggleBtnHTML(def, grp, si, sideClass) {
 /* Activation HUD: Undo Move · Finish Activation · Undo Deploy
    Floats at the bottom-right of the board so the detail panel stays uncluttered. */
 // Collapsed state for the mobile activation bottom-sheet (tap the title bar to toggle).
-let _actHudCollapsed = false;   // manual collapse preference
+let _actHudCollapsed = false;   // current collapse state (manual + targeting transitions)
 let _actHudGid = null;          // group the HUD last rendered for
-// "Tap a target" cursors — while any is active the HUD auto-collapses to reveal the map.
+let _actHudPrevAiming = false;  // previous "tap a target" state, to detect transitions
+// "Tap a target" cursors — entering one collapses the HUD; leaving it expands again.
 function _actHudAiming() {
   return !!(state.targeting || state.detector || state.extracting || state.antiWing || state.featureAttack);
 }
@@ -8997,13 +8998,18 @@ function _wireActHudCollapse(hud, gid) {
   const handle = hud.querySelector('.dfc-panel-handle');
   if (!handle) return;
   // A new group activating starts expanded.
-  if (gid !== _actHudGid) { _actHudGid = gid; _actHudCollapsed = false; }
+  if (gid !== _actHudGid) { _actHudGid = gid; _actHudCollapsed = false; _actHudPrevAiming = false; }
+  // Targeting transitions nudge the collapse state, but the user can still toggle
+  // freely afterwards (e.g. expand to cancel targeting).
+  const aiming = _actHudAiming();
+  if (aiming && !_actHudPrevAiming) _actHudCollapsed = true;   // entered targeting → collapse
+  else if (!aiming && _actHudPrevAiming) _actHudCollapsed = false; // target locked/cancelled → expand
+  _actHudPrevAiming = aiming;
   let chev = handle.querySelector('.act-collapse-chev');
   if (!chev) { chev = document.createElement('span'); chev.className = 'act-collapse-chev'; handle.appendChild(chev); }
   const apply = () => {
-    const collapsed = _actHudCollapsed || _actHudAiming();
-    hud.classList.toggle('collapsed', collapsed);
-    chev.textContent = collapsed ? '▲' : '▼';
+    hud.classList.toggle('collapsed', _actHudCollapsed);
+    chev.textContent = _actHudCollapsed ? '▲' : '▼';
   };
   handle.style.cursor = 'pointer';
   handle.addEventListener('click', (e) => {
