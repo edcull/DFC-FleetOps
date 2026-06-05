@@ -787,9 +787,30 @@ export function isLegal(state, intent, side) {
 
 export function legalActions(state, side) {
   const out = [];
+
+  // Always check the simple flow intents
   for (const type of INTENT_TYPES) {
-    const intent = { type };
-    if (isLegal(state, intent, side)) out.push(intent);
+    if (isLegal(state, { type }, side)) out.push({ type });
   }
+
+  if (state.phase !== 'play') return out;
+
+  // Initiative / planning
+  if (isLegal(state, { type: 'giveInitiative' }, side)) out.push({ type: 'giveInitiative' });
+  if (isLegal(state, { type: 'beginActivation' }, side)) out.push({ type: 'beginActivation' });
+
+  // Per-group intents
+  for (const gid of Object.keys(state.groups || {})) {
+    // finishActivation
+    const finIntent = { type: 'finishActivation', gid };
+    if (isLegal(state, finIntent, side)) out.push(finIntent);
+
+    // applyOrder — enumerate all orders
+    for (const order of Object.keys(ORDERS)) {
+      const oIntent = { type: 'applyOrder', gid, order };
+      if (isLegal(state, oIntent, side)) out.push(oIntent);
+    }
+  }
+
   return out;
 }

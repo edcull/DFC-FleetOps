@@ -40,27 +40,54 @@ function hasDrop(def) {
 
 // ── Personality scoring ───────────────────────────────────────────────────────
 
+// Lock string ("3+") → hit probability (e.g. 0.667).
+function lockProb(lockStr) {
+  const n = parseInt(lockStr, 10);
+  return (n >= 2 && n <= 6) ? (7 - n) / 6 : 0.5;
+}
+
+// Expected damage per weapon: att × dmg × P(hit).
+function weaponEDPS(w) {
+  return (w.att || 0) * (w.dmg || 1) * lockProb(w.lock || '4+');
+}
+
+// #2 — Damage-per-point scoring: normalise expected damage output by group cost.
 function shipScore(def, personality) {
-  const attack   = (def.weapons || []).reduce((s, w) => s + (w.att || 0), 0);
-  const dropBonus = hasDrop(def) ? 8 : 0;
-  const heavyBonus = (def.tonnage === 'H' || def.tonnage === 'C') ? 4 : 0;
+  const pts = def.pts || 1;
+  const groupCost = pts * (def.groupSize || 1);
+  const edps = (def.weapons || []).reduce((s, w) => s + weaponEDPS(w), 0);
+  const edpsPerPt = groupCost > 0 ? edps / groupCost : 0;
+
+  const dropBonus  = hasDrop(def) ? 1.0 : 0;
+  const heavyBonus = (def.tonnage === 'H' || def.tonnage === 'C') ? 0.5 : 0;
+  const hullPerPt  = (def.hull || 0) / pts;
+
   switch (personality) {
     case 'aggressive':
     case 'opportunist':
-      return attack * 1.5 + heavyBonus + dropBonus * 0.3;
+      return edpsPerPt * 4.0 + heavyBonus + dropBonus * 0.3;
     case 'positional':
-      return dropBonus * 4.0 + attack * 0.3 + (def.vanguard ? 3 : 0);
+      return dropBonus * 5.0 + edpsPerPt * 1.0 + (def.vanguard ? 1.5 : 0);
     case 'defensive':
-      return (def.hull || 0) * 0.5 - (def.sig || 0) * 0.2 + dropBonus * 0.5;
+      return hullPerPt * 2.0 - (def.sig || 0) * 0.05 + dropBonus * 0.8;
     default: // balanced
-      return attack * 0.8 + dropBonus * 2.5 + (def.hull || 0) * 0.15;
+      return edpsPerPt * 2.5 + dropBonus * 2.0 + hullPerPt * 0.5;
   }
 }
 
-// Weighted random pick from the top-N items in a sorted array.
-function weightedPick(sorted, topN) {
+// #1 — Exponential-decay weighted random: rank-0 is e^0=1× as likely as rank-N is e^(-λN).
+// λ=0.35 means rank 5 is picked ~17% as often as rank 0; still varied but clearly ranked.
+function weightedPick(sorted, topN, lambda = 0.35) {
   const pool = sorted.slice(0, Math.min(topN, sorted.length));
-  return pool.length ? pool[Math.floor(Math.random() * pool.length)] : null;
+  if (!pool.length) return null;
+  const weights = pool.map((_, i) => Math.exp(-lambda * i));
+  const total   = weights.reduce((s, w) => s + w, 0);
+  let r = Math.random() * total;
+  for (let i = 0; i < pool.length; i++) {
+    r -= weights[i];
+    if (r <= 0) return pool[i];
+  }
+  return pool[pool.length - 1];
 }
 
 // ── Tactics generation ────────────────────────────────────────────────────────
@@ -107,6 +134,40 @@ function generateTactics(groups) {
   return tactics.slice(0, 6);
 }
 
+// ── Secondary objective picker ────────────────────────────────────────────────
+// Picks up to 2 non-nominate secondaries that suit the built fleet + personality.
+
+const SECONDARY_SCORES = {
+  // key: (groups, personality) => number
+  annihilate:   (groups, personality) => {
+    const totalAtt = groups.reduce((s, g) =>
+      s + (g._def?.weapons || []).reduce((ws, w) => ws + (w.att || 0), 0), 0);
+    const base = Math.min(totalAtt / 20, 3);
+    const pBonus = { aggressive: 3, opportunist: 2, defensive: -1 }[personality] || 0;
+    return base + pBonus;
+  },
+  decapitate:   (_groups, personality) =>
+    ({ aggressive: 3, opportunist: 2, balanced: 0.5, positional: -1, defensive: -1 }[personality] ?? 0),
+  gather_intel: (groups, personality) => {
+    const hasCapital = groups.some(g => g.tonnage === 'M' || g.tonnage === 'H' || g.tonnage === 'C');
+    if (!hasCapital) return -10;
+    return ({ positional: 3, balanced: 2, defensive: 1.5, opportunist: 0.5, aggressive: 0 }[personality] ?? 1);
+  },
+  take_prizes:  (groups) => {
+    const hasMarines = groups.some(g => /Marines/i.test(g._def?.special || ''));
+    return hasMarines ? 2.5 : -10;
+  },
+};
+
+function pickSecondaries(groups, personality) {
+  return Object.entries(SECONDARY_SCORES)
+    .map(([key, scoreFn]) => ({ key, score: scoreFn(groups, personality) }))
+    .filter(s => s.score > 0)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 2)
+    .map(s => s.key);
+}
+
 // ── Full constraint-guided builder ────────────────────────────────────────────
 
 function buildFull({ faction, targetPts, admiralLevel = 0, personality = 'balanced' }) {
@@ -133,10 +194,25 @@ function buildFull({ faction, targetPts, admiralLevel = 0, personality = 'balanc
   const lSorted = byTonnage('L');
   const cSorted = cLimit > 0 ? byTonnage('C') : [];
 
+  const minPts = targetPts * 0.97;
+
+  // Soft group cap — keeps rosters readable; below the hard game limit so greedy close-out still fits.
+  const GROUP_CAP = { skirmish: 14, clash: 16, battle: 20, reconquest: 25 }[size];
+
+  // Repeat cap — same ship name allowed this many times total across the fill phase.
+  const REPEAT_CAP = { skirmish: 2, clash: 3, battle: 4, reconquest: 4 }[size];
+
+  // #4 — Drop guarantee: personalities that need ground presence must have at least one drop group.
+  const needsDrop = personality === 'positional' || personality === 'balanced';
+  const DROP_TARGET = personality === 'positional' ? 0.40
+                    : personality === 'balanced'   ? 0.35
+                    : 0.25;
+
   for (let attempt = 0; attempt < 25; attempt++) {
     const groups = [];         // internal: { name, count, pts, options, tonnage, _def }
     const rareCount  = {};
     const uniqueSet  = new Set();
+    const nameCount  = {};     // #3 — tracks repetitions per ship name
     let totalPts  = 0;
     let mediumPts = 0;
     let heavyPts  = 0;
@@ -144,7 +220,7 @@ function buildFull({ faction, targetPts, admiralLevel = 0, personality = 'balanc
     // def.pts is per-ship; total group cost = def.pts * groupSize.
     const groupCost = def => def.pts * (def.groupSize || 1);
 
-    function fits(name, def) {
+    function fits(name, def, fillPhase = false) {
       if (groupCost(def) > groupBudget - totalPts) return false;
       if (isUnique(def) && uniqueSet.has(name)) return false;
       if (isRare(def) && (rareCount[name] || 0) >= rLimit) return false;
@@ -153,6 +229,9 @@ function buildFull({ faction, targetPts, admiralLevel = 0, personality = 'balanc
         if (cLimit === 0) return false;
         if (groups.filter(g => g.tonnage === 'C').length >= cLimit) return false;
       }
+      // #3 — repetition cap and group count cap in fill phase
+      if (fillPhase && (nameCount[name] || 0) >= REPEAT_CAP) return false;
+      if (fillPhase && groups.length >= GROUP_CAP) return false;
       return true;
     }
 
@@ -164,15 +243,16 @@ function buildFull({ faction, targetPts, admiralLevel = 0, personality = 'balanc
       if (def.tonnage === 'H') heavyPts  += cost;
       if (isUnique(def)) uniqueSet.add(name);
       if (isRare(def))   rareCount[name] = (rareCount[name] || 0) + 1;
+      nameCount[name] = (nameCount[name] || 0) + 1;
     }
 
-    // 1. Medium backbone: 2–3 groups picked from top-6 by score.
+    // 1. Medium backbone: 2–3 groups picked with exponential-decay weighting from top-8.
     const mPool = [...mSorted];
     const numMedium = 2 + Math.floor(Math.random() * 2); // 2 or 3
     for (let i = 0; i < numMedium && mPool.length; i++) {
       const eligible = mPool.filter(s => fits(s.name, s.def));
       if (!eligible.length) break;
-      const pick = weightedPick(eligible, 6);
+      const pick = weightedPick(eligible, 8);
       if (!pick) break;
       add(pick.name, pick.def);
       mPool.splice(mPool.indexOf(pick), 1);
@@ -184,57 +264,68 @@ function buildFull({ faction, targetPts, admiralLevel = 0, personality = 'balanc
         || size === 'battle' || size === 'reconquest';
       if (wantsHeavy || Math.random() < 0.35) {
         const eligible = hSorted.filter(s => fits(s.name, s.def));
-        const pick = eligible.length ? weightedPick(eligible, 4) : null;
+        const pick = eligible.length ? weightedPick(eligible, 5) : null;
         if (pick) add(pick.name, pick.def);
       }
     }
 
-    // 3. Optional Colossal group (Battle+ only, not Skirmish/Clash unless wantsHeavy).
+    // 3. Optional Colossal group (Battle+ only).
     if (cLimit > 0 && cSorted.length && (size === 'battle' || size === 'reconquest')) {
       if (Math.random() < 0.45) {
         const eligible = cSorted.filter(s => fits(s.name, s.def));
-        const pick = eligible.length ? weightedPick(eligible, 2) : null;
+        const pick = eligible.length ? weightedPick(eligible, 3) : null;
         if (pick) add(pick.name, pick.def);
       }
     }
 
-    // 4. Fill remaining budget with L and M groups.
-    // When drop% is below target and personality cares about objectives, prefer drop-capable ships.
-    // Positional/balanced aim for 35%; aggressive/defensive still want some drop capability at 20%.
-    const wantsDrop = true;
-    const DROP_TARGET = (personality === 'positional') ? 0.40
-                      : (personality === 'balanced')   ? 0.35
-                      : 0.30;
+    // 4. #4 — Guarantee at least one drop group for positional/balanced.
+    if (needsDrop && !groups.some(g => hasDrop(g._def))) {
+      const allDropCandidates = [...lSorted, ...mSorted].filter(s => hasDrop(s.def) && fits(s.name, s.def, true));
+      const pick = allDropCandidates.length ? weightedPick(allDropCandidates, 6) : null;
+      if (pick) add(pick.name, pick.def);
+    }
 
+    // 5. Fill remaining budget with L and M groups, applying repetition cap.
     const fillPool = [...lSorted, ...mSorted];
-    let guard = 60;
+    let guard = 80;
     while (guard-- > 0) {
       const remaining = groupBudget - totalPts;
       if (remaining <= 0) break;
 
-      const eligible = fillPool.filter(s => fits(s.name, s.def) && groupCost(s.def) <= remaining);
+      const eligible = fillPool.filter(s => fits(s.name, s.def, true) && groupCost(s.def) <= remaining);
       if (!eligible.length) break;
 
-      // If we're short on drop capability, strongly prefer drop-capable ships.
+      // Prefer drop ships if short of target.
       const dropPts = groups.filter(g => hasDrop(g._def)).reduce((s, g) => s + groupCost(g._def), 0);
       const dropPct = totalPts > 0 ? dropPts / totalPts : 0;
       let pool = eligible;
-      if (wantsDrop && dropPct < DROP_TARGET) {
+      if (dropPct < DROP_TARGET) {
         const dropEligible = eligible.filter(s => hasDrop(s.def));
-        if (dropEligible.length) pool = dropEligible; // force drop ship this iteration
+        if (dropEligible.length) pool = dropEligible;
       }
 
-      const pick = weightedPick(pool, 8);
+      const pick = weightedPick(pool, 10);
       if (!pick) break;
       add(pick.name, pick.def);
     }
 
-    // 5. Validate.
-    const minPts = targetPts * 0.97;
+    // #5 — Greedy close-out: if still short of the 97% floor, make one targeted pass
+    // picking the single largest group that fits the remaining gap.
+    // Bypasses GROUP_CAP (one extra group is acceptable to close the budget).
+    if (totalPts + admPts < minPts) {
+      const gap = groupBudget - totalPts;
+      const closeOuts = [...lSorted, ...mSorted, ...hSorted]
+        .filter(s => fits(s.name, s.def, false) && groupCost(s.def) <= gap)
+        .sort((a, b) => groupCost(b.def) - groupCost(a.def));
+      if (closeOuts.length) add(closeOuts[0].name, closeOuts[0].def);
+    }
+
+    // Validate.
     const finalPts = totalPts + admPts;
     if (finalPts < minPts || finalPts > targetPts) continue; // retry
 
-    const tactics   = generateTactics(groups);
+    const tactics     = generateTactics(groups);
+    const secondaries = pickSecondaries(groups, personality);
     const finalGroups = groups.map(({ name, count, pts, options }) => ({ name, count, pts, options }));
 
     return {
@@ -243,6 +334,7 @@ function buildFull({ faction, targetPts, admiralLevel = 0, personality = 'balanc
       admiralLevel,
       totalPts: finalPts,
       tactics,
+      secondaries,
       validation: {
         valid: true,
         totalPts: finalPts,

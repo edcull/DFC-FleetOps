@@ -1,5 +1,5 @@
 import { generateActivationOptions, mapLlmOptions } from '../options.js';
-import { chooseOption } from '../fallback.js';
+import { mctsChooseOption } from '../mcts.js';
 import { buildActivation } from '../translator.js';
 import { buildStateBriefing, buildGroupCapabilities } from '../state-parser.js';
 import { llmAvailable, llmGenerateOptions } from '../llm.js';
@@ -55,7 +55,7 @@ function arriveGroup(state, gid, grp, aiSide, applyFn, overrideTargetX = null) {
   });
 }
 
-export async function handleActivation(state, rng, aiSide, personality, applyFn) {
+export async function handleActivation(state, rng, aiSide, personality, applyFn, useLlm = false) {
   // Auto-finish groups not yet eligible to arrive this round.
   for (const [gid, grp] of Object.entries(state.groups)) {
     if (grp.def?.side !== aiSide || grp.activated) continue;
@@ -74,7 +74,7 @@ export async function handleActivation(state, rng, aiSide, personality, applyFn)
   let options = progOptions;
   let chosen;
 
-  if (llmAvailable) {
+  if (useLlm && llmAvailable) {
     const briefing     = buildStateBriefing(state, aiSide);
     const capabilities = buildGroupCapabilities(state, aiSide);
     try {
@@ -106,7 +106,7 @@ export async function handleActivation(state, rng, aiSide, personality, applyFn)
     return;
   }
 
-  if (!chosen) chosen = chooseOption(options, state, aiSide, personality);
+  if (!chosen) chosen = mctsChooseOption(options, state, rng, aiSide);
   if (!chosen) return;
   if (!chosen.groupId) { applyFn({ type: 'pass' }); return; }
 

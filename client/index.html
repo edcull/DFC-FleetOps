@@ -6625,7 +6625,7 @@ function vanguardEdgeSemicirclePath(c, X) {
    pick a piece type, see remaining counts, rotate, and click the board to place.
    Existing pieces can be clicked to remove. */
 /* Fleet import modal — paste New Recruit list, parse it, apply to state. */
-function openFleetImport(slot) {
+function openFleetImport(slot, onApply) {
   let panel = document.getElementById('fleet-import-overlay');
   if (panel) panel.remove();
   panel = document.createElement('div');
@@ -6705,6 +6705,7 @@ function openFleetImport(slot) {
     panel.remove();
     renderAll();
     netRelaySetup();
+    if (typeof onApply === 'function') onApply(parsed);
   });
 
   panel.querySelector('#fleet-import-cancel').addEventListener('click', () => panel.remove());
@@ -7986,15 +7987,17 @@ function renderInitiative() {
 }
 
 /* Two dropdowns to choose up to 2 Secondary Objectives for a fleet slot. */
-function secondaryPickers(slot) {
+function secondaryPickers(slot, showLabels = false) {
   // f1 belongs to player1, f2 to player2. In online mode only own slot is editable.
   const owner = slot === 'f1' ? 'player1' : 'player2';
   const isDisabled = _netSide && _netSide !== owner;
   const chosen = state.secondaryChoice[slot] || [];
+  const lbl = `font-size:9px;letter-spacing:0.08em;color:var(--text-mute);font-family:var(--mono);margin:6px 0 3px;`;
   const opt = (idx) => {
     const cur = chosen[idx] || '';
     const others = chosen.filter((_, i) => i !== idx);
-    return `<select class="fleet-dropdown" data-secondary="${slot}|${idx}" style="margin-top:4px;font-size:9.5px;"${isDisabled ? ' disabled' : ''}>
+    return (showLabels ? `<div style="${lbl}">SECONDARY ${idx + 1}</div>` : '') +
+      `<select class="fleet-dropdown" data-secondary="${slot}|${idx}" style="margin-top:${showLabels ? '0' : '4'}px;font-size:9.5px;"${isDisabled ? ' disabled' : ''}>
       <option value="">— Secondary ${idx+1} —</option>
       ${Object.keys(SECONDARY_OBJECTIVES).map(k => `<option value="${k}" ${cur===k?'selected':''} ${others.includes(k)?'disabled':''}>${SECONDARY_OBJECTIVES[k].name}</option>`).join('')}
     </select>`;
@@ -8485,16 +8488,18 @@ function renderSetupOverlay() {
         <div class="faction-select">
           <div class="faction-slot setup-pane" data-pane="p1">
             <div class="faction-lbl" style="color:var(--ucm)">${_netSide === 'player1' ? '▶ YOUR NAME' : _netSide === 'player2' ? 'Opponent' : 'Player 1'}${p1Ready ? ' <span style="color:var(--hull-good);font-size:9px;">✓ READY</span>' : ''}</div>
-            <input class="fleet-dropdown" type="text" data-player-name="f1" value="${state.playerNames ? state.playerNames.f1 : 'Player 1'}" placeholder="Player 1 name" style="margin-bottom:5px;font-size:10px;" ${f1Lock ? 'disabled' : ''}>
+            <input class="fleet-dropdown" type="text" data-player-name="f1" value="${state.playerNames ? state.playerNames.f1 : 'Player 1'}" placeholder="Player 1 name" style="margin-bottom:8px;font-size:10px;" ${f1Lock ? 'disabled' : ''}>
+            <div style="font-size:9px;letter-spacing:0.08em;color:var(--text-mute);font-family:var(--mono);margin:6px 0 3px;">FLEET</div>
             <select class="fleet-dropdown" data-fleet-choice="f1" ${f1Lock ? 'disabled' : ''}>
               <option value="" ${!state.fleetChoices.f1?'selected':''}>— select quickplay fleet —</option>
               ${Object.keys(FACTIONS).map(fk => `<option value="${fk}" ${state.fleetChoices.f1===fk?'selected':''}>${FACTIONS[fk].name}</option>`).join('')}
             </select>
-            <select class="fleet-dropdown" data-color-choice="f1" style="margin-top:5px;font-size:10px;" ${f1Lock ? 'disabled' : ''}>
+            <div style="font-size:9px;letter-spacing:0.08em;color:var(--text-mute);font-family:var(--mono);margin:6px 0 3px;">COLOUR</div>
+            <select class="fleet-dropdown" data-color-choice="f1" style="font-size:10px;" ${f1Lock ? 'disabled' : ''}>
               <option value="" ${!(state.playerColors&&state.playerColors.f1)?'selected':''}>— colour —</option>
               ${Object.entries(PLAYER_COLORS).map(([k,c]) => { const taken = k === (state.playerColors&&state.playerColors.f2); return `<option value="${k}" ${(state.playerColors&&state.playerColors.f1)===k?'selected':''} ${taken?'disabled':''}>${c.label}</option>`; }).join('')}
             </select>
-            ${secondaryPickers('f1')}
+            ${secondaryPickers('f1', true)}
             ${(state.scenario && state.scenario.layout === 'se1_moonguard') ? `
               <div style="font-size:9px;color:rgba(255,220,40,0.8);margin-top:4px;margin-bottom:1px;letter-spacing:0.05em;">MOONGUARD BONUS SECONDARY</div>
               <select class="fleet-dropdown" data-moonguard-sec="f1" style="margin-top:2px;font-size:9.5px;" ${f1Lock ? 'disabled' : ''}>
@@ -8506,18 +8511,86 @@ function renderSetupOverlay() {
           </div>
           <div class="faction-slot setup-pane" data-pane="p2">
             <div class="faction-lbl" style="color:var(--shal)">${state.aiOpponent ? '🤖 AI OPPONENT' : (_netSide === 'player2' ? '▶ YOUR NAME' : _netSide === 'player1' ? 'Opponent' : 'Player 2')}${p2Ready ? ' <span style="color:var(--hull-good);font-size:9px;">✓ READY</span>' : ''}</div>
-            ${state.aiOpponent ? `<div style="font-size:9px;color:var(--text-mute);font-family:var(--mono);margin-bottom:4px;">${FACTIONS[state.fleetChoices?.f2]?.name || '—'} · ${state.aiPersonality || 'balanced'}</div>` : ''}
-            <input class="fleet-dropdown" type="text" data-player-name="f2" value="${state.playerNames ? state.playerNames.f2 : 'Player 2'}" placeholder="Player 2 name" style="margin-bottom:5px;font-size:10px;" ${f2Lock ? 'disabled' : ''}>
-            <select class="fleet-dropdown" data-fleet-choice="f2" ${f2Lock ? 'disabled' : ''}>
+            ${state.aiOpponent ? (() => {
+              const lbl = `font-size:9px;letter-spacing:0.08em;color:var(--text-mute);font-family:var(--mono);margin:6px 0 3px;`;
+              const secOpts = (val) => `<option value="random" ${val==='random'||!val?'selected':''}>— Random —</option>` +
+                Object.entries(SECONDARY_OBJECTIVES).filter(([,v])=>!v.nominate).map(([k,v])=>`<option value="${k}" ${val===k?'selected':''}>${v.name}</option>`).join('');
+              const personalitySelect = `<div style="${lbl}">AI PERSONALITY</div>
+                <select class="fleet-dropdown" id="ai-personality" style="font-size:10px;">
+                  <option value="random" ${_aiPersonality==='random'?'selected':''}>Random</option>
+                  <option value="balanced"    ${_aiPersonality==='balanced'   ?'selected':''}>Balanced</option>
+                  <option value="aggressive"  ${_aiPersonality==='aggressive' ?'selected':''}>Aggressive</option>
+                  <option value="positional"  ${_aiPersonality==='positional' ?'selected':''}>Positional</option>
+                  <option value="defensive"   ${_aiPersonality==='defensive'  ?'selected':''}>Defensive</option>
+                  <option value="opportunist" ${_aiPersonality==='opportunist'?'selected':''}>Opportunist</option>
+                </select>`;
+              const llmToggle = (currentUser?.aiAccess || currentUser?.role === 'admin') ? `<label style="display:flex;align-items:center;gap:6px;margin-top:6px;cursor:pointer;user-select:none;">
+                <input type="checkbox" id="ai-use-llm" ${_aiUseLlm?'checked':''} style="accent-color:var(--accent,#4ad6ff);">
+                <span style="font-size:9px;color:var(--text-mute);">LLM AI</span>
+              </label>` : '';
+              const colourPicker = `<div style="${lbl}">COLOUR</div>
+                <select class="fleet-dropdown" data-color-choice="f2" style="margin-top:0;font-size:10px;" ${f2Lock ? 'disabled' : ''}>
+                  <option value="" ${!(state.playerColors&&state.playerColors.f2)?'selected':''}>— colour —</option>
+                  ${Object.entries(PLAYER_COLORS).map(([k,c]) => { const taken = k === (state.playerColors&&state.playerColors.f1); return `<option value="${k}" ${(state.playerColors&&state.playerColors.f2)===k?'selected':''} ${taken?'disabled':''}>${c.label}</option>`; }).join('')}
+                </select>`;
+              const secPickers = `<div style="${lbl}">SECONDARY 1</div>
+                <select class="fleet-dropdown" id="ai-sec-0" style="font-size:10px;">${secOpts(_aiSec1)}</select>
+                <div style="${lbl}">SECONDARY 2</div>
+                <select class="fleet-dropdown" id="ai-sec-1" style="font-size:10px;">${secOpts(_aiSec2)}</select>`;
+              const moonguardSec = (state.scenario && state.scenario.layout === 'se1_moonguard') ? `
+                <div style="font-size:9px;color:rgba(255,220,40,0.8);margin-top:4px;margin-bottom:1px;letter-spacing:0.05em;">MOONGUARD BONUS SECONDARY</div>
+                <select class="fleet-dropdown" data-moonguard-sec="f2" style="margin-top:2px;font-size:9.5px;" ${f2Lock ? 'disabled' : ''}>
+                  <option value="">— Bonus secondary —</option>
+                  ${['annihilate','take_prizes','decapitate'].map(k => `<option value="${k}" ${(state.moonguardSecondaryChoice&&state.moonguardSecondaryChoice.f2)===k?'selected':''}>${SECONDARY_OBJECTIVES[k]?SECONDARY_OBJECTIVES[k].name:k}</option>`).join('')}
+                </select>` : '';
+              const modeDropdown = `<select class="fleet-dropdown" id="ai-fleet-mode" style="font-size:10px;margin-bottom:8px;">
+                <option value="fastplay" ${_aiFleetMode==='fastplay'?'selected':''}>Fastplay</option>
+                <option value="generate" ${_aiFleetMode==='generate'?'selected':''}>Generate</option>
+                <option value="import"   ${_aiFleetMode==='import'  ?'selected':''}>Import</option>
+              </select>`;
+              let modeControls = '';
+              if (_aiFleetMode === 'fastplay') {
+                modeControls = `<div style="${lbl}">AI FLEET</div>
+                  <select class="fleet-dropdown" data-fleet-choice="f2" style="font-size:10px;">
+                    <option value="" ${!state.fleetChoices.f2?'selected':''}>— select faction —</option>
+                    ${Object.keys(FACTIONS).map(fk => `<option value="${fk}" ${state.fleetChoices.f2===fk?'selected':''}>${FACTIONS[fk].name}</option>`).join('')}
+                  </select>
+                  ${colourPicker}${secPickers}${moonguardSec}${personalitySelect}${llmToggle}
+                  ${state.importedFleets?.f2 ? `<button class="btn" data-view-fleet="f2" style="width:100%;margin-top:5px;font-size:10px;">👁 VIEW FLEET (${_fleetTotalPts(state.importedFleets.f2)} pts)</button>` : ''}`;
+              } else if (_aiFleetMode === 'generate') {
+                modeControls = `<div style="${lbl}">AI FACTION</div>
+                  <select class="fleet-dropdown" id="ai-gen-faction" style="font-size:10px;">
+                    <option value="random" ${_aiGenFaction==='random'||!_aiGenFaction?'selected':''}>🎲 Random</option>
+                    ${Object.keys(FACTIONS).map(fk => `<option value="${fk}" ${_aiGenFaction===fk?'selected':''}>${FACTIONS[fk].name}</option>`).join('')}
+                  </select>
+                  ${colourPicker}${secPickers}
+                  <div style="${lbl}">FLEET POINTS</div>
+                  <input id="ai-pts" type="number" min="500" max="5000" step="50" value="${_aiTargetPts}" class="fleet-dropdown" style="font-family:var(--mono);font-size:10px;" placeholder="1500"/>
+                  ${moonguardSec}${personalitySelect}${llmToggle}
+                  <button class="btn${_aiFleetBuilt?'':'-primary'}" id="ai-generate-btn" style="width:100%;margin-top:8px;font-size:10px;">${_aiFleetBuilt ? '✓ Fleet Generated' : '⚙ Generate Fleet'}</button>
+                  ${(_aiFleetBuilt && state.importedFleets?.f2) ? `<button class="btn" data-view-fleet="f2" style="width:100%;margin-top:3px;font-size:10px;">👁 VIEW FLEET (${_fleetTotalPts(state.importedFleets.f2)} pts)</button>` : ''}`;
+              } else {
+                modeControls = `<div style="${lbl}">AI FACTION</div>
+                  <select class="fleet-dropdown" disabled style="font-size:10px;">
+                    <option>${_aiImportFaction ? FACTIONS[_aiImportFaction]?.name || _aiImportFaction : '— import list first —'}</option>
+                  </select>
+                  ${colourPicker}${secPickers}${moonguardSec}${personalitySelect}${llmToggle}
+                  <button class="btn" data-import-fleet="f2" style="width:100%;margin-top:8px;font-size:10px;">${_aiImportFaction ? '✏ Edit Import' : '≡ Import List'}</button>
+                  ${(_aiImportFaction && state.importedFleets?.f2) ? `<button class="btn" data-view-fleet="f2" style="width:100%;margin-top:3px;font-size:10px;">👁 VIEW FLEET (${_fleetTotalPts(state.importedFleets.f2)} pts)</button>` : ''}`;
+              }
+              return modeDropdown + modeControls;
+            })() : ''}
+            ${!state.aiOpponent ? `<input class="fleet-dropdown" type="text" data-player-name="f2" value="${state.playerNames ? state.playerNames.f2 : 'Player 2'}" placeholder="Player 2 name" style="margin-bottom:5px;font-size:10px;" ${f2Lock ? 'disabled' : ''}>` : ''}
+            ${!state.aiOpponent ? `<select class="fleet-dropdown" data-fleet-choice="f2" ${f2Lock ? 'disabled' : ''}>
               <option value="" ${!state.fleetChoices.f2?'selected':''}>— select quickplay fleet —</option>
               ${Object.keys(FACTIONS).map(fk => `<option value="${fk}" ${state.fleetChoices.f2===fk?'selected':''}>${FACTIONS[fk].name}</option>`).join('')}
-            </select>
-            <select class="fleet-dropdown" data-color-choice="f2" style="margin-top:5px;font-size:10px;" ${f2Lock ? 'disabled' : ''}>
+            </select>` : ''}
+            ${!state.aiOpponent ? `<select class="fleet-dropdown" data-color-choice="f2" style="margin-top:5px;font-size:10px;" ${f2Lock ? 'disabled' : ''}>
               <option value="" ${!(state.playerColors&&state.playerColors.f2)?'selected':''}>— colour —</option>
               ${Object.entries(PLAYER_COLORS).map(([k,c]) => { const taken = k === (state.playerColors&&state.playerColors.f1); return `<option value="${k}" ${(state.playerColors&&state.playerColors.f2)===k?'selected':''} ${taken?'disabled':''}>${c.label}</option>`; }).join('')}
-            </select>
-            ${secondaryPickers('f2')}
-            ${(state.scenario && state.scenario.layout === 'se1_moonguard') ? `
+            </select>` : ''}
+            ${!state.aiOpponent ? secondaryPickers('f2') : ''}
+            ${!state.aiOpponent && (state.scenario && state.scenario.layout === 'se1_moonguard') ? `
               <div style="font-size:9px;color:rgba(255,220,40,0.8);margin-top:4px;margin-bottom:1px;letter-spacing:0.05em;">MOONGUARD BONUS SECONDARY</div>
               <select class="fleet-dropdown" data-moonguard-sec="f2" style="margin-top:2px;font-size:9.5px;" ${f2Lock ? 'disabled' : ''}>
                 <option value="">— Bonus secondary —</option>
@@ -8823,6 +8896,7 @@ function renderSetupOverlay() {
   overlay.querySelectorAll('[data-import-fleet]').forEach(btn => {
     btn.addEventListener('click', (e) => {
       e.stopPropagation();
+      if (state.aiOpponent && btn.dataset.importFleet === 'f2') return;
       openFleetImport(btn.dataset.importFleet);
     });
   });
@@ -8847,13 +8921,55 @@ function renderSetupOverlay() {
   }
   // Online: per-side ready buttons.
   overlay.querySelectorAll('[data-ready-setup]').forEach(btn => {
-    btn.addEventListener('click', (e) => {
+    btn.addEventListener('click', async (e) => {
       e.stopPropagation();
       const side = btn.dataset.readySetup;
       const slot = side === 'player1' ? 'f1' : 'f2';
-      if (!state.fleetChoices[slot]) { flashLaunchMsg('Select your fleet first'); return; }
+      if (!state.aiOpponent && !state.fleetChoices[slot]) { flashLaunchMsg('Select your fleet first'); return; }
       if (!state.scenario || ['deployment','approach','layout','variant','objective'].some(k => !state.scenario[k])) {
         flashLaunchMsg('Select all scenario options first'); return;
+      }
+      // For AI games: build the fleet with current settings before committing.
+      if (state.aiOpponent && _netRoom) {
+        const mode = _aiFleetMode;
+        const resolvedPersonality = _aiPersonality === 'random'
+          ? ['balanced','aggressive','positional','defensive','opportunist'][Math.floor(Math.random()*5)]
+          : _aiPersonality;
+        const secVals = [_aiSec1, _aiSec2].filter(s => s && s !== 'random');
+
+        const skipBuild = (mode === 'generate' && _aiFleetBuilt) || (mode === 'import' && !!_aiImportFaction);
+
+        if (!skipBuild) {
+          if (mode === 'fastplay' && !state.fleetChoices.f2) { flashLaunchMsg('Select an AI faction first'); return; }
+          if (mode === 'import' && !_aiImportFaction) { flashLaunchMsg('Import a fleet list first'); return; }
+
+          btn.disabled = true;
+          const body = { mode, personality: resolvedPersonality, useLlm: _aiUseLlm, secondaries: secVals };
+          if (mode === 'fastplay') body.faction = state.fleetChoices.f2;
+          else if (mode === 'generate') { body.faction = _aiGenFaction || 'random'; body.targetPts = _aiTargetPts; }
+          try {
+            const res = await fetch(`/api/rooms/${_netRoom}/build-ai`, {
+              method: 'POST', headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(body),
+            });
+            const data = await res.json();
+            if (!data.ok) { flashLaunchMsg(data.error || 'Fleet build failed'); btn.disabled = false; return; }
+            if (mode !== 'fastplay' && data.faction && FACTION_COLORS[data.faction]) {
+              state.playerColors = state.playerColors || { f1: null, f2: null };
+              const preferred = FACTION_COLORS[data.faction];
+              const taken = state.playerColors.f1;
+              state.playerColors.f2 = (preferred !== taken) ? preferred : (Object.keys(PLAYER_COLORS).find(k => k !== taken) || preferred);
+              netRelaySetup();
+            }
+          } catch { flashLaunchMsg('Could not reach server'); btn.disabled = false; return; }
+          btn.disabled = false;
+        } else {
+          // Set personality/useLlm without rebuilding fleet
+          try {
+            await fetch(`/api/rooms/${_netRoom}/configure-ai`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ personality: resolvedPersonality, useLlm: _aiUseLlm, secondaries: secVals }) });
+          } catch { /* non-fatal */ }
+        }
       }
       dispatch({ type: 'readySetup', side });
     });
@@ -8882,6 +8998,81 @@ function renderSetupOverlay() {
       dispatch({ type: 'unreadySetup', side: 'player2' });
     });
   }
+  // Wire AI config controls — persist to module vars so they survive re-renders.
+  if (state.aiOpponent) {
+    // Helper: auto-apply faction colour to f2
+    const applyAiColour = (faction) => {
+      if (!faction || !FACTION_COLORS[faction]) return;
+      state.playerColors = state.playerColors || { f1: null, f2: null };
+      const preferred = FACTION_COLORS[faction];
+      const takenCol  = state.playerColors.f1;
+      const free = Object.keys(PLAYER_COLORS).filter(k => k !== takenCol);
+      state.playerColors.f2 = (preferred !== takenCol) ? preferred : (free[Math.floor(Math.random() * free.length)] || preferred);
+      renderAll(); netRelaySetup();
+    };
+
+    // Mode dropdown
+    overlay.querySelector('#ai-fleet-mode')?.addEventListener('change', e => {
+      _aiFleetMode = e.target.value; _aiFleetBuilt = false; renderSetupOverlay();
+    });
+
+    // Generate-mode faction
+    overlay.querySelector('#ai-gen-faction')?.addEventListener('change', e => {
+      _aiGenFaction = e.target.value;
+      _aiFleetBuilt = false;
+      if (_aiGenFaction !== 'random') applyAiColour(_aiGenFaction);
+    });
+
+    // Points
+    overlay.querySelector('#ai-pts')?.addEventListener('input', e => {
+      _aiTargetPts = parseInt(e.target.value, 10) || 1500; _aiFleetBuilt = false;
+    });
+
+    // Generate button
+    overlay.querySelector('#ai-generate-btn')?.addEventListener('click', async (btn_e) => {
+      const btn = overlay.querySelector('#ai-generate-btn');
+      btn.disabled = true; btn.textContent = '…';
+      try {
+        const res = await fetch(`/api/rooms/${_netRoom}/build-ai`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ mode: 'generate', faction: _aiGenFaction || 'random',
+            targetPts: _aiTargetPts, personality: _aiPersonality === 'random' ? null : _aiPersonality }),
+        });
+        const data = await res.json();
+        if (!data.ok) { flashLaunchMsg(data.error || 'Build failed'); }
+        else {
+          _aiFleetBuilt = true;
+          if (data.secondaries?.[0]) _aiSec1 = data.secondaries[0];
+          if (data.secondaries?.[1]) _aiSec2 = data.secondaries[1];
+          if (data.faction && _aiGenFaction === 'random') applyAiColour(data.faction);
+          renderSetupOverlay();
+        }
+      } catch { flashLaunchMsg('Could not reach server'); }
+      const b2 = overlay.querySelector('#ai-generate-btn');
+      if (b2) { b2.disabled = false; b2.textContent = _aiFleetBuilt ? '✓ Fleet Generated' : '⚙ Generate Fleet'; }
+    });
+
+    // Secondary pickers
+    overlay.querySelector('#ai-sec-0')?.addEventListener('change', e => { _aiSec1 = e.target.value; });
+    overlay.querySelector('#ai-sec-1')?.addEventListener('change', e => { _aiSec2 = e.target.value; });
+
+    // Personality
+    overlay.querySelector('#ai-personality')?.addEventListener('change', e => { _aiPersonality = e.target.value; });
+
+    // LLM toggle
+    overlay.querySelector('#ai-use-llm')?.addEventListener('change', e => { _aiUseLlm = e.target.checked; });
+
+    // Import button for AI
+    overlay.querySelector('[data-import-fleet="f2"]')?.addEventListener('click', () => {
+      openFleetImport('f2', (parsed) => {
+        _aiImportFaction = parsed.faction;
+        if (parsed.secondaries?.[0]) _aiSec1 = parsed.secondaries[0];
+        if (parsed.secondaries?.[1]) _aiSec2 = parsed.secondaries[1];
+        renderSetupOverlay();
+      });
+    });
+  }
+
   const exitBtn = overlay.querySelector('#exit-to-menu');
   if (exitBtn) exitBtn.addEventListener('click', () => {
     showModeSelector(); // appends mode selector overlay first
@@ -16237,6 +16428,16 @@ const _netSide      = (_netParams.get('side') || '').toLowerCase(); // 'player1'
 const _isSpectator  = _netSide === 'spectator';
 let _spectators = []; // usernames of current spectators, kept in sync via 'spectators' server messages
 // Hotseat save room ID — generated once when the game moves past setup, persists for that session.
+let _aiFleetMode     = 'fastplay'; // 'fastplay' | 'generate' | 'import'
+let _aiGenFaction    = 'random';
+let _aiImportFaction = null;
+let _aiSec1          = 'random';   // secondary 1: 'random' or a SECONDARY_OBJECTIVES key
+let _aiSec2          = 'random';   // secondary 2
+let _aiPersonality   = 'random';   // 'random' or specific personality key
+let _aiTargetPts     = 1500;
+let _aiUseLlm        = false;
+let _aiFleetBuilt    = false;      // generate mode: true after Generate button clicked
+
 let _hotseatRoomId          = null;
 let _hotseatSeed             = null;
 let _hotseatPlayStartState   = null;
@@ -16826,7 +17027,7 @@ async function showModeSelector() {
           background:rgba(74,214,255,0.08);border:1px solid rgba(74,214,255,0.35);border-radius:3px;
           color:var(--shal);font-family:var(--mono);font-size:9px;letter-spacing:0.08em;
           padding:5px 10px;cursor:pointer;font-weight:700;">
-          ⬡ ${currentUser.username}${currentUser.role === 'admin' ? ' <span style="color:var(--hull-warn);font-size:7px;letter-spacing:0.1em;">ADMIN</span>' : ''}
+          ⬡ <span style="color:var(--shal);">${currentUser.username}</span>${currentUser.role === 'admin' ? ' <span style="color:var(--hull-warn);font-size:7px;letter-spacing:0.1em;">ADMIN</span>' : ''}
         </button>
       ` : ''}
     </div>
@@ -16854,6 +17055,8 @@ async function showModeSelector() {
     return `<span style="color:var(--text);font-weight:700;margin-right:6px;">${s.roomId}</span>${detail}`;
   }
 
+  let savesTab = 'all';
+
   function render(view) {
     let html = '';
     if (view === 'main') {
@@ -16868,6 +17071,10 @@ async function showModeSelector() {
           App v${APP_VERSION} &nbsp;·&nbsp; Rulebook v${RULEBOOK_VERSION} &nbsp;·&nbsp; Errata v${ERRATA_VERSION}
         </div>
         <div class="setup-body" style="display:flex;flex-direction:column;gap:12px;padding:24px;">
+          <button class="btn-primary" id="ms-solo" style="padding:14px 10px;font-size:13px;">
+            🎮 SINGLE PLAYER
+            <div style="font-size:10px;font-weight:400;color:rgba(255,255,255,0.5);margin-top:3px;">Play against an AI opponent</div>
+          </button>
           <button class="btn-primary" id="ms-hotseat" style="padding:14px 10px;font-size:13px;">
             ⚔ HOTSEAT
             <div style="font-size:10px;font-weight:400;color:rgba(255,255,255,0.5);margin-top:3px;">Two players, one screen</div>
@@ -16884,10 +17091,6 @@ async function showModeSelector() {
             👁 SPECTATE
             <div style="font-size:10px;font-weight:400;color:var(--text-mute);margin-top:3px;">Watch a live game</div>
           </button>
-          ${(currentUser?.aiAccess || currentUser?.role === 'admin') ? `<button class="btn" id="ms-solo" style="padding:14px 10px;font-size:13px;">
-            🤖 SOLO vs AI
-            <div style="font-size:10px;font-weight:400;color:var(--text-mute);margin-top:3px;">Single-player — play against an AI opponent</div>
-          </button>` : ''}
           ${savesBtn}
         </div>
       </div>`;
@@ -16901,17 +17104,33 @@ async function showModeSelector() {
             <button class="btn" data-ms-delete="${s.roomId}" style="padding:7px 10px;font-size:11px;color:var(--hull-crit);border-color:var(--hull-crit);" title="Delete save">🗑</button>
           </div>
         </div>`;
-      const sectionHdr = label => `<div style="font-size:9px;letter-spacing:0.1em;color:var(--text-mute);padding:4px 2px 2px;border-bottom:1px solid rgba(255,255,255,0.07);margin-bottom:2px;">${label}</div>`;
       const hotseatSaves = saves.filter(s => s.isHotseat);
       const soloSaves    = saves.filter(s => s.isAi && !s.isHotseat);
       const onlineSaves  = saves.filter(s => !s.isHotseat && !s.isAi);
-      const hsSection  = hotseatSaves.length ? sectionHdr('HOTSEAT')    + hotseatSaves.map(makeRow).join('') : '';
-      const aiSection  = soloSaves.length    ? sectionHdr('SOLO vs AI') + soloSaves.map(makeRow).join('')    : '';
-      const netSection = onlineSaves.length  ? sectionHdr('ONLINE')     + onlineSaves.map(makeRow).join('')  : '';
+      const tabDefs = [
+        { key: 'solo',    label: 'Single Player', saves: soloSaves },
+        { key: 'hotseat', label: 'Hotseat',        saves: hotseatSaves },
+        { key: 'online',  label: 'Online',          saves: onlineSaves },
+      ].filter(t => t.saves.length > 0);
+      if (!tabDefs.some(t => t.key === savesTab)) savesTab = tabDefs.length ? tabDefs[0].key : 'none';
+      const visibleSaves = tabDefs.find(t => t.key === savesTab)?.saves ?? [];
+      const tabBar = tabDefs.length > 1 ? `<div style="display:flex;border-bottom:1px solid var(--border);">
+        ${tabDefs.map(t => `<button data-saves-tab="${t.key}" style="
+          flex:1;padding:8px 4px;font-size:10px;font-family:var(--mono);letter-spacing:0.08em;
+          background:none;border:none;border-bottom:2px solid ${savesTab===t.key?'var(--accent,#4ad6ff)':'transparent'};
+          color:${savesTab===t.key?'var(--text)':'var(--text-mute)'};cursor:pointer;text-align:center;
+          transition:color 0.15s,border-color 0.15s;">
+          ${t.label}<span style="margin-left:5px;opacity:0.6;font-size:9px;">${t.saves.length}</span>
+        </button>`).join('')}
+      </div>` : '';
+      const listHtml = visibleSaves.length
+        ? visibleSaves.map(makeRow).join('')
+        : `<div style="color:var(--text-mute);font-size:11px;text-align:center;padding:24px 0;">No saved games</div>`;
       html = `<div class="setup-card" style="max-width:440px;">
         <div class="setup-header"><h2 class="setup-title">SAVED GAMES</h2></div>
-        <div class="setup-body" style="padding:16px;display:flex;flex-direction:column;gap:8px;max-height:60vh;overflow-y:auto;">
-          ${hsSection}${aiSection}${netSection}
+        ${tabBar}
+        <div class="setup-body" style="padding:16px;display:flex;flex-direction:column;gap:8px;height:524px;overflow-y:auto;">
+          ${listHtml}
         </div>
         <div class="setup-footer"><button class="btn" id="ms-back">← Back</button></div>
       </div>`;
@@ -16956,13 +17175,24 @@ async function showModeSelector() {
         <div class="setup-footer"><button class="btn" id="ms-back">← Back</button></div>
       </div>`;
     } else if (view === 'solo') {
-      const _soloSecOpts = () => Object.entries(SECONDARY_OBJECTIVES)
+      const _soloSecOpts = () => `<option value="random">Random</option>` + Object.entries(SECONDARY_OBJECTIVES)
         .filter(([, v]) => !v.nominate)
         .map(([k, v]) => `<option value="${k}">${v.name}</option>`)
         .join('');
       html = `<div class="setup-card" style="max-width:380px;">
-        <div class="setup-header"><h2 class="setup-title">SOLO vs AI</h2></div>
+        <div class="setup-header"><h2 class="setup-title">SINGLE PLAYER</h2></div>
         <div class="setup-body" style="padding:24px;display:flex;flex-direction:column;gap:16px;">
+          ${(currentUser?.aiAccess || currentUser?.role === 'admin') ? `<div style="display:flex;align-items:center;justify-content:space-between;padding:10px 12px;background:var(--bg-card);border:1px solid var(--border);border-radius:4px;">
+            <div>
+              <div style="font-size:11px;font-family:var(--mono);letter-spacing:0.05em;">LLM AI</div>
+              <div style="font-size:9px;color:var(--text-mute);margin-top:2px;">Use language model for decisions</div>
+            </div>
+            <label style="position:relative;display:inline-block;width:36px;height:20px;cursor:pointer;">
+              <input type="checkbox" id="solo-use-llm" style="opacity:0;width:0;height:0;">
+              <span id="solo-llm-track" style="position:absolute;inset:0;background:var(--border);border-radius:10px;transition:background 0.2s;"></span>
+              <span id="solo-llm-thumb" style="position:absolute;top:3px;left:3px;width:14px;height:14px;background:#fff;border-radius:50%;transition:transform 0.2s;"></span>
+            </label>
+          </div>` : ''}
           <div>
             <div style="font-size:9px;letter-spacing:0.1em;color:var(--text-mute);font-family:var(--mono);margin-bottom:5px;">AI PERSONALITY</div>
             <select id="solo-personality" class="fleet-dropdown">
@@ -16990,11 +17220,9 @@ async function showModeSelector() {
             <div style="font-size:9px;letter-spacing:0.1em;color:var(--text-mute);font-family:var(--mono);margin-bottom:4px;">AI SECONDARIES</div>
             <div style="font-size:9px;color:var(--text-mute);margin-bottom:6px;">Map-nomination objectives (Key Site, Long Shot, etc.) not yet supported for AI.</div>
             <select id="solo-sec1" class="fleet-dropdown">
-              <option value="">— Secondary 1 (optional) —</option>
               ${_soloSecOpts()}
             </select>
             <select id="solo-sec2" class="fleet-dropdown" style="margin-top:4px;">
-              <option value="">— Secondary 2 (optional) —</option>
               ${_soloSecOpts()}
             </select>
           </div>
@@ -17051,7 +17279,19 @@ async function showModeSelector() {
       overlay.querySelector('#ms-join').onclick    = () => render('join');
       overlay.querySelector('#ms-spectate').onclick = () => render('spectate');
       const soloBtn = overlay.querySelector('#ms-solo');
-      if (soloBtn) soloBtn.onclick = () => render('solo');
+      if (soloBtn) soloBtn.onclick = async () => {
+        soloBtn.disabled = true;
+        try {
+          const res  = await fetch('/api/rooms', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ aiOpponent: true, aiSide: 'player2' }),
+          });
+          const data = await res.json();
+          if (data.error) { alert(data.error); return; }
+          location.href = `${location.pathname}?room=${data.roomId}&side=player1`;
+        } catch { alert('Could not reach server.'); } finally { soloBtn.disabled = false; }
+      };
       const savesBtn = overlay.querySelector('#ms-saves');
       if (savesBtn) savesBtn.onclick = () => render('saves');
     }
@@ -17116,14 +17356,17 @@ async function showModeSelector() {
             const data = await res.json();
             if (!data.ok) { alert(data.error || 'Delete failed.'); btn.disabled = false; return; }
             saves = saves.filter(s => s.roomId !== id);
-            if (saves.length) render('saves'); else render('main');
+            if (saves.length) render('saves'); else { savesTab = 'all'; render('main'); }
           } catch (err) {
             alert('Could not reach server: ' + err.message);
             btn.disabled = false;
           }
         };
       });
-      overlay.querySelector('#ms-back').onclick = () => render('main');
+      overlay.querySelectorAll('[data-saves-tab]').forEach(btn => {
+        btn.onclick = () => { savesTab = btn.dataset.savesTab; render('saves'); };
+      });
+      overlay.querySelector('#ms-back').onclick = () => { savesTab = 'all'; render('main'); };
     }
     if (view === 'solo') {
       // Keep the two secondary pickers mutually exclusive.
@@ -17134,24 +17377,38 @@ async function showModeSelector() {
           const sel = overlay.querySelector(id);
           if (!sel) return;
           const other = vals[1 - i];
-          sel.querySelectorAll('option').forEach(o => { o.disabled = !!(o.value && o.value === other); });
+          sel.querySelectorAll('option').forEach(o => { o.disabled = !!(o.value && o.value !== 'random' && o.value === other); });
         });
       };
       _secSelIds.forEach(id => {
         const el = overlay.querySelector(id);
         if (el) el.addEventListener('change', updateSecMutex);
       });
+      const llmToggle = overlay.querySelector('#solo-use-llm');
+      if (llmToggle) {
+        llmToggle.addEventListener('change', () => {
+          const track = overlay.querySelector('#solo-llm-track');
+          const thumb = overlay.querySelector('#solo-llm-thumb');
+          if (track) track.style.background = llmToggle.checked ? 'var(--accent, #4a9eff)' : 'var(--border)';
+          if (thumb) thumb.style.transform  = llmToggle.checked ? 'translateX(16px)' : '';
+        });
+      }
       overlay.querySelector('#solo-start').addEventListener('click', async () => {
         const personality = overlay.querySelector('#solo-personality')?.value || 'balanced';
         const faction     = overlay.querySelector('#solo-faction')?.value   || '';
-        const sec1        = overlay.querySelector('#solo-sec1')?.value      || '';
-        const sec2        = overlay.querySelector('#solo-sec2')?.value      || '';
+        const _aiSecPool  = Object.entries(SECONDARY_OBJECTIVES).filter(([,v])=>!v.nominate).map(([k])=>k);
+        const _pickSec    = (excl=[]) => { const p=_aiSecPool.filter(k=>!excl.includes(k)); return p[Math.floor(Math.random()*p.length)]||null; };
+        const sec1raw     = overlay.querySelector('#solo-sec1')?.value || 'random';
+        const sec2raw     = overlay.querySelector('#solo-sec2')?.value || 'random';
+        const sec1        = sec1raw === 'random' ? _pickSec()              : sec1raw;
+        const sec2        = sec2raw === 'random' ? _pickSec(sec1?[sec1]:[]) : sec2raw;
         const targetPts   = parseInt(overlay.querySelector('#solo-pts')?.value || '1500', 10) || 1500;
+        const useLlm      = !!(overlay.querySelector('#solo-use-llm')?.checked);
         const msgEl       = overlay.querySelector('#solo-msg');
         if (!faction) { if (msgEl) msgEl.textContent = 'Select a faction for the AI first.'; return; }
         if (msgEl) msgEl.textContent = '';
         overlay.querySelector('#solo-start').disabled = true;
-        await doSoloVsAi({ personality, faction, secondaries: [sec1, sec2].filter(Boolean), targetPts });
+        await doSoloVsAi({ personality, faction, secondaries: [sec1, sec2].filter(Boolean), targetPts, useLlm });
         const startBtn = overlay.querySelector('#solo-start');
         if (startBtn) startBtn.disabled = false;
       });
@@ -17260,13 +17517,13 @@ async function showModeSelector() {
     }
   }
 
-  async function doSoloVsAi({ personality, faction, secondaries, targetPts = 1500 }) {
+  async function doSoloVsAi({ personality, faction, secondaries, targetPts = 1500, useLlm = false }) {
     const msgEl = () => overlay.querySelector('#solo-msg');
     try {
       const res  = await fetch('/api/rooms', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ aiOpponent: true, aiSide: 'player2', aiPersonality: personality, aiFaction: faction, aiSecondaries: secondaries, targetPts }),
+        body: JSON.stringify({ aiOpponent: true, aiSide: 'player2', aiPersonality: personality, aiFaction: faction, aiSecondaries: secondaries, targetPts, aiUseLlm: useLlm }),
       });
       const data = await res.json();
       if (data.error) { if (msgEl()) msgEl().textContent = data.error; return; }

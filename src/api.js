@@ -9,6 +9,8 @@ import { APP_VERSION, RULEBOOK_VERSION, ERRATA_VERSION } from './engine/version.
 import { getRoomSlot, setRoomSlot, getSaveOwners, deleteSaveDb } from './db.js';
 import { triggerAi, shouldAiAct } from './ai/index.js';
 import { buildAiFleet } from './ai/fleet-builder.js';
+import { parseNewRecruit } from './fleet/parser.js';
+import { FLEET_DB } from './fleet/db.js';
 
 export const router = Router();
 
@@ -18,8 +20,8 @@ router.get('/meta', (_req, res) => {
 });
 
 // POST /api/rooms — create a new room, return its code.
-// Accepts optional body { aiOpponent, aiSide, aiPersonality, aiFaction, aiSecondaries }
-// for solo-vs-AI rooms (Phase A stub — full fleet-builder not yet implemented).
+// Accepts optional body { aiOpponent, aiSide, aiPersonality, aiFaction, aiSecondaries, targetPts }
+// for solo-vs-AI rooms. aiFaction is optional — omit to defer fleet building to /build-ai.
 router.post('/rooms', (req, res) => {
   const room = createRoom();
   console.log(`Room ${room.id} created (seed ${room.seed})`);
@@ -28,19 +30,20 @@ router.post('/rooms', (req, res) => {
     setRoomSlot(room.id, 'player1', req.user.id);
   }
 
-  const { aiOpponent, aiSide, aiPersonality, aiFaction, aiSecondaries } = req.body || {};
+  const { aiOpponent, aiSide, aiPersonality, aiFaction, aiSecondaries, aiUseLlm } = req.body || {};
   if (aiOpponent) {
     const side = aiSide === 'player1' ? 'player1' : 'player2';
     const slot = side === 'player1' ? 'f1' : 'f2';
     room.aiSide        = side;
     room.aiPersonality = aiPersonality || 'balanced';
+    room.aiUseLlm      = !!aiUseLlm;
     room.state.aiSide  = side; // persisted in state JSON for resume
 
     const PERSONALITY_LABELS = { aggressive:'Aggressive', positional:'Positional', defensive:'Defensive', balanced:'Balanced', opportunist:'Opportunist' };
     room.state.aiOpponent   = true;
     room.state.aiPersonality = room.aiPersonality;
     room.state.fleetChoices[slot]    = aiFaction || null;
-    room.state.secondaryChoice[slot] = Array.isArray(aiSecondaries) ? aiSecondaries.slice(0, 2) : [];
+    room.state.secondaryChoice[slot] = Array.isArray(aiSecondaries) && aiSecondaries.length ? aiSecondaries.slice(0, 2) : null; // resolved after fleet build
     room.state.playerNames[slot]     = `AI (${PERSONALITY_LABELS[room.aiPersonality] || 'Balanced'})`;
 
     if (aiFaction) {
@@ -53,8 +56,12 @@ router.post('/rooms', (req, res) => {
       if (fleet) {
         room.state.importedFleets[slot] = fleet;
         room.aiTactics = fleet.tactics || [];
+        if (room.state.secondaryChoice[slot] === null) {
+          room.state.secondaryChoice[slot] = fleet.secondaries || [];
+        }
       }
     }
+    if (room.state.secondaryChoice[slot] === null) room.state.secondaryChoice[slot] = [];
     console.log(`Room ${room.id} — AI on ${side} (${room.aiPersonality}, ${aiFaction || 'no faction'})`);
   }
 
@@ -62,6 +69,84 @@ router.post('/rooms', (req, res) => {
   if (allowSpectators === false) room.allowSpectators = false;
 
   res.json({ roomId: room.id, seed: room.seed });
+});
+
+// POST /api/rooms/:id/build-ai — build/rebuild the AI fleet. Called at "Begin vs AI".
+// Body: { mode: 'fastplay'|'generate'|'import', personality, useLlm, secondaries,
+//         faction (fastplay/generate), targetPts (generate), importText (import) }
+router.post('/rooms/:id/build-ai', (req, res) => {
+  const room = getRoom(req.params.id.toUpperCase());
+  if (!room) return res.status(404).json({ error: 'Room not found' });
+  if (!room.aiSide) return res.status(400).json({ error: 'Not a solo room' });
+
+  const slot = room.aiSide === 'player1' ? 'f1' : 'f2';
+  const { mode = 'generate', faction, targetPts, useLlm, secondaries, importText, personality } = req.body || {};
+
+  room.aiPersonality           = personality || 'balanced';
+  room.aiUseLlm                = !!useLlm;
+  room.state.aiPersonality     = room.aiPersonality;
+
+  let fleet = null;
+  let resolvedFaction = faction;
+
+  if (mode === 'fastplay' || mode === 'quickplay') {
+    if (!faction) return res.status(400).json({ error: 'Select an AI faction first' });
+    fleet = buildAiFleet(faction); // legacy string call → fastplay list
+    resolvedFaction = faction;
+
+  } else if (mode === 'generate') {
+    const allFactions = Object.keys(FLEET_DB);
+    resolvedFaction = (!faction || faction === 'random')
+      ? allFactions[Math.floor(Math.random() * allFactions.length)]
+      : faction;
+    fleet = buildAiFleet({ faction: resolvedFaction, targetPts: targetPts || 1500, personality: room.aiPersonality });
+    if (!fleet) return res.status(500).json({ error: 'Fleet builder failed — try a different faction or point total' });
+
+  } else if (mode === 'import') {
+    if (!importText?.trim()) return res.status(400).json({ error: 'Paste a fleet list first' });
+    const parsed = parseNewRecruit(importText);
+    if (!parsed?.valid || !parsed.groups?.length) return res.status(400).json({ error: 'Could not parse fleet list — check the format' });
+    fleet = { faction: parsed.faction, groups: parsed.groups, admirals: parsed.admirals || [], admiralLevel: parsed.admiralLevel || 0, secondaries: parsed.secondaries || [], tactics: [] };
+    resolvedFaction = parsed.faction;
+
+  } else {
+    return res.status(400).json({ error: 'Unknown mode' });
+  }
+
+  room.state.fleetChoices[slot]   = resolvedFaction;
+  room.state.importedFleets[slot] = fleet;
+  room.aiTactics = fleet.tactics || [];
+
+  if (Array.isArray(secondaries) && secondaries.length) {
+    room.state.secondaryChoice[slot] = secondaries.slice(0, 2);
+  } else {
+    room.state.secondaryChoice[slot] = fleet.secondaries || [];
+  }
+
+  const PERSONALITY_LABELS = { aggressive:'Aggressive', positional:'Positional', defensive:'Defensive', balanced:'Balanced', opportunist:'Opportunist' };
+  room.state.playerNames[slot] = `AI (${PERSONALITY_LABELS[room.aiPersonality] || 'Balanced'})`;
+  broadcast(room, { type: 'full', state: room.state });
+  console.log(`Room ${room.id} — AI fleet built [${mode}]: ${resolvedFaction} ${room.aiPersonality}`);
+  res.json({ ok: true, faction: resolvedFaction, secondaries: room.state.secondaryChoice[slot] });
+});
+
+// POST /api/rooms/:id/configure-ai — update AI personality/useLlm/secondaries without rebuilding fleet.
+router.post('/rooms/:id/configure-ai', (req, res) => {
+  const room = getRoom(req.params.id.toUpperCase());
+  if (!room) return res.status(404).json({ error: 'Room not found' });
+  if (!room.aiSide) return res.status(400).json({ error: 'Not a solo room' });
+  const { personality, useLlm, secondaries } = req.body || {};
+  const slot = room.aiSide === 'player1' ? 'f1' : 'f2';
+  const PERSONALITY_LABELS = { aggressive:'Aggressive', positional:'Positional', defensive:'Defensive', balanced:'Balanced', opportunist:'Opportunist' };
+  if (personality) {
+    room.aiPersonality = personality;
+    room.state.aiPersonality = personality;
+    room.state.playerNames[slot] = `AI (${PERSONALITY_LABELS[personality] || personality})`;
+  }
+  if (useLlm !== undefined) room.aiUseLlm = !!useLlm;
+  if (Array.isArray(secondaries) && secondaries.length) room.state.secondaryChoice[slot] = secondaries.slice(0, 2);
+  broadcast(room, { type: 'full', state: room.state });
+  res.json({ ok: true });
 });
 
 // GET /api/rooms — list live spectatable games.

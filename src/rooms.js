@@ -47,6 +47,7 @@ export function createRoom(forceId = null) {
     chatHistory: [],        // [{side, username, text, ts}] — ephemeral, capped at 200
     aiSide: null,           // 'player1' | 'player2' | null — slot occupied by the AI
     aiPersonality: null,    // personality key ('balanced', 'aggressive', etc.)
+    aiUseLlm: false,        // true = use LLM for decisions (requires llmAvailable on server)
     aiPending: false,       // guard against concurrent AI triggers
     allowSpectators: true,  // host can disable spectating
   };
