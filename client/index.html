@@ -16874,6 +16874,10 @@ async function showModeSelector() {
           ${(currentUser?.aiAccess || currentUser?.role === 'admin') ? `<button class="btn" id="ms-solo" style="padding:14px 10px;font-size:13px;">
             🤖 SOLO vs AI
             <div style="font-size:10px;font-weight:400;color:var(--text-mute);margin-top:3px;">Single-player — play against an AI opponent</div>
+          </button>
+          <button class="btn" id="ms-ai-test" style="padding:14px 10px;font-size:13px;">
+            🤖 AI vs AI
+            <div style="font-size:10px;font-weight:400;color:var(--text-mute);margin-top:3px;">Watch two AIs play — random fleets &amp; scenario</div>
           </button>` : ''}
           ${savesBtn}
         </div>
@@ -17012,6 +17016,19 @@ async function showModeSelector() {
       overlay.querySelector('#ms-join').onclick    = () => render('join');
       const soloBtn = overlay.querySelector('#ms-solo');
       if (soloBtn) soloBtn.onclick = () => render('solo');
+      const aiTestBtn = overlay.querySelector('#ms-ai-test');
+      if (aiTestBtn) aiTestBtn.onclick = async () => {
+        aiTestBtn.disabled = true;
+        aiTestBtn.textContent = 'Starting…';
+        try {
+          const r = await fetch('/api/rooms', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ aiVsAi: true }) });
+          const { roomId } = await r.json();
+          window.location.href = `/?room=${roomId}&spectate=1`;
+        } catch(e) {
+          aiTestBtn.disabled = false;
+          aiTestBtn.innerHTML = '🤖 AI vs AI<div style="font-size:10px;font-weight:400;color:var(--hull-crit);margin-top:3px;">Failed — try again</div>';
+        }
+      };
       const savesBtn = overlay.querySelector('#ms-saves');
       if (savesBtn) savesBtn.onclick = () => render('saves');
     }
