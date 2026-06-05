@@ -45,7 +45,7 @@ function rollout(state, rootSide, depth, rng) {
     const base = legalActions(s, activeSide);
     const activeGid = Object.keys(s.groups || {}).find(gid => {
       const grp = s.groups[gid];
-      return grp.side === activeSide && grp.order && !grp.activated;
+      return grp.def?.side === activeSide && grp.order && !grp.activated;
     });
     if (activeGid) {
       const grp = s.groups[activeGid];
@@ -61,7 +61,8 @@ function rollout(state, rootSide, depth, rng) {
     // Bias toward decisive intents so rollouts converge on meaningful states
     const priority = base.filter(a =>
       a.type === 'finishActivation' || a.type === 'beginActivation' ||
-      a.type === 'applyOrder' || a.type === 'endRound'
+      a.type === 'applyOrder' || a.type === 'endRound' ||
+      a.type === 'lockWeaponTarget'
     );
     const pool = priority.length ? priority : base;
     const intent = pool[Math.floor(rng() * pool.length)];

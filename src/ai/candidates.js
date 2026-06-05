@@ -33,7 +33,7 @@ export function moveCandidates(state, gid, si, { steps = 8, rings = 3 } = {}) {
       const x = ship.x + Math.cos(bearing) * dist;
       const y = ship.y + Math.sin(bearing) * dist;
       const intent = { type: 'moveShip', gid, si, x, y };
-      if (isLegal(state, intent, grp.side)) candidates.push(intent);
+      if (isLegal(state, intent, grp.def?.side)) candidates.push(intent);
     }
   }
 
@@ -41,24 +41,28 @@ export function moveCandidates(state, gid, si, { steps = 8, rings = 3 } = {}) {
 }
 
 /**
- * Return candidate lockTarget intents for all legal weapon/target combos
- * for the active ship in `gid`.
+ * Return candidate lockWeaponTarget intents for all legal weapon/target combos
+ * for ships in `gid` (per weapon index, per enemy ship).
  */
 export function targetCandidates(state, gid) {
   const grp = state.groups[gid];
-  if (!grp) return [];
+  if (!grp || !grp.def?.weapons) return [];
+  const side = grp.def?.side;
   const candidates = [];
-  for (const [tgid, tgrp] of Object.entries(state.groups)) {
-    if (tgrp.side === grp.side) continue;
-    tgrp.ships.forEach((tship, tsi) => {
-      if (tship.destroyed || tship.offTable) return;
-      grp.ships.forEach((ship, si) => {
-        if (ship.destroyed || ship.offTable) return;
-        const def = Object.values(state.groups).find(g => g.id === gid); // unused — gating checks internally
-        const intent = { type: 'lockTarget', gid, si, targetGid: tgid, targetSi: tsi };
-        if (isLegal(state, intent, grp.side)) candidates.push(intent);
-      });
+
+  grp.ships.forEach((ship, si) => {
+    if (ship.destroyed || ship.offTable) return;
+    grp.def.weapons.forEach((_w, wi) => {
+      for (const [tgid, tgrp] of Object.entries(state.groups)) {
+        if (tgrp.def?.side === side) continue;
+        tgrp.ships.forEach((tship, tsi) => {
+          if (tship.destroyed || tship.offTable) return;
+          const intent = { type: 'lockWeaponTarget', gid, si, wi, targetGid: tgid, targetSi: tsi };
+          if (isLegal(state, intent, side)) candidates.push(intent);
+        });
+      }
     });
-  }
+  });
+
   return candidates;
 }
