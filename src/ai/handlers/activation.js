@@ -55,7 +55,7 @@ function arriveGroup(state, gid, grp, aiSide, applyFn, overrideTargetX = null) {
   });
 }
 
-export async function handleActivation(state, rng, aiSide, personality, applyFn) {
+export async function handleActivation(state, rng, aiSide, personality, applyFn, opts = {}) {
   // Auto-finish groups not yet eligible to arrive this round.
   for (const [gid, grp] of Object.entries(state.groups)) {
     if (grp.def?.side !== aiSide || grp.activated) continue;
@@ -74,7 +74,7 @@ export async function handleActivation(state, rng, aiSide, personality, applyFn)
   let options = progOptions;
   let chosen;
 
-  if (llmAvailable) {
+  if (llmAvailable && !opts.noLlm) {
     const briefing     = buildStateBriefing(state, aiSide);
     const capabilities = buildGroupCapabilities(state, aiSide);
     try {

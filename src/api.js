@@ -58,6 +58,7 @@ router.post('/rooms', (req, res) => {
     const factionP2 = _pick(_AI_FACTIONS);
     room.aiSide        = 'both';
     room.aiPersonality = personality;
+    room.noLlm         = true; // use fallback-only AI — avoids rate-limiting both sides
     room.state.aiSide  = 'both';
     room.state.aiVsAi  = true;
     room.state.aiPersonality = personality;
