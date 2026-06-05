@@ -310,12 +310,12 @@ function buildFull({ faction, targetPts, admiralLevel = 0, personality = 'balanc
     }
 
     // #5 — Greedy close-out: if still short of the 97% floor, make one targeted pass
-    // picking the single largest group that fits the exact remaining gap.
+    // picking the single largest group that fits the remaining gap.
+    // Bypasses GROUP_CAP (one extra group is acceptable to close the budget).
     if (totalPts + admPts < minPts) {
       const gap = groupBudget - totalPts;
-      // Candidates that fit within the gap, sorted descending by cost (closest to gap first).
       const closeOuts = [...lSorted, ...mSorted, ...hSorted]
-        .filter(s => fits(s.name, s.def, true) && groupCost(s.def) <= gap)
+        .filter(s => fits(s.name, s.def, false) && groupCost(s.def) <= gap)
         .sort((a, b) => groupCost(b.def) - groupCost(a.def));
       if (closeOuts.length) add(closeOuts[0].name, closeOuts[0].def);
     }
