@@ -8986,22 +8986,32 @@ function _layerToggleBtnHTML(def, grp, si, sideClass) {
 /* Activation HUD: Undo Move · Finish Activation · Undo Deploy
    Floats at the bottom-right of the board so the detail panel stays uncluttered. */
 // Collapsed state for the mobile activation bottom-sheet (tap the title bar to toggle).
-let _actHudCollapsed = false;
-function _wireActHudCollapse(hud) {
+let _actHudCollapsed = false;   // manual collapse preference
+let _actHudGid = null;          // group the HUD last rendered for
+// "Tap a target" cursors — while any is active the HUD auto-collapses to reveal the map.
+function _actHudAiming() {
+  return !!(state.targeting || state.detector || state.extracting || state.antiWing || state.featureAttack);
+}
+function _wireActHudCollapse(hud, gid) {
   if (!_isMobileLayout()) return;
   const handle = hud.querySelector('.dfc-panel-handle');
   if (!handle) return;
-  hud.classList.toggle('collapsed', _actHudCollapsed);
+  // A new group activating starts expanded.
+  if (gid !== _actHudGid) { _actHudGid = gid; _actHudCollapsed = false; }
   let chev = handle.querySelector('.act-collapse-chev');
   if (!chev) { chev = document.createElement('span'); chev.className = 'act-collapse-chev'; handle.appendChild(chev); }
-  chev.textContent = _actHudCollapsed ? '▲' : '▼';
+  const apply = () => {
+    const collapsed = _actHudCollapsed || _actHudAiming();
+    hud.classList.toggle('collapsed', collapsed);
+    chev.textContent = collapsed ? '▲' : '▼';
+  };
   handle.style.cursor = 'pointer';
   handle.addEventListener('click', (e) => {
     if (e.target.closest('button')) return;
     _actHudCollapsed = !_actHudCollapsed;
-    hud.classList.toggle('collapsed', _actHudCollapsed);
-    chev.textContent = _actHudCollapsed ? '▲' : '▼';
+    apply();
   });
+  apply();
 }
 function renderActivationHUD() {
   const board = { appendChild(el) { document.body.appendChild(el); initPanel(el, 'ACTIVATION', 'act-hud', 8, 380); } };
@@ -9328,7 +9338,7 @@ function renderActivationHUD() {
     ${anyOnTableNotMoved ? '' : passBtn}
   `;
   board.appendChild(hud);
-  _wireActHudCollapse(hud);
+  _wireActHudCollapse(hud, gid);
 }
 
 function renderDeployHint() {
