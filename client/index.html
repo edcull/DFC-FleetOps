@@ -1064,6 +1064,7 @@
   /* Order buttons inside the activation HUD — desktop uses the detail panel, so
      this 3×2 grid is shown only on mobile. */
   .act-orders { display: none; grid-template-columns: repeat(3, 1fr); gap: 4px; margin: 4px 0 6px; }
+  .act-atmo { display: none; margin: 0 0 6px; }
 
   /* Setup mobile tab bar (Player 1 / Player 2 / Scenario) — shown only ≤860px. */
   .setup-mtabs { display: none; gap: 5px; margin-bottom: 12px; }
@@ -1174,6 +1175,7 @@
        the board toggles live in the scenario banner row instead. */
     #hud-active, #hud-turn-info { display: none !important; }
     .act-orders { display: grid; }
+    .act-atmo { display: block; }
     .board-legend { display: none; }
 
     /* The scenery-placement and deployment phase HUDs live in the top-left board
@@ -3389,29 +3391,9 @@ function renderDetail() {
     }
     // Layer toggle button — shown right after the orders section, before weapons.
     // Only visible when a ship is selected, has movement available, and hasn't moved yet.
-    if (!isOpponent && state.selectedShipIdx !== null) {
-      const ltShip = grp.ships[state.selectedShipIdx];
-      const ltOrder = effectiveOrder(def, grp, state.selectedShipIdx);
-      const ltO = ltOrder && ORDERS[ltOrder];
-      if (ltShip && !ltShip.destroyed && !ltShip.offTable && !ltShip.movedThisRound && ltO && ltO.moveMax > 0) {
-        const ltCurLayer = ltShip.layer || 'orbit';
-        const ltDecayed = ltShip.crippling && ltShip.crippling.includes('decay');
-        if (ltCurLayer === 'atmosphere' && ltDecayed) {
-          ordersHTML += `<div class="panel-section" style="padding-top:0;padding-bottom:2px;">
-            <button class="btn" disabled style="width:100%;opacity:0.45;cursor:not-allowed;">↑ Ascend to Orbit — Orbital Decay</button>
-          </div>`;
-        } else {
-          const ltNormalMaxR = effectiveMaxMovePx(def, ltShip, ltOrder);
-          const ltToggleLabel = ltCurLayer === 'orbit'
-            ? (state.layerToggle ? '↓ Descending → Atmosphere' : '↓ Descend to Atmosphere')
-            : (state.layerToggle ? '↑ Ascending → Orbit (−4")' : '↑ Ascend to Orbit (−4")');
-          ordersHTML += `<div class="panel-section" style="padding-top:0;padding-bottom:2px;">
-            <button class="btn ${state.layerToggle ? sideClass : ''}" data-layer-toggle="1"
-              style="width:100%;${state.layerToggle ? 'border-color:var(--'+sideClass+');color:var(--'+sideClass+');' : ''}">
-              ${ltToggleLabel}${state.layerToggle ? ' ✓' : ''}</button>
-          </div>`;
-        }
-      }
+    if (!isOpponent) {
+      const _ltHTML = _layerToggleBtnHTML(def, grp, state.selectedShipIdx, sideClass);
+      if (_ltHTML) ordersHTML += `<div class="panel-section" style="padding-top:0;padding-bottom:2px;">${_ltHTML}</div>`;
     }
   }
 
@@ -8964,6 +8946,27 @@ function renderExplosionHUD() {
   if (resolveBtn) resolveBtn.addEventListener('click', () => advanceAttack('explosion-next'));
 }
 
+/* Ascend/Descend (layer) toggle button HTML for a ship — '' when not applicable.
+   Shared by the detail panel and the mobile activation HUD. */
+function _layerToggleBtnHTML(def, grp, si, sideClass) {
+  if (si === null || si === undefined) return '';
+  const ltShip = grp.ships[si];
+  const ltOrder = effectiveOrder(def, grp, si);
+  const ltO = ltOrder && ORDERS[ltOrder];
+  if (!(ltShip && !ltShip.destroyed && !ltShip.offTable && !ltShip.movedThisRound && ltO && ltO.moveMax > 0)) return '';
+  const ltCurLayer = ltShip.layer || 'orbit';
+  const ltDecayed = ltShip.crippling && ltShip.crippling.includes('decay');
+  if (ltCurLayer === 'atmosphere' && ltDecayed) {
+    return `<button class="btn" disabled style="width:100%;opacity:0.45;cursor:not-allowed;">↑ Ascend to Orbit — Orbital Decay</button>`;
+  }
+  const ltToggleLabel = ltCurLayer === 'orbit'
+    ? (state.layerToggle ? '↓ Descending → Atmosphere' : '↓ Descend to Atmosphere')
+    : (state.layerToggle ? '↑ Ascending → Orbit (−4")' : '↑ Ascend to Orbit (−4")');
+  return `<button class="btn ${state.layerToggle ? sideClass : ''}" data-layer-toggle="1"
+      style="width:100%;${state.layerToggle ? 'border-color:var(--'+sideClass+');color:var(--'+sideClass+');' : ''}">
+      ${ltToggleLabel}${state.layerToggle ? ' ✓' : ''}</button>`;
+}
+
 /* Activation HUD: Undo Move · Finish Activation · Undo Deploy
    Floats at the bottom-right of the board so the detail panel stays uncluttered. */
 function renderActivationHUD() {
@@ -9239,19 +9242,35 @@ function renderActivationHUD() {
   // Contextual hint: guides the player through each activation stage
   let hintLine = '';
   let ordersGrid = '';
+  let atmoBtn = '';
   const _allOnTable = grp.ships.every(s => s.destroyed || !s.offTable);
-  if (!grp.order && _allOnTable) {
+  const _isMine = netIsMySide(def.side);
+  const _noOrderStage = !grp.order && _allOnTable;
+  const _moveStage    = grp.order && !anyMoved && _orderNeedsMove;
+  if (_noOrderStage) {
     hintLine = `<div style="font-size:10px;color:var(--hull-warn);margin-bottom:4px;">Select Group orders</div>`;
-    // On mobile, surface the six order buttons here (3×2 grid) — reuses the
-    // detail-panel [data-order] handler. Hidden on desktop via CSS.
-    const _oppDis = netIsMySide(def.side) ? '' : 'disabled';
-    ordersGrid = `<div class="act-orders">` +
-      Object.keys(ORDERS).map(k => `<button class="order-btn" data-order="${k}" ${_oppDis}>${ORDERS[k].short}</button>`).join('') +
-      `</div>`;
-  } else if (grp.order && !anyMoved && _orderNeedsMove) {
+  } else if (_moveStage) {
     hintLine = `<div style="font-size:10px;color:var(--hull-warn);margin-bottom:4px;">Click to set movement order</div>`;
   } else if (grp.order && (!_orderNeedsMove || anyMoved)) {
     hintLine = `<div style="font-size:10px;color:var(--hull-warn);margin-bottom:4px;">Select actions</div>`;
+  }
+  // On mobile, surface the six order buttons here (3×2 grid). They stay through the
+  // movement-order stage (so the order can still be changed) and hide once actions
+  // begin — reappearing after Undo Move. Reuses the detail-panel [data-order] handler.
+  if (_noOrderStage || _moveStage) {
+    const orderLocked = grp.order && grp.ships.some(s => !s.destroyed && s.movedThisRound);
+    ordersGrid = `<div class="act-orders">` +
+      Object.keys(ORDERS).map(k => {
+        const active = grp.order === k;
+        const dis = (!_isMine || (orderLocked && !active)) ? 'disabled' : '';
+        return `<button class="order-btn ${active ? 'active ' + sideClass : ''}" data-order="${k}" ${dis}>${ORDERS[k].short}</button>`;
+      }).join('') +
+      `</div>`;
+    // During the movement stage, show the ascend/descend atmosphere button (full width).
+    if (_moveStage && _isMine) {
+      const _lt = _layerToggleBtnHTML(def, grp, si, sideClass);
+      if (_lt) atmoBtn = `<div class="act-atmo">${_lt}</div>`;
+    }
   }
 
   hud = document.createElement('div');
@@ -9261,6 +9280,7 @@ function renderActivationHUD() {
     <div class="act-hud-name" style="color:var(--${sideClass});">${def.name}</div>
     ${hintLine}
     ${ordersGrid}
+    ${atmoBtn}
     ${undoBtn}
     ${finishBtn}
     ${cancelOrderBtn}
@@ -16956,7 +16976,11 @@ async function showModeSelector() {
               }
               dismiss();
               Object.assign(state, save.currentState);
-              rebuildFleets();
+              // Don't rebuildFleets() here — it wipes state.groups and re-lays every
+              // ship at its default deploy position, losing the saved deployment.
+              // The restored state already carries activeFleets + groups (matches the
+              // online full-state path). Only rebuild defs if they're somehow missing.
+              if (!state.activeFleets || !Object.keys(state.activeFleets).length) rebuildFleets();
               renderAll();
             } catch (err) { alert('Could not load save: ' + err.message); btn.disabled = false; btn.textContent = '▶ RESUME'; }
             return;
