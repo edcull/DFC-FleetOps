@@ -602,6 +602,7 @@
   .chat-msg-user { font-size: 8px; font-family: var(--mono); font-weight: 700; color: var(--text-dim); }
   .chat-msg-user.player1 { color: var(--ucm); }
   .chat-msg-user.player2 { color: var(--shal); }
+  .chat-msg-user.spectator { color: var(--text-mute); }
   .chat-msg-time { font-size: 7.5px; font-family: var(--mono); color: var(--text-mute); }
   .chat-msg-text { font-size: 10px; color: var(--text); line-height: 1.4; word-break: break-word; }
   .chat-input-row {
@@ -1108,15 +1109,13 @@
     /* Honour the notch / rounded-corner safe areas on the fixed top bar. */
     .topbar { padding: 0 max(8px, env(safe-area-inset-right)) 0 max(8px, env(safe-area-inset-left)); gap: 6px; }
     .brand { font-size: 14px; letter-spacing: 0.08em; gap: 5px; }
-    #topbar-user { display: none !important; }
-
-    /* Top bar: FLEET (left) · VP (centred) · DETAIL (right). display:contents lets
+    /* Top bar: FLEET (left) · VP (centred) · user-chip · DETAIL (right). display:contents lets
        the two toggle buttons become direct flex items so order can position them. */
     .topbar #topbar-controls { display: contents; }
     .topbar .brand { order: 1; flex: 1 1 auto; min-width: 0; justify-content: center; }
     #m-toggle-left  { order: 0; }
-    #m-toggle-right { order: 2; }
-    #topbar-user    { order: 3; }
+    #topbar-user    { order: 2; padding: 0 2px !important; }
+    #m-toggle-right { order: 3; }
 
     .panel {
       display: block;
@@ -3533,7 +3532,7 @@ function renderDetail() {
   {
     const surveyActive = objectiveForSide(def.side) === 'survey' || (state.secondaries && state.secondaries[def.side] && state.secondaries[def.side].includes('gather_intel'));
     const selShip = state.selectedShipIdx !== null ? grp.ships[state.selectedShipIdx] : null;
-    if (surveyActive && selShip && !selShip.destroyed && !selShip.offTable && isCapital(def) && state.phase === 'play') {
+    if (surveyActive && selShip && !selShip.destroyed && !selShip.offTable && isCapital(def) && state.phase === 'play' && !isOpponent) {
       const near = surveyableDropsite(selShip, def.side);
       if (near) {
         const surveyMoveOk = selShip.movedThisRound || !(ORDERS[effectiveOrder(def, grp, state.selectedShipIdx)] || {}).moveMax;
@@ -9691,8 +9690,8 @@ function _closeFleetViewPanels() {
 let _lastAutoFleetKey = null;
 function _maybeAutoOpenFleet() {
   if (!_isMobileLayout() || state.phase !== 'play') { _lastAutoFleetKey = null; return; }
-  const myTurn = !_netSide ? !!state.activeSide : (state.activeSide === _netSide);
-  if (!myTurn || state.selectedGroupId) return;
+  const myTurn = _isSpectator ? false : (!_netSide ? !!state.activeSide : (state.activeSide === _netSide));
+  if (!myTurn) return;
   const activated = Object.values(state.groups).filter(g => g.activated).length;
   const key = `${state.round}:${state.activeSide}:${activated}`;
   if (key === _lastAutoFleetKey) return;
@@ -16234,7 +16233,9 @@ board.addEventListener('touchstart', (e) => {
 
 const _netParams = new URLSearchParams(location.search);
 const _netRoom   = (_netParams.get('room') || '').toUpperCase();
-const _netSide   = (_netParams.get('side') || '').toLowerCase(); // 'player1' | 'player2' | '' (hotseat)
+const _netSide      = (_netParams.get('side') || '').toLowerCase(); // 'player1' | 'player2' | 'spectator' | '' (hotseat)
+const _isSpectator  = _netSide === 'spectator';
+let _spectators = []; // usernames of current spectators, kept in sync via 'spectators' server messages
 // Hotseat save room ID — generated once when the game moves past setup, persists for that session.
 let _hotseatRoomId          = null;
 let _hotseatSeed             = null;
@@ -16297,6 +16298,7 @@ window.addEventListener('error', () => { _netReceiving = false; _netPendingInten
 // options). This relay is intentionally kept — setup is collaborative config with no
 // server-side legality to enforce. It will NOT be removed when in-game relay is retired.
 function netRelaySetup() {
+  if (_isSpectator) return;
   if (!_netWs || !_netConnected || _netReceiving || _netPendingIntent) return;
   if (_netWs.readyState !== WebSocket.OPEN) return;
   const { hoverPoint: _hp, selectedGroupId: _sg, selectedShipIdx: _ss, selectedDropsiteId: _sd, layerToggle: _lt, peerView: _pv, ...stateToSend } = state;
@@ -16442,7 +16444,7 @@ function _netConnect() {
         // Server sends the current authoritative state on connect.
         _netApplyRemote(msg.state);
         // Pre-fill our player name from the logged-in account if it's still the default.
-        if (currentUser?.username && _netSide && state.phase === 'setup') {
+        if (currentUser?.username && _netSide && !_isSpectator && state.phase === 'setup') {
           const slot = _netSide === 'player1' ? 'f1' : 'f2';
           const defaultName = _netSide === 'player1' ? 'Player 1' : 'Player 2';
           if (!state.playerNames) state.playerNames = { f1: 'Player 1', f2: 'Player 2' };
@@ -16503,6 +16505,10 @@ function _netConnect() {
         if (_activeLogTab === 'chat') _scrollChatToBottom();
         break;
       }
+      case 'spectators':
+        _spectators = msg.list || [];
+        renderSpectatorChip();
+        break;
       case 'aiThinking':
         _aiThinking = !!msg.thinking;
         renderEventLog();
@@ -16516,7 +16522,7 @@ function _netConnect() {
 
 // Send the local selection to the opponent so they see movement cones / overlays.
 function netSendPeerView() {
-  if (!_netWs || !_netConnected || !_netSide) return;
+  if (!_netWs || !_netConnected || !_netSide || _isSpectator) return;
   _netWs.send(JSON.stringify({
     type: 'peerView',
     peerView: { gid: state.selectedGroupId, si: state.selectedShipIdx, layerToggle: state.layerToggle },
@@ -16531,6 +16537,7 @@ function netSendPeerView() {
 // true. In online mode: true during setup/scenery/deploy (both players manage
 // their own side), and during play only when it is this client's activeSide.
 function netIsMyTurn() {
+  if (_isSpectator) return false;
   if (!_netSide) return true;                                    // hotseat
   if (state.phase !== 'play') return true;                       // pre-play phases
   if (!state.activeSide) return true;                            // no active side yet
@@ -16539,6 +16546,7 @@ function netIsMyTurn() {
 
 // True when a given board side ('player1'|'player2') belongs to this client.
 function netIsMySide(side) {
+  if (_isSpectator) return false;
   if (!_netSide) return true;
   return _gs() === side;
 }
@@ -16553,6 +16561,7 @@ function netIsMySide(side) {
 // Handlers not yet migrated to dispatch() still mutate state directly and rely
 // on netAfterRender()'s full-state relay.
 function dispatch(intent) {
+  if (_isSpectator) return;
   const side = (_netSide ? _gs() : null) || _intentSide(intent);
   if (!_isLegal(state, intent, side)) return;
   if (_netSide) {
@@ -16814,8 +16823,8 @@ async function showModeSelector() {
       ${currentUser?.loggedIn ? `
         <button id="ms-user-btn" title="Account details" style="
           display:flex;align-items:center;gap:6px;
-          background:rgba(0,188,212,0.1);border:1px solid var(--ucm);border-radius:3px;
-          color:var(--ucm);font-family:var(--mono);font-size:9px;letter-spacing:0.08em;
+          background:rgba(74,214,255,0.08);border:1px solid rgba(74,214,255,0.35);border-radius:3px;
+          color:var(--shal);font-family:var(--mono);font-size:9px;letter-spacing:0.08em;
           padding:5px 10px;cursor:pointer;font-weight:700;">
           ⬡ ${currentUser.username}${currentUser.role === 'admin' ? ' <span style="color:var(--hull-warn);font-size:7px;letter-spacing:0.1em;">ADMIN</span>' : ''}
         </button>
@@ -16871,6 +16880,10 @@ async function showModeSelector() {
             🔗 JOIN ONLINE GAME
             <div style="font-size:10px;font-weight:400;color:var(--text-mute);margin-top:3px;">Enter a room code to connect</div>
           </button>
+          <button class="btn" id="ms-spectate" style="padding:14px 10px;font-size:13px;">
+            👁 SPECTATE
+            <div style="font-size:10px;font-weight:400;color:var(--text-mute);margin-top:3px;">Watch a live game</div>
+          </button>
           ${(currentUser?.aiAccess || currentUser?.role === 'admin') ? `<button class="btn" id="ms-solo" style="padding:14px 10px;font-size:13px;">
             🤖 SOLO vs AI
             <div style="font-size:10px;font-weight:400;color:var(--text-mute);margin-top:3px;">Single-player — play against an AI opponent</div>
@@ -16913,6 +16926,32 @@ async function showModeSelector() {
           </div>
           <div id="ms-join-err" style="color:var(--hull-crit);font-size:10px;display:none;"></div>
           <button class="btn-primary" id="ms-join-go" disabled style="padding:12px;">JOIN ▸</button>
+        </div>
+        <div class="setup-footer"><button class="btn" id="ms-back">← Back</button></div>
+      </div>`;
+    } else if (view === 'host-config') {
+      html = `<div class="setup-card" style="max-width:360px;">
+        <div class="setup-header"><h2 class="setup-title">HOST ONLINE GAME</h2></div>
+        <div class="setup-body" style="padding:24px;display:flex;flex-direction:column;gap:16px;">
+          <label style="display:flex;align-items:center;gap:10px;cursor:pointer;user-select:none;">
+            <input type="checkbox" id="hc-allow-spectators" checked style="width:16px;height:16px;accent-color:var(--ucm);cursor:pointer;"/>
+            <div>
+              <div style="font-size:12px;color:var(--text);">Allow spectators</div>
+              <div style="font-size:10px;color:var(--text-mute);margin-top:2px;">Anyone with the room code can watch in read-only mode</div>
+            </div>
+          </label>
+          <div id="hc-msg" style="color:var(--text-dim);font-size:12px;min-height:14px;"></div>
+        </div>
+        <div class="setup-footer">
+          <button class="btn" id="ms-back">← Back</button>
+          <button class="btn-primary" id="hc-create" style="padding:10px 20px;font-size:12px;">📡 CREATE ROOM</button>
+        </div>
+      </div>`;
+    } else if (view === 'spectate') {
+      html = `<div class="setup-card" style="max-width:480px;">
+        <div class="setup-header"><h2 class="setup-title">SPECTATE</h2></div>
+        <div class="setup-body" style="padding:16px;display:flex;flex-direction:column;gap:8px;max-height:60vh;overflow-y:auto;" id="spectate-list">
+          <div style="color:var(--text-mute);font-size:11px;text-align:center;padding:20px 0;">Loading…</div>
         </div>
         <div class="setup-footer"><button class="btn" id="ms-back">← Back</button></div>
       </div>`;
@@ -17008,8 +17047,9 @@ async function showModeSelector() {
         rebuildFleets();
         renderAll();
       };
-      overlay.querySelector('#ms-host').onclick    = () => { render('hosting'); doHost(); };
+      overlay.querySelector('#ms-host').onclick    = () => render('host-config');
       overlay.querySelector('#ms-join').onclick    = () => render('join');
+      overlay.querySelector('#ms-spectate').onclick = () => render('spectate');
       const soloBtn = overlay.querySelector('#ms-solo');
       if (soloBtn) soloBtn.onclick = () => render('solo');
       const savesBtn = overlay.querySelector('#ms-saves');
@@ -17136,6 +17176,57 @@ async function showModeSelector() {
       };
       overlay.querySelector('#ms-back').onclick = () => render('main');
     }
+    if (view === 'host-config') {
+      const createBtn = overlay.querySelector('#hc-create');
+      const msgEl     = overlay.querySelector('#hc-msg');
+      createBtn.onclick = async () => {
+        createBtn.disabled = true;
+        if (msgEl) msgEl.textContent = 'Contacting server…';
+        const allowSpectators = overlay.querySelector('#hc-allow-spectators')?.checked !== false;
+        await doHost({ allowSpectators });
+        createBtn.disabled = false;
+        if (msgEl) msgEl.textContent = '';
+      };
+      overlay.querySelector('#ms-back').onclick = () => render('main');
+    }
+    if (view === 'spectate') {
+      fetch('/api/rooms')
+        .then(r => r.json())
+        .then(rooms => {
+          const listEl = overlay.querySelector('#spectate-list');
+          if (!listEl) return;
+          if (!rooms.length) {
+            listEl.innerHTML = `<div style="color:var(--text-mute);font-size:11px;text-align:center;padding:20px 0;">No live games available to watch right now.</div>`;
+            return;
+          }
+          listEl.innerHTML = rooms.map(r => {
+            const p1 = r.playerNames?.f1 || 'Player 1';
+            const p2 = r.playerNames?.f2 || 'Player 2';
+            const f1 = r.factions?.player1 || '';
+            const f2 = r.factions?.player2 || '';
+            const rnd = r.round ? `Round ${r.round}` : r.phase || '';
+            const spec = r.spectators > 0 ? `<span style="color:var(--text-mute);">${r.spectators} watching</span>` : '';
+            return `<div style="background:var(--bg-card);border:1px solid var(--border);border-radius:4px;padding:10px 12px;display:flex;align-items:center;justify-content:space-between;gap:8px;">
+              <div style="flex:1;min-width:0;">
+                <div style="font-size:11px;font-weight:700;color:var(--text);font-family:var(--mono);">${r.roomId}</div>
+                <div style="font-size:10px;color:var(--text-dim);margin-top:2px;">${p1}${f1 ? ` (${f1})` : ''} vs ${p2}${f2 ? ` (${f2})` : ''}</div>
+                <div style="font-size:9px;color:var(--text-mute);margin-top:2px;display:flex;gap:8px;">${rnd ? `<span>${rnd}</span>` : ''}${spec}</div>
+              </div>
+              <button class="btn" data-spectate="${r.roomId}" style="padding:7px 14px;font-size:11px;white-space:nowrap;">👁 WATCH</button>
+            </div>`;
+          }).join('');
+          listEl.querySelectorAll('[data-spectate]').forEach(btn => {
+            btn.onclick = () => {
+              location.href = `${location.pathname}?room=${btn.dataset.spectate}&side=spectator`;
+            };
+          });
+        })
+        .catch(() => {
+          const listEl = overlay.querySelector('#spectate-list');
+          if (listEl) listEl.innerHTML = `<div style="color:var(--hull-crit);font-size:11px;text-align:center;padding:20px 0;">Could not reach server.</div>`;
+        });
+      overlay.querySelector('#ms-back').onclick = () => render('main');
+    }
   }
 
   async function doResume(saveId) {
@@ -17154,14 +17245,18 @@ async function showModeSelector() {
     }
   }
 
-  async function doHost() {
-    const msgEl = () => document.getElementById('ms-host-msg');
+  async function doHost({ allowSpectators = true } = {}) {
     try {
-      const res  = await fetch('/api/rooms', { method: 'POST' });
+      const res  = await fetch('/api/rooms', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ allowSpectators }),
+      });
       const data = await res.json();
       location.href = `${location.pathname}?room=${data.roomId}&side=player1`;
     } catch {
-      if (msgEl()) msgEl().textContent = 'Could not reach server. Is it running on port 3000?';
+      const msgEl = overlay.querySelector('#hc-msg');
+      if (msgEl) msgEl.textContent = 'Could not reach server. Is it running on port 3000?';
     }
   }
 
@@ -17416,21 +17511,102 @@ async function openAdminPanel(anchor, inGame = false) {
 // Initialise networking (online) or show mode selector (local/first load)
 // ---------------------------------------------------------------------------
 
+function renderSpectatorChip() {
+  // Delegate to renderUserChip so the spectator button is always inside #topbar-user,
+  // directly left of the user profile button.
+  renderUserChip();
+}
+
+function _wireSpectatorChipBtn() {
+  const btn = document.getElementById('btn-spectator-chip');
+  if (!btn) return;
+  btn.addEventListener('click', e => {
+    e.stopPropagation();
+    const existing = document.getElementById('spectator-list-popup');
+    if (existing) { existing.remove(); return; }
+    const rect = btn.getBoundingClientRect();
+    const popup = document.createElement('div');
+    popup.id = 'spectator-list-popup';
+    popup.style.cssText = `position:fixed;top:${rect.bottom+6}px;right:${window.innerWidth-rect.right}px;background:#0d1a1f;border:1px solid var(--border-bright);border-radius:6px;padding:10px 14px;min-width:150px;font-family:var(--mono);font-size:10px;box-shadow:0 12px 40px rgba(0,0,0,0.85);z-index:9999;`;
+    popup.innerHTML = `
+      <div style="font-size:8px;letter-spacing:0.12em;color:var(--text-mute);margin-bottom:8px;">SPECTATORS</div>
+      ${_spectators.map(u => `<div style="color:var(--text-dim);padding:2px 0;">👁 ${u.replace(/&/g,'&amp;').replace(/</g,'&lt;')}</div>`).join('')}`;
+    document.body.appendChild(popup);
+    const dismiss = ev => { if (!popup.contains(ev.target) && ev.target !== btn) { popup.remove(); document.removeEventListener('click', dismiss); } };
+    setTimeout(() => document.addEventListener('click', dismiss), 0);
+  });
+}
+
+function _spectatorBtnHtml() {
+  if (!_netRoom || _spectators.length === 0) return '';
+  return `<button id="btn-spectator-chip" style="
+    display:flex;align-items:center;gap:5px;
+    background:none;border:1px solid rgba(255,181,71,0.4);border-radius:3px;
+    color:var(--hull-warn);font-family:var(--mono);font-size:9px;letter-spacing:0.06em;
+    padding:3px 8px;cursor:pointer;">👁 ${_spectators.length}</button>`;
+}
+
 function renderUserChip() {
   const chip = document.getElementById('topbar-user');
   if (!chip) return;
+
+  if (_isSpectator) {
+    chip.style.cssText = 'display:flex;align-items:center;gap:6px;padding:0 10px 0 4px;font-family:var(--mono);font-size:9px;color:var(--text-mute);white-space:nowrap;position:relative;';
+    chip.innerHTML = `
+      ${_spectatorBtnHtml()}
+      <span style="background:rgba(0,188,212,0.12);border:1px solid rgba(0,188,212,0.35);border-radius:3px;padding:3px 8px;color:var(--ucm);letter-spacing:0.1em;font-size:9px;">
+        👁 SPECTATING
+      </span>
+      ${currentUser?.loggedIn ? `
+        <button id="btn-user-chip" style="
+          display:flex;align-items:center;gap:5px;
+          background:none;border:1px solid rgba(74,214,255,0.35);border-radius:3px;
+          color:var(--shal);font-family:var(--mono);font-size:9px;letter-spacing:0.06em;
+          padding:3px 8px;cursor:pointer;">
+          <span style="opacity:0.6;">⬡</span> ${currentUser.username}${currentUser.role==='admin'?' <span style="color:var(--hull-warn);font-size:7px;letter-spacing:0.1em;">ADMIN</span>':''}
+        </button>` : ''}`;
+    _wireSpectatorChipBtn();
+    const chipBtn = chip.querySelector('#btn-user-chip');
+    if (chipBtn) {
+      chipBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (currentUser?.role === 'admin') { openAdminPanel(chipBtn, true); return; }
+        const existing = document.getElementById('user-chip-popup');
+        if (existing) { existing.remove(); return; }
+        const rect = chipBtn.getBoundingClientRect();
+        const popup = document.createElement('div');
+        popup.id = 'user-chip-popup';
+        popup.style.cssText = `position:fixed;top:${rect.bottom+6}px;right:${window.innerWidth-rect.right}px;background:#0d1a1f;border:1px solid var(--border-bright);border-radius:6px;padding:12px;min-width:170px;font-family:var(--mono);font-size:10px;box-shadow:0 12px 40px rgba(0,0,0,0.85);z-index:9999;`;
+        popup.innerHTML = `
+          <div style="font-size:11px;font-weight:700;color:var(--text);margin-bottom:10px;padding-bottom:8px;border-bottom:1px solid var(--border);">${currentUser.username}</div>
+          <div style="display:flex;flex-direction:column;gap:6px;">
+            <button id="chip-leave" class="btn" style="width:100%;padding:9px 10px;font-size:10px;text-align:left;box-sizing:border-box;">← LEAVE GAME</button>
+            <button id="chip-logout" class="btn" style="width:100%;padding:9px 10px;font-size:10px;text-align:left;box-sizing:border-box;color:var(--hull-crit);border-color:var(--hull-crit);">⏏ SIGN OUT</button>
+          </div>`;
+        document.body.appendChild(popup);
+        popup.querySelector('#chip-leave').addEventListener('click', () => { location.href = location.pathname; });
+        popup.querySelector('#chip-logout').addEventListener('click', async () => { await fetch('/api/auth/logout', { method: 'POST' }); currentUser = null; location.reload(); });
+        const dismiss = ev => { if (!popup.contains(ev.target) && ev.target !== chipBtn) { popup.remove(); document.removeEventListener('click', dismiss); } };
+        setTimeout(() => document.addEventListener('click', dismiss), 0);
+      });
+    }
+    return;
+  }
+
   if (!currentUser?.loggedIn) { chip.innerHTML = ''; return; }
 
-  chip.style.cssText = 'display:flex;align-items:center;gap:6px;padding:0 10px;font-family:var(--mono);font-size:9px;color:var(--text-mute);white-space:nowrap;position:relative;';
+  chip.style.cssText = 'display:flex;align-items:center;gap:6px;padding:0 10px 0 4px;font-family:var(--mono);font-size:9px;color:var(--text-mute);white-space:nowrap;position:relative;';
   chip.innerHTML = `
+    ${_spectatorBtnHtml()}
     <button id="btn-user-chip" style="
       display:flex;align-items:center;gap:5px;
-      background:none;border:1px solid rgba(255,255,255,0.1);border-radius:3px;
-      color:var(--text-dim);font-family:var(--mono);font-size:9px;letter-spacing:0.06em;
+      background:none;border:1px solid rgba(126,200,227,0.4);border-radius:3px;
+      color:#7ec8e3;font-family:var(--mono);font-size:9px;letter-spacing:0.06em;
       padding:3px 8px;cursor:pointer;">
       <span style="opacity:0.6;">⬡</span> ${currentUser.username}${currentUser.role==='admin'?' <span style="color:var(--hull-warn);font-size:7px;letter-spacing:0.1em;">ADMIN</span>':''}
     </button>`;
 
+  _wireSpectatorChipBtn();
   const chipBtn = chip.querySelector('#btn-user-chip');
   chipBtn.addEventListener('click', (e) => {
     e.stopPropagation();
@@ -17507,6 +17683,13 @@ if (_netRoom && (_netSide === 'player1' || _netSide === 'player2')) {
     // Show auth screen; after login the page will reload via the URL params.
     showAuthScreen();
   } else {
+    _netConnect();
+  }
+} else if (_netRoom && _isSpectator) {
+  if (!currentUser?.loggedIn) {
+    showAuthScreen();
+  } else {
+    renderAll();
     _netConnect();
   }
 } else if (!_netRoom) {

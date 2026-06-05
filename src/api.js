@@ -1,7 +1,7 @@
 // REST routes and WebSocket connection handler.
 
 import { Router } from 'express';
-import { createRoom, getRoom, joinRoom, leaveRoom, broadcast, send, recordIntent } from './rooms.js';
+import { createRoom, getRoom, getAllRooms, joinRoom, leaveRoom, broadcast, send, recordIntent } from './rooms.js';
 import { isLegal } from './engine/gating.js';
 import { apply } from './engine/mutators.js';
 import { saveRoom, loadSave, loadAllSaves } from './saves.js';
@@ -58,7 +58,26 @@ router.post('/rooms', (req, res) => {
     console.log(`Room ${room.id} — AI on ${side} (${room.aiPersonality}, ${aiFaction || 'no faction'})`);
   }
 
+  const { allowSpectators } = req.body || {};
+  if (allowSpectators === false) room.allowSpectators = false;
+
   res.json({ roomId: room.id, seed: room.seed });
+});
+
+// GET /api/rooms — list live spectatable games.
+router.get('/rooms', (_req, res) => {
+  res.json(
+    getAllRooms()
+      .filter(r => r.allowSpectators && r.state.phase !== 'setup')
+      .map(r => ({
+        roomId:      r.id,
+        phase:       r.state.phase,
+        round:       r.state.round,
+        playerNames: r.state.playerNames,
+        factions:    { player1: r.state.fleetChoices?.f1, player2: r.state.fleetChoices?.f2 },
+        spectators:  r.spectators.length,
+      }))
+  );
 });
 
 // GET /api/rooms/:id — check whether a room exists and who has joined.
@@ -66,9 +85,10 @@ router.get('/rooms/:id', (req, res) => {
   const room = getRoom(req.params.id.toUpperCase());
   if (!room) return res.status(404).json({ error: 'Room not found.' });
   res.json({
-    roomId: room.id,
-    sides: { player1: !!room.sockets.player1, player2: !!room.sockets.player2 },
-    phase: room.state.phase,
+    roomId:          room.id,
+    sides:           { player1: !!room.sockets.player1, player2: !!room.sockets.player2 },
+    phase:           room.state.phase,
+    allowSpectators: room.allowSpectators !== false,
   });
 });
 
@@ -221,6 +241,13 @@ router.post('/rooms/resume', async (req, res) => {
 // WebSocket connection handler
 // ---------------------------------------------------------------------------
 
+function broadcastSpectatorList(room) {
+  const list = room.spectators
+    .filter(ws => ws.readyState === 1)
+    .map(ws => ws._spectatorUsername || 'Spectator');
+  broadcast(room, { type: 'spectators', list });
+}
+
 export function handleConnection(ws, req) {
   const url = new URL(req.url, 'http://localhost');
   const roomId  = (url.searchParams.get('room') || '').toUpperCase();
@@ -259,6 +286,12 @@ export function handleConnection(ws, req) {
       return;
     }
   } else {
+    if (room.allowSpectators === false) {
+      send(ws, { type: 'error', reason: 'Spectators are not allowed in this room.' });
+      ws.close();
+      return;
+    }
+    ws._spectatorUsername = req.user?.username || 'Spectator';
     room.spectators.push(ws);
   }
 
@@ -273,6 +306,7 @@ export function handleConnection(ws, req) {
     console.log(`[${roomId}] ${side} disconnected`);
     leaveRoom(room, ws);
     broadcast(room, { type: 'opponentLeft', side });
+    broadcastSpectatorList(room);
   });
   ws.on('error', err => console.error(`[${roomId}/${side}] WS error: ${err.message}`));
 
@@ -288,6 +322,7 @@ export function handleConnection(ws, req) {
   send(ws, { type: 'joined', side, roomId, state: room.state });
   if ((room.chatHistory || []).length > 0) send(ws, { type: 'chatHistory', messages: room.chatHistory });
   broadcast(room, { type: 'peerJoined', side }, ws);
+  broadcastSpectatorList(room); // updates everyone's spectator chip, including the new arrival
   // Re-trigger AI in case it should act (e.g. after a resume where it was the AI's turn).
   if (room.aiSide) setImmediate(() => maybeAiTurn(room).catch(err => console.error(`[${room.id}] connect AI error:`, err.message)));
 }
@@ -328,6 +363,9 @@ async function maybeAiTurn(room) {
 
 function onMessage(room, ws, side, msg, userId) {
   room.lastActivity = Date.now();
+
+  // Spectators are read-only — only allow resync and chat.
+  if (side === 'spectator' && msg.type !== 'resync' && msg.type !== 'chat') return;
 
   switch (msg.type) {
 
@@ -422,8 +460,9 @@ function onMessage(room, ws, side, msg, userId) {
     case 'chat': {
       const text = (typeof msg.text === 'string') ? msg.text.trim().slice(0, 500) : '';
       if (!text) return;
-      const slot = side === 'player1' ? 'f1' : 'f2';
-      const username = room.state.playerNames?.[slot] || side;
+      const username = side === 'spectator'
+        ? (ws._spectatorUsername || 'Spectator')
+        : (room.state.playerNames?.[side === 'player1' ? 'f1' : 'f2'] || side);
       const chatMsg = { side, username, text, ts: Date.now() };
       if (!room.chatHistory) room.chatHistory = [];
       room.chatHistory.push(chatMsg);

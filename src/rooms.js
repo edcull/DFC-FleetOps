@@ -48,6 +48,7 @@ export function createRoom(forceId = null) {
     aiSide: null,           // 'player1' | 'player2' | null — slot occupied by the AI
     aiPersonality: null,    // personality key ('balanced', 'aggressive', etc.)
     aiPending: false,       // guard against concurrent AI triggers
+    allowSpectators: true,  // host can disable spectating
   };
 
   rooms.set(id, room);
