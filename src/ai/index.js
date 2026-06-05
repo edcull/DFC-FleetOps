@@ -87,7 +87,7 @@ export function shouldAiAct(state, side) {
 // Dispatch to the correct sub-phase handler and apply its intents.
 // One call = one atomic AI action. Caller loops until shouldAiAct returns false.
 export async function triggerAi(room, onRecord = null) {
-  const { state, rng, aiSide, aiPersonality } = room;
+  const { state, rng, aiSide, aiPersonality, aiUseLlm } = room;
   const personality = getPersonality(aiPersonality);
 
   function applyFn(intent) {
@@ -164,5 +164,5 @@ export async function triggerAi(room, onRecord = null) {
     return;
   }
 
-  await handleActivation(state, rng, aiSide, personality, applyFn);
+  await handleActivation(state, rng, aiSide, personality, applyFn, !!aiUseLlm);
 }

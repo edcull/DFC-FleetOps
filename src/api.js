@@ -28,19 +28,20 @@ router.post('/rooms', (req, res) => {
     setRoomSlot(room.id, 'player1', req.user.id);
   }
 
-  const { aiOpponent, aiSide, aiPersonality, aiFaction, aiSecondaries } = req.body || {};
+  const { aiOpponent, aiSide, aiPersonality, aiFaction, aiSecondaries, aiUseLlm } = req.body || {};
   if (aiOpponent) {
     const side = aiSide === 'player1' ? 'player1' : 'player2';
     const slot = side === 'player1' ? 'f1' : 'f2';
     room.aiSide        = side;
     room.aiPersonality = aiPersonality || 'balanced';
+    room.aiUseLlm      = !!aiUseLlm;
     room.state.aiSide  = side; // persisted in state JSON for resume
 
     const PERSONALITY_LABELS = { aggressive:'Aggressive', positional:'Positional', defensive:'Defensive', balanced:'Balanced', opportunist:'Opportunist' };
     room.state.aiOpponent   = true;
     room.state.aiPersonality = room.aiPersonality;
     room.state.fleetChoices[slot]    = aiFaction || null;
-    room.state.secondaryChoice[slot] = Array.isArray(aiSecondaries) ? aiSecondaries.slice(0, 2) : [];
+    room.state.secondaryChoice[slot] = Array.isArray(aiSecondaries) && aiSecondaries.length ? aiSecondaries.slice(0, 2) : null; // resolved after fleet build
     room.state.playerNames[slot]     = `AI (${PERSONALITY_LABELS[room.aiPersonality] || 'Balanced'})`;
 
     if (aiFaction) {
@@ -53,6 +54,11 @@ router.post('/rooms', (req, res) => {
       if (fleet) {
         room.state.importedFleets[slot] = fleet;
         room.aiTactics = fleet.tactics || [];
+        if (room.state.secondaryChoice[slot] === null) {
+          room.state.secondaryChoice[slot] = fleet.secondaries || [];
+        }
+      } else if (room.state.secondaryChoice[slot] === null) {
+        room.state.secondaryChoice[slot] = [];
       }
     }
     console.log(`Room ${room.id} — AI on ${side} (${room.aiPersonality}, ${aiFaction || 'no faction'})`);

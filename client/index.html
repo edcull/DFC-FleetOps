@@ -16826,7 +16826,7 @@ async function showModeSelector() {
           background:rgba(74,214,255,0.08);border:1px solid rgba(74,214,255,0.35);border-radius:3px;
           color:var(--shal);font-family:var(--mono);font-size:9px;letter-spacing:0.08em;
           padding:5px 10px;cursor:pointer;font-weight:700;">
-          ⬡ ${currentUser.username}${currentUser.role === 'admin' ? ' <span style="color:var(--hull-warn);font-size:7px;letter-spacing:0.1em;">ADMIN</span>' : ''}
+          ⬡ <span style="color:var(--shal);">${currentUser.username}</span>${currentUser.role === 'admin' ? ' <span style="color:var(--hull-warn);font-size:7px;letter-spacing:0.1em;">ADMIN</span>' : ''}
         </button>
       ` : ''}
     </div>
@@ -16854,6 +16854,8 @@ async function showModeSelector() {
     return `<span style="color:var(--text);font-weight:700;margin-right:6px;">${s.roomId}</span>${detail}`;
   }
 
+  let savesTab = 'all';
+
   function render(view) {
     let html = '';
     if (view === 'main') {
@@ -16868,6 +16870,10 @@ async function showModeSelector() {
           App v${APP_VERSION} &nbsp;·&nbsp; Rulebook v${RULEBOOK_VERSION} &nbsp;·&nbsp; Errata v${ERRATA_VERSION}
         </div>
         <div class="setup-body" style="display:flex;flex-direction:column;gap:12px;padding:24px;">
+          <button class="btn-primary" id="ms-solo" style="padding:14px 10px;font-size:13px;">
+            🎮 SINGLE PLAYER
+            <div style="font-size:10px;font-weight:400;color:rgba(255,255,255,0.5);margin-top:3px;">Play against an AI opponent</div>
+          </button>
           <button class="btn-primary" id="ms-hotseat" style="padding:14px 10px;font-size:13px;">
             ⚔ HOTSEAT
             <div style="font-size:10px;font-weight:400;color:rgba(255,255,255,0.5);margin-top:3px;">Two players, one screen</div>
@@ -16884,10 +16890,6 @@ async function showModeSelector() {
             👁 SPECTATE
             <div style="font-size:10px;font-weight:400;color:var(--text-mute);margin-top:3px;">Watch a live game</div>
           </button>
-          ${(currentUser?.aiAccess || currentUser?.role === 'admin') ? `<button class="btn" id="ms-solo" style="padding:14px 10px;font-size:13px;">
-            🤖 SOLO vs AI
-            <div style="font-size:10px;font-weight:400;color:var(--text-mute);margin-top:3px;">Single-player — play against an AI opponent</div>
-          </button>` : ''}
           ${savesBtn}
         </div>
       </div>`;
@@ -16901,17 +16903,33 @@ async function showModeSelector() {
             <button class="btn" data-ms-delete="${s.roomId}" style="padding:7px 10px;font-size:11px;color:var(--hull-crit);border-color:var(--hull-crit);" title="Delete save">🗑</button>
           </div>
         </div>`;
-      const sectionHdr = label => `<div style="font-size:9px;letter-spacing:0.1em;color:var(--text-mute);padding:4px 2px 2px;border-bottom:1px solid rgba(255,255,255,0.07);margin-bottom:2px;">${label}</div>`;
       const hotseatSaves = saves.filter(s => s.isHotseat);
       const soloSaves    = saves.filter(s => s.isAi && !s.isHotseat);
       const onlineSaves  = saves.filter(s => !s.isHotseat && !s.isAi);
-      const hsSection  = hotseatSaves.length ? sectionHdr('HOTSEAT')    + hotseatSaves.map(makeRow).join('') : '';
-      const aiSection  = soloSaves.length    ? sectionHdr('SOLO vs AI') + soloSaves.map(makeRow).join('')    : '';
-      const netSection = onlineSaves.length  ? sectionHdr('ONLINE')     + onlineSaves.map(makeRow).join('')  : '';
+      const tabDefs = [
+        { key: 'solo',    label: 'Single Player', saves: soloSaves },
+        { key: 'hotseat', label: 'Hotseat',        saves: hotseatSaves },
+        { key: 'online',  label: 'Online',          saves: onlineSaves },
+      ].filter(t => t.saves.length > 0);
+      if (!tabDefs.some(t => t.key === savesTab)) savesTab = tabDefs.length ? tabDefs[0].key : 'none';
+      const visibleSaves = tabDefs.find(t => t.key === savesTab)?.saves ?? [];
+      const tabBar = tabDefs.length > 1 ? `<div style="display:flex;border-bottom:1px solid var(--border);">
+        ${tabDefs.map(t => `<button data-saves-tab="${t.key}" style="
+          flex:1;padding:8px 4px;font-size:10px;font-family:var(--mono);letter-spacing:0.08em;
+          background:none;border:none;border-bottom:2px solid ${savesTab===t.key?'var(--accent,#4ad6ff)':'transparent'};
+          color:${savesTab===t.key?'var(--text)':'var(--text-mute)'};cursor:pointer;text-align:center;
+          transition:color 0.15s,border-color 0.15s;">
+          ${t.label}<span style="margin-left:5px;opacity:0.6;font-size:9px;">${t.saves.length}</span>
+        </button>`).join('')}
+      </div>` : '';
+      const listHtml = visibleSaves.length
+        ? visibleSaves.map(makeRow).join('')
+        : `<div style="color:var(--text-mute);font-size:11px;text-align:center;padding:24px 0;">No saved games</div>`;
       html = `<div class="setup-card" style="max-width:440px;">
         <div class="setup-header"><h2 class="setup-title">SAVED GAMES</h2></div>
-        <div class="setup-body" style="padding:16px;display:flex;flex-direction:column;gap:8px;max-height:60vh;overflow-y:auto;">
-          ${hsSection}${aiSection}${netSection}
+        ${tabBar}
+        <div class="setup-body" style="padding:16px;display:flex;flex-direction:column;gap:8px;height:524px;overflow-y:auto;">
+          ${listHtml}
         </div>
         <div class="setup-footer"><button class="btn" id="ms-back">← Back</button></div>
       </div>`;
@@ -16956,13 +16974,24 @@ async function showModeSelector() {
         <div class="setup-footer"><button class="btn" id="ms-back">← Back</button></div>
       </div>`;
     } else if (view === 'solo') {
-      const _soloSecOpts = () => Object.entries(SECONDARY_OBJECTIVES)
+      const _soloSecOpts = () => `<option value="random">Random</option>` + Object.entries(SECONDARY_OBJECTIVES)
         .filter(([, v]) => !v.nominate)
         .map(([k, v]) => `<option value="${k}">${v.name}</option>`)
         .join('');
       html = `<div class="setup-card" style="max-width:380px;">
-        <div class="setup-header"><h2 class="setup-title">SOLO vs AI</h2></div>
+        <div class="setup-header"><h2 class="setup-title">SINGLE PLAYER</h2></div>
         <div class="setup-body" style="padding:24px;display:flex;flex-direction:column;gap:16px;">
+          ${(currentUser?.aiAccess || currentUser?.role === 'admin') ? `<div style="display:flex;align-items:center;justify-content:space-between;padding:10px 12px;background:var(--bg-card);border:1px solid var(--border);border-radius:4px;">
+            <div>
+              <div style="font-size:11px;font-family:var(--mono);letter-spacing:0.05em;">LLM AI</div>
+              <div style="font-size:9px;color:var(--text-mute);margin-top:2px;">Use language model for decisions</div>
+            </div>
+            <label style="position:relative;display:inline-block;width:36px;height:20px;cursor:pointer;">
+              <input type="checkbox" id="solo-use-llm" style="opacity:0;width:0;height:0;">
+              <span id="solo-llm-track" style="position:absolute;inset:0;background:var(--border);border-radius:10px;transition:background 0.2s;"></span>
+              <span id="solo-llm-thumb" style="position:absolute;top:3px;left:3px;width:14px;height:14px;background:#fff;border-radius:50%;transition:transform 0.2s;"></span>
+            </label>
+          </div>` : ''}
           <div>
             <div style="font-size:9px;letter-spacing:0.1em;color:var(--text-mute);font-family:var(--mono);margin-bottom:5px;">AI PERSONALITY</div>
             <select id="solo-personality" class="fleet-dropdown">
@@ -16990,11 +17019,9 @@ async function showModeSelector() {
             <div style="font-size:9px;letter-spacing:0.1em;color:var(--text-mute);font-family:var(--mono);margin-bottom:4px;">AI SECONDARIES</div>
             <div style="font-size:9px;color:var(--text-mute);margin-bottom:6px;">Map-nomination objectives (Key Site, Long Shot, etc.) not yet supported for AI.</div>
             <select id="solo-sec1" class="fleet-dropdown">
-              <option value="">— Secondary 1 (optional) —</option>
               ${_soloSecOpts()}
             </select>
             <select id="solo-sec2" class="fleet-dropdown" style="margin-top:4px;">
-              <option value="">— Secondary 2 (optional) —</option>
               ${_soloSecOpts()}
             </select>
           </div>
@@ -17116,14 +17143,17 @@ async function showModeSelector() {
             const data = await res.json();
             if (!data.ok) { alert(data.error || 'Delete failed.'); btn.disabled = false; return; }
             saves = saves.filter(s => s.roomId !== id);
-            if (saves.length) render('saves'); else render('main');
+            if (saves.length) render('saves'); else { savesTab = 'all'; render('main'); }
           } catch (err) {
             alert('Could not reach server: ' + err.message);
             btn.disabled = false;
           }
         };
       });
-      overlay.querySelector('#ms-back').onclick = () => render('main');
+      overlay.querySelectorAll('[data-saves-tab]').forEach(btn => {
+        btn.onclick = () => { savesTab = btn.dataset.savesTab; render('saves'); };
+      });
+      overlay.querySelector('#ms-back').onclick = () => { savesTab = 'all'; render('main'); };
     }
     if (view === 'solo') {
       // Keep the two secondary pickers mutually exclusive.
@@ -17134,24 +17164,38 @@ async function showModeSelector() {
           const sel = overlay.querySelector(id);
           if (!sel) return;
           const other = vals[1 - i];
-          sel.querySelectorAll('option').forEach(o => { o.disabled = !!(o.value && o.value === other); });
+          sel.querySelectorAll('option').forEach(o => { o.disabled = !!(o.value && o.value !== 'random' && o.value === other); });
         });
       };
       _secSelIds.forEach(id => {
         const el = overlay.querySelector(id);
         if (el) el.addEventListener('change', updateSecMutex);
       });
+      const llmToggle = overlay.querySelector('#solo-use-llm');
+      if (llmToggle) {
+        llmToggle.addEventListener('change', () => {
+          const track = overlay.querySelector('#solo-llm-track');
+          const thumb = overlay.querySelector('#solo-llm-thumb');
+          if (track) track.style.background = llmToggle.checked ? 'var(--accent, #4a9eff)' : 'var(--border)';
+          if (thumb) thumb.style.transform  = llmToggle.checked ? 'translateX(16px)' : '';
+        });
+      }
       overlay.querySelector('#solo-start').addEventListener('click', async () => {
         const personality = overlay.querySelector('#solo-personality')?.value || 'balanced';
         const faction     = overlay.querySelector('#solo-faction')?.value   || '';
-        const sec1        = overlay.querySelector('#solo-sec1')?.value      || '';
-        const sec2        = overlay.querySelector('#solo-sec2')?.value      || '';
+        const _aiSecPool  = Object.entries(SECONDARY_OBJECTIVES).filter(([,v])=>!v.nominate).map(([k])=>k);
+        const _pickSec    = (excl=[]) => { const p=_aiSecPool.filter(k=>!excl.includes(k)); return p[Math.floor(Math.random()*p.length)]||null; };
+        const sec1raw     = overlay.querySelector('#solo-sec1')?.value || 'random';
+        const sec2raw     = overlay.querySelector('#solo-sec2')?.value || 'random';
+        const sec1        = sec1raw === 'random' ? _pickSec()              : sec1raw;
+        const sec2        = sec2raw === 'random' ? _pickSec(sec1?[sec1]:[]) : sec2raw;
         const targetPts   = parseInt(overlay.querySelector('#solo-pts')?.value || '1500', 10) || 1500;
+        const useLlm      = !!(overlay.querySelector('#solo-use-llm')?.checked);
         const msgEl       = overlay.querySelector('#solo-msg');
         if (!faction) { if (msgEl) msgEl.textContent = 'Select a faction for the AI first.'; return; }
         if (msgEl) msgEl.textContent = '';
         overlay.querySelector('#solo-start').disabled = true;
-        await doSoloVsAi({ personality, faction, secondaries: [sec1, sec2].filter(Boolean), targetPts });
+        await doSoloVsAi({ personality, faction, secondaries: [sec1, sec2].filter(Boolean), targetPts, useLlm });
         const startBtn = overlay.querySelector('#solo-start');
         if (startBtn) startBtn.disabled = false;
       });
@@ -17260,13 +17304,13 @@ async function showModeSelector() {
     }
   }
 
-  async function doSoloVsAi({ personality, faction, secondaries, targetPts = 1500 }) {
+  async function doSoloVsAi({ personality, faction, secondaries, targetPts = 1500, useLlm = false }) {
     const msgEl = () => overlay.querySelector('#solo-msg');
     try {
       const res  = await fetch('/api/rooms', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ aiOpponent: true, aiSide: 'player2', aiPersonality: personality, aiFaction: faction, aiSecondaries: secondaries, targetPts }),
+        body: JSON.stringify({ aiOpponent: true, aiSide: 'player2', aiPersonality: personality, aiFaction: faction, aiSecondaries: secondaries, targetPts, aiUseLlm: useLlm }),
       });
       const data = await res.json();
       if (data.error) { if (msgEl()) msgEl().textContent = data.error; return; }
