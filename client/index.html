@@ -9565,18 +9565,19 @@ function toggleMobileDrawer(which) {
   }
   _syncDrawerToggles();
 }
-// On mobile, reserve space at the bottom of the board for whatever bottom-docked
-// popup is open so the map sits fully above it (no overlap). Pads .board-wrap by
-// the tallest bottom sheet's height; the SVG board re-fits into the area above.
+// On mobile, reserve space at the bottom of the board for the scenery-placement
+// and deployment panels only (so the board stays clear while placing). The
+// in-game popups (initiative, VP/AP/Fleet, activation, attack, asset, end phase)
+// float OVER the map and do not resize it.
 function _syncBoardBottomInset() {
   const wrap = document.querySelector('.board-wrap');
   if (!wrap) return;
   if (!_isMobileLayout()) { wrap.style.paddingBottom = ''; return; }
   const vh = window.innerHeight;
   let inset = 0;
-  document.querySelectorAll('.dfc-panel, #scenery-banner, #deploy-hint').forEach(p => {
+  document.querySelectorAll('#scenery-banner, #deploy-hint').forEach(p => {
     const r = p.getBoundingClientRect();
-    // Bottom sheets sit flush with the bottom of the viewport.
+    // Bottom panels sit flush with the bottom of the viewport.
     if (r.height > 0 && r.bottom >= vh - 2) inset = Math.max(inset, r.height);
   });
   wrap.style.paddingBottom = inset ? inset + 'px' : '';
