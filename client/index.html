@@ -17029,7 +17029,7 @@ async function showModeSelector() {
           background:rgba(74,214,255,0.08);border:1px solid rgba(74,214,255,0.35);border-radius:3px;
           color:var(--shal);font-family:var(--mono);font-size:9px;letter-spacing:0.08em;
           padding:5px 10px;cursor:pointer;font-weight:700;">
-          ⬡ <span style="color:var(--shal);">${currentUser.username}</span>${currentUser.role === 'admin' ? ' <span style="color:var(--hull-warn);font-size:7px;letter-spacing:0.1em;">ADMIN</span>' : ''}
+          ⬡ <span style="color:var(--shal);">${currentUser.username}</span>
         </button>
       ` : ''}
     </div>
@@ -17822,7 +17822,7 @@ function renderUserChip() {
           background:none;border:1px solid rgba(74,214,255,0.35);border-radius:3px;
           color:var(--shal);font-family:var(--mono);font-size:9px;letter-spacing:0.06em;
           padding:3px 8px;cursor:pointer;">
-          <span style="opacity:0.6;">⬡</span> ${currentUser.username}${currentUser.role==='admin'?' <span style="color:var(--hull-warn);font-size:7px;letter-spacing:0.1em;">ADMIN</span>':''}
+          <span style="opacity:0.6;">⬡</span> ${currentUser.username}
         </button>` : ''}`;
     _wireSpectatorChipBtn();
     const chipBtn = chip.querySelector('#btn-user-chip');
@@ -17862,7 +17862,7 @@ function renderUserChip() {
       background:none;border:1px solid rgba(126,200,227,0.4);border-radius:3px;
       color:#7ec8e3;font-family:var(--mono);font-size:9px;letter-spacing:0.06em;
       padding:3px 8px;cursor:pointer;">
-      <span style="opacity:0.6;">⬡</span> ${currentUser.username}${currentUser.role==='admin'?' <span style="color:var(--hull-warn);font-size:7px;letter-spacing:0.1em;">ADMIN</span>':''}
+      <span style="opacity:0.6;">⬡</span> ${currentUser.username}
     </button>`;
 
   _wireSpectatorChipBtn();
