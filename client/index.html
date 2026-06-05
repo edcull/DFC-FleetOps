@@ -1801,7 +1801,9 @@ function renderEventLog() {
     };
     sendBtn.onclick = doSend;
     input.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); doSend(); } });
-    if (_activeLogTab === 'chat') input.focus();
+    // Auto-focus the chat input on desktop only — on mobile it repeatedly pops the
+    // on-screen keyboard (the dock re-renders every state change).
+    if (_activeLogTab === 'chat' && !_isMobileLayout()) input.focus();
   }
 
   // Scroll chat to bottom when viewing chat tab
