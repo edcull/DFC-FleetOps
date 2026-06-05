@@ -1099,6 +1099,14 @@
     .brand { font-size: 14px; letter-spacing: 0.08em; gap: 5px; }
     #topbar-user { display: none !important; }
 
+    /* Top bar: FLEET (left) · VP (centred) · DETAIL (right). display:contents lets
+       the two toggle buttons become direct flex items so order can position them. */
+    .topbar #topbar-controls { display: contents; }
+    .topbar .brand { order: 1; flex: 1 1 auto; min-width: 0; justify-content: center; }
+    #m-toggle-left  { order: 0; }
+    #m-toggle-right { order: 2; }
+    #topbar-user    { order: 3; }
+
     .panel {
       display: block;
       position: fixed; top: 48px; bottom: 0;
@@ -9597,8 +9605,8 @@ function renderTopbarControls() {
   // via .mobile-only, and suppressed entirely during pre-game setup.
   if (state.phase === 'setup') { ctrl.innerHTML = ``; return; }
   ctrl.innerHTML =
-    `<button class="btn mobile-only" id="m-toggle-left" title="Fleet">☰ FLEET</button>` +
-    `<button class="btn mobile-only" id="m-toggle-right" title="Detail">▤ DETAIL</button>`;
+    `<button class="btn mobile-only" id="m-toggle-left" title="Fleet">‹ FLEET</button>` +
+    `<button class="btn mobile-only" id="m-toggle-right" title="Detail">DETAIL ›</button>`;
   const l = document.getElementById('m-toggle-left');
   const r = document.getElementById('m-toggle-right');
   if (l) l.onclick = () => toggleMobileDrawer('left');
