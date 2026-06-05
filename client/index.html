@@ -1066,6 +1066,7 @@
   .act-orders { display: none; grid-template-columns: repeat(3, 1fr); gap: 4px; margin: 4px 0 6px; }
   .act-atmo { display: none; margin: 0 0 6px; }
   .act-actions { display: none; }
+  .act-collapse-chev { margin-left: auto; padding-left: 8px; font-size: 12px; color: var(--text-dim); }
   /* Action cards reused from the detail panel render fine in the activation HUD;
      trim the panel-section chrome so they sit flush in the bottom sheet. */
   .act-actions .panel-section { padding: 6px 0; border-bottom: none; }
@@ -1181,6 +1182,10 @@
     .act-orders { display: grid; }
     .act-atmo { display: block; }
     .act-actions { display: block; }
+    /* Tap the activation title bar to collapse the sheet to just that bar. */
+    .act-hud.collapsed { padding: 0 !important; max-height: none; }
+    .act-hud.collapsed > *:not(.dfc-panel-handle) { display: none !important; }
+    .act-hud.collapsed .dfc-panel-handle { border-bottom: none; padding-bottom: calc(9px + env(safe-area-inset-bottom, 0px)); }
     .board-legend { display: none; }
 
     /* The scenery-placement and deployment phase HUDs live in the top-left board
@@ -8980,6 +8985,24 @@ function _layerToggleBtnHTML(def, grp, si, sideClass) {
 
 /* Activation HUD: Undo Move · Finish Activation · Undo Deploy
    Floats at the bottom-right of the board so the detail panel stays uncluttered. */
+// Collapsed state for the mobile activation bottom-sheet (tap the title bar to toggle).
+let _actHudCollapsed = false;
+function _wireActHudCollapse(hud) {
+  if (!_isMobileLayout()) return;
+  const handle = hud.querySelector('.dfc-panel-handle');
+  if (!handle) return;
+  hud.classList.toggle('collapsed', _actHudCollapsed);
+  let chev = handle.querySelector('.act-collapse-chev');
+  if (!chev) { chev = document.createElement('span'); chev.className = 'act-collapse-chev'; handle.appendChild(chev); }
+  chev.textContent = _actHudCollapsed ? '▲' : '▼';
+  handle.style.cursor = 'pointer';
+  handle.addEventListener('click', (e) => {
+    if (e.target.closest('button')) return;
+    _actHudCollapsed = !_actHudCollapsed;
+    hud.classList.toggle('collapsed', _actHudCollapsed);
+    chev.textContent = _actHudCollapsed ? '▲' : '▼';
+  });
+}
 function renderActivationHUD() {
   const board = { appendChild(el) { document.body.appendChild(el); initPanel(el, 'ACTIVATION', 'act-hud', 8, 380); } };
   let hud = document.getElementById('act-hud');
@@ -9305,6 +9328,7 @@ function renderActivationHUD() {
     ${anyOnTableNotMoved ? '' : passBtn}
   `;
   board.appendChild(hud);
+  _wireActHudCollapse(hud);
 }
 
 function renderDeployHint() {
