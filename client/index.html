@@ -759,6 +759,7 @@
     display: none; position: absolute; inset: 0;
     width: 100%; height: 100%;
     cursor: grab;
+    touch-action: none; /* let OrbitControls + tap-detection own all touch gestures */
   }
   #board3d:active { cursor: grabbing; }
   .hud-btn {
@@ -11120,7 +11121,9 @@ function init3d() {
     const dx = e.clientX - _pdPos.x, dy = e.clientY - _pdPos.y;
     _pdDelta = Math.hypot(dx, dy);
     _pdPos = null;
-    if (_pdDelta < 5) _handle3dClick(e);
+    // Touch taps jitter more than mouse clicks — use a larger slop so a tap still selects.
+    const _tapSlop = e.pointerType === 'touch' ? 12 : 5;
+    if (_pdDelta < _tapSlop) _handle3dClick(e);
   });
   canvas.addEventListener('pointermove', _handle3dMousemove);
   canvas.addEventListener('pointerleave', () => {
