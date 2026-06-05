@@ -17093,6 +17093,11 @@ async function showModeSelector() {
             👁 SPECTATE
             <div style="font-size:10px;font-weight:400;color:var(--text-mute);margin-top:3px;">Watch a live game</div>
           </button>
+          ${(currentUser?.aiAccess || currentUser?.role === 'admin') ? `
+          <button class="btn" id="ms-ai-test" style="padding:14px 10px;font-size:13px;">
+            🤖 AI vs AI
+            <div style="font-size:10px;font-weight:400;color:var(--text-mute);margin-top:3px;">Watch two random 1000pt AI fleets battle</div>
+          </button>` : ''}
           ${savesBtn}
         </div>
       </div>`;
@@ -17280,6 +17285,20 @@ async function showModeSelector() {
       overlay.querySelector('#ms-host').onclick    = () => render('host-config');
       overlay.querySelector('#ms-join').onclick    = () => render('join');
       overlay.querySelector('#ms-spectate').onclick = () => render('spectate');
+      const aiTestBtn = overlay.querySelector('#ms-ai-test');
+      if (aiTestBtn) aiTestBtn.onclick = async () => {
+        aiTestBtn.disabled = true;
+        aiTestBtn.innerHTML = '🤖 AI vs AI<div style="font-size:10px;font-weight:400;color:var(--text-mute);margin-top:3px;">Generating fleets…</div>';
+        try {
+          const r = await fetch('/api/rooms', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ aiVsAi: true }) });
+          const d = await r.json();
+          if (d.roomId) { location.href = `${location.pathname}?room=${d.roomId}&side=spectator`; return; }
+          throw new Error('no room');
+        } catch {
+          aiTestBtn.disabled = false;
+          aiTestBtn.innerHTML = '🤖 AI vs AI<div style="font-size:10px;font-weight:400;color:var(--hull-crit);margin-top:3px;">Failed — try again</div>';
+        }
+      };
       const soloBtn = overlay.querySelector('#ms-solo');
       if (soloBtn) soloBtn.onclick = async () => {
         soloBtn.disabled = true;

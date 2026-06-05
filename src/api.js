@@ -12,6 +12,26 @@ import { buildAiFleet } from './ai/fleet-builder.js';
 import { parseNewRecruit } from './fleet/parser.js';
 import { FLEET_DB } from './fleet/db.js';
 
+// ── AI vs AI test-mode helpers ────────────────────────────────────────────────
+const _AI_FACTIONS   = ['ucm', 'shaltari', 'phr', 'resistance', 'scourge', 'bioficer'];
+const _AI_LAYOUTS    = ['diagonal', 'edge_case', 'eruption', 'gatecrash', 'moonlight',
+                        'moonstruck', 'take_and_hold', 'power_grab', 'shock_and_yaw'];
+const _AI_APPROACHES = ['close_enough', 'standoff', 'column', 'counterattack'];
+const _AI_OBJECTIVES = ['standard', 'attrition', 'survey', 'demolish', 'focal_points'];
+const _AI_SECONDARIES = ['annihilate', 'take_prizes', 'gather_intel', 'decapitate',
+                         'key_site', 'priority_target', 'long_shot', 'objectives_beyond'];
+function _pick(arr) { return arr[Math.floor(Math.random() * arr.length)]; }
+function _pickN(arr, n) { return [...arr].sort(() => Math.random() - 0.5).slice(0, n); }
+
+// True when all activations are done and no end-of-round state is pending.
+function _needsRoundEnd(state) {
+  if (state.phase !== 'play' || state.gameOver) return false;
+  if (state.attackModal || state.dropsiteActivation || state.assetPhase ||
+      state.battalionCombat || state.repairPhase || state.atmoDamage) return false;
+  if (state.activeSide || state.initiative) return false;
+  return true;
+}
+
 export const router = Router();
 
 // GET /api/meta — app and ruleset version info.
@@ -30,7 +50,44 @@ router.post('/rooms', (req, res) => {
     setRoomSlot(room.id, 'player1', req.user.id);
   }
 
-  const { aiOpponent, aiSide, aiPersonality, aiFaction, aiSecondaries, aiUseLlm } = req.body || {};
+  const { aiOpponent, aiVsAi, aiSide, aiPersonality, aiFaction, aiSecondaries, aiUseLlm } = req.body || {};
+
+  if (aiVsAi) {
+    // Two random 1000pt AI fleets battle each other; spectators watch. Uses the
+    // fallback (non-LLM) AI by leaving aiUseLlm unset, so both sides don't hit the LLM.
+    const personality = aiPersonality || 'balanced';
+    const LABELS = { aggressive:'Aggressive', positional:'Positional', defensive:'Defensive', balanced:'Balanced', opportunist:'Opportunist' };
+    const label = LABELS[personality] || 'Balanced';
+    const factionP1 = _pick(_AI_FACTIONS);
+    const factionP2 = _pick(_AI_FACTIONS);
+    room.aiSide        = 'both';
+    room.aiPersonality = personality;
+    room.allowSpectators = true; // AI vs AI games are always public
+    room.state.aiSide  = 'both';
+    room.state.aiVsAi  = true;
+    room.state.aiPersonality = personality;
+    room.state.fleetChoices.f1 = factionP1;
+    room.state.fleetChoices.f2 = factionP2;
+    room.state.secondaryChoice.f1 = _pickN(_AI_SECONDARIES, 2);
+    room.state.secondaryChoice.f2 = _pickN(_AI_SECONDARIES, 2);
+    room.state.playerNames = { f1: `AI-Red (${label})`, f2: `AI-Blue (${label})` };
+    room.state.scenario = {
+      layout:   _pick(_AI_LAYOUTS),
+      approach: _pick(_AI_APPROACHES),
+      objective: _pick(_AI_OBJECTIVES),
+      variant:  'none',
+    };
+    for (const [slot, faction] of [['f1', factionP1], ['f2', factionP2]]) {
+      const fleet = buildAiFleet({ faction, targetPts: 1000, admiralLevel: 0, personality });
+      if (fleet) room.state.importedFleets[slot] = fleet;
+    }
+    apply(room.state, { type: 'readySetup', side: 'player1' }, room.rng);
+    apply(room.state, { type: 'readySetup', side: 'player2' }, room.rng);
+    console.log(`Room ${room.id} — AI vs AI (${factionP1} vs ${factionP2}, ${personality}, ${room.state.scenario.layout})`);
+    setImmediate(() => maybeAiTurn(room).catch(err => console.error(`[${room.id}] AI vs AI error:`, err.message)));
+    return res.json({ roomId: room.id });
+  }
+
   if (aiOpponent) {
     const side = aiSide === 'player1' ? 'player1' : 'player2';
     const slot = side === 'player1' ? 'f1' : 'f2';
@@ -418,16 +475,58 @@ export function handleConnection(ws, req) {
 
 async function maybeAiTurn(room) {
   if (!room.aiSide || room.aiPending) return;
-  if (!shouldAiAct(room.state, room.aiSide)) return;
+
+  // Which side has the next decision right now? For AI vs AI (aiSide==='both')
+  // this resolves the acting side from the current phase.
+  function effectiveAiSide() {
+    if (room.aiSide !== 'both') return room.aiSide;
+    const s = room.state;
+    if (s.phase === 'scenery')     return (s.sceneryReady    ||{}).player1 ? 'player2' : 'player1';
+    if (s.phase === 'nominations') return (s.nominationsReady||{}).player1 ? 'player2' : 'player1';
+    if (s.phase === 'protect')     return (s.protectNomReady ||{}).player1 ? 'player2' : 'player1';
+    if (s.phase === 'deploy')      return (s.deployDone||{}).player1 ? 'player2' : 'player1';
+    if (s.activeSide) return s.activeSide;
+    if (s.dropsiteActivation) return s.dropsiteActivation.side;
+    if (s.assetPhase?.step === 'assets') {
+      if (s.assetActiveSide) return s.assetActiveSide;
+      const done = s.assetPhase.doneSides || [];
+      return done.includes('player1') ? 'player2' : 'player1';
+    }
+    if (s.battalionCombat) return s.initiativeHolder || 'player1';
+    if (s.initiative?.winner && !s.initiative?.holder) return s.initiative.winner;
+    if (s.initiative?.holder && !s.activeSide) return s.initiative.holder;
+    return s.initiativeHolder || 'player1';
+  }
+
+  const side0 = effectiveAiSide();
+  if (!shouldAiAct(room.state, side0) && !_needsRoundEnd(room.state)) return;
+
   room.aiPending = true;
   broadcast(room, { type: 'aiThinking', thinking: true });
-  console.log(`[${room.id}] AI turn — phase:${room.state.phase} activeSide:${room.state.activeSide}`);
+  console.log(`[${room.id}] AI${room.aiSide === 'both' ? ' vs AI' : ''} turn — phase:${room.state.phase} activeSide:${room.state.activeSide}`);
   try {
-    let guard = 200; // planning(2) + deploy(N ships) + activations(N groups) + sub-phases
-    while (shouldAiAct(room.state, room.aiSide) && guard-- > 0) {
-      await triggerAi(room, (intent) => {
-        if (room.playStartState) recordIntent(room, room.aiSide, intent);
-      });
+    let guard = room.aiSide === 'both' ? 400 : 200;
+    while (guard-- > 0) {
+      // Capture the play-start snapshot as soon as we enter play phase.
+      // (Normally done in onMessage, but AI vs AI bypasses the WS handler.)
+      if (room.state.phase === 'play' && !room.playStartState) {
+        room.playStartState    = structuredClone(room.state);
+        room.playStartRngState = room.rng.getState();
+      }
+      const side = effectiveAiSide();
+      if (shouldAiAct(room.state, side)) {
+        await triggerAi({ ...room, aiSide: side }, (intent) => {
+          if (room.playStartState) recordIntent(room, side, intent);
+        });
+      } else if (room.aiSide === 'both' && _needsRoundEnd(room.state)) {
+        // All activations complete — advance the round so play continues.
+        if (isLegal(room.state, { type: 'endRound' }, 'player1')) {
+          apply(room.state, { type: 'endRound' }, room.rng);
+          if (room.playStartState) recordIntent(room, 'player1', { type: 'endRound' });
+        } else break;
+      } else {
+        break;
+      }
     }
     if (guard <= 0) console.warn(`[${room.id}] AI guard exhausted — possible loop`);
   } catch (err) {
@@ -483,7 +582,8 @@ function onMessage(room, ws, side, msg, userId) {
       }
       if (intent.type === 'endRound') {
         room.endRoundVotes.add(side);
-        if (room.aiSide) room.endRoundVotes.add(room.aiSide);
+        if (room.aiSide === 'both') { room.endRoundVotes.add('player1'); room.endRoundVotes.add('player2'); }
+        else if (room.aiSide) room.endRoundVotes.add(room.aiSide);
         const connected = Object.values(room.sockets).filter(Boolean).length;
         broadcast(room, { type: 'endRoundVotes', votes: [...room.endRoundVotes] });
         if (room.endRoundVotes.size < Math.max(connected, 2)) return;
@@ -491,7 +591,8 @@ function onMessage(room, ws, side, msg, userId) {
       }
       if (intent.type === 'advanceRound') {
         room.advanceRoundVotes.add(side);
-        if (room.aiSide) room.advanceRoundVotes.add(room.aiSide);
+        if (room.aiSide === 'both') { room.advanceRoundVotes.add('player1'); room.advanceRoundVotes.add('player2'); }
+        else if (room.aiSide) room.advanceRoundVotes.add(room.aiSide);
         const connected = Object.values(room.sockets).filter(Boolean).length;
         broadcast(room, { type: 'advanceRoundVotes', votes: [...room.advanceRoundVotes] });
         if (room.advanceRoundVotes.size < Math.max(connected, 2)) return;
@@ -505,7 +606,8 @@ function onMessage(room, ws, side, msg, userId) {
           room.assetPhaseVotes._type = intent.type;
         }
         room.assetPhaseVotes.add(side);
-        if (room.aiSide) room.assetPhaseVotes.add(room.aiSide);
+        if (room.aiSide === 'both') { room.assetPhaseVotes.add('player1'); room.assetPhaseVotes.add('player2'); }
+        else if (room.aiSide) room.assetPhaseVotes.add(room.aiSide);
         const connected = Object.values(room.sockets).filter(Boolean).length;
         broadcast(room, { type: 'assetPhaseVotes', votes: [...room.assetPhaseVotes], voteType: intent.type });
         if (room.assetPhaseVotes.size < Math.max(connected, 2)) return;
