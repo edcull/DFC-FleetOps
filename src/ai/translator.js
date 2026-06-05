@@ -118,6 +118,7 @@ function moveShipToward(state, rng, gid, si, tx, ty, applyFn) {
 export function buildActivation(state, rng, gid, order, movePlan, aiSide, applyFn, launchPlan = null) {
   const grp = state.groups[gid];
   if (!grp) return;
+  const def = grp.def;
 
 // By the time buildActivation is called, the ship should be on-table (arrived).
   if (!applyFn({ type: 'applyOrder', gid, order })) return;
@@ -176,7 +177,6 @@ export function buildActivation(state, rng, gid, order, movePlan, aiSide, applyF
 
   // Firing: only orders that permit it. MT and SR are move-only / no-fire.
   const NO_FIRE_ORDERS = new Set(['MT', 'SR']);
-  const def = grp.def;
   if (!NO_FIRE_ORDERS.has(order) && def?.weapons) {
     const fireSi = grp.ships.findIndex(s => !s.destroyed && !s.offTable);
     if (fireSi >= 0) {
