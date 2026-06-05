@@ -1163,9 +1163,12 @@
     #scen-banner .scen-banner-text { display: none; }
     #scen-banner .scen-banner-btns {
       margin-top: 0 !important; border-top: none !important; padding-top: 0 !important;
-      display: flex; gap: 5px;
+      display: flex; gap: 4px; flex-wrap: nowrap;
     }
-    #scen-banner .scen-banner-btns button { padding: 9px 12px !important; font-size: 12px !important; margin: 0 !important; }
+    #scen-banner .scen-banner-btns button { padding: 8px 8px !important; font-size: 12px !important; margin: 0 !important; line-height: 1; }
+    /* The top-left HUD text (player-to-activate / selected ship) is hidden on mobile;
+       the board toggles live in the scenario banner row instead. */
+    #hud-active, #hud-turn-info { display: none !important; }
     .board-legend { display: none; }
 
     /* The scenery-placement and deployment phase HUDs live in the top-left board
@@ -9428,6 +9431,9 @@ function renderScenBanner() {
   bn.innerHTML = `<div class="scen-banner-text"><b>${_bnAsym ? 'Asymmetric' : (obj ? obj.name : '')}</b>${lines}</div>
     <div class="scen-banner-btns" style="margin-top:5px;border-top:1px solid rgba(255,255,255,0.07);padding-top:5px;">
       <button id="btn-view-toggle" class="mobile-only" style="${btnStyle(!!_view3d)}" title="Toggle 2D / 3D view">3D</button>
+      <button class="mobile-only" data-arcview="1" style="${btnStyle(arcViewMode===1)}" title="Arcs + Scan">⚙</button>
+      <button class="mobile-only" data-arcview="2" style="${btnStyle(arcViewMode===2)}" title="Signatures">◎</button>
+      <button class="mobile-only" data-trails-toggle style="${btnStyle(_view3dTrails)}" title="Movement trails">↝</button>
       <button id="btn-vp-toggle" style="${btnStyle(vpActive)}" title="Toggle VP breakdown">VP</button>
       <button id="btn-ap-toggle" style="${btnStyle(apActive)}" title="Toggle Ability Points">AP</button>
       <button id="btn-fleet-toggle" style="${btnStyle(flActive)}" title="Toggle Fleet View">FL</button>
@@ -13615,7 +13621,7 @@ document.addEventListener('click', (e) => {
   // Zoom reset
   if (e.target.matches('#btn-zoom-reset')) { _resetMapView(); return; }
   // 2D / 3D view toggle (mobile scen-banner button)
-  if (e.target.matches('#btn-view-toggle')) { toggle3d(); return; }
+  if (e.target.matches('#btn-view-toggle')) { toggle3d(); renderAll(true); return; }
   // Panel toggles — VP / AP / Fleet are mutually exclusive (opening one closes the others).
   if (e.target.matches('#btn-vp-toggle')) {
     if (state.phase !== 'play') return;
@@ -13648,7 +13654,7 @@ document.addEventListener('click', (e) => {
     renderAll(true); return;
   }
   // Movement trails toggle — persisted, applies to both 2D and 3D views
-  if (e.target.matches('#btn-trails-toggle')) {
+  if (e.target.matches('#btn-trails-toggle, [data-trails-toggle]')) {
     _view3dTrails = !_view3dTrails;
     localStorage.setItem('dfc_showTrails', _view3dTrails);
     renderAll(true); return;
