@@ -16656,6 +16656,7 @@ function _intentSide(intent) {
   const defensive = state.attackModal && intent && (
     intent.type === 'attackFighterReroll' ||
     (intent.type === 'attackReroll' && intent.which === 'save') ||
+    (intent.type === 'attackStep' && (intent.to === 'apply' || intent.to === 'rollbackup')) ||
     (intent.type === 'attackDeclare' && (intent.what === 'shield' || intent.what === 'shieldBooster' || intent.what === 'brace' || intent.what === 'contain'))
   );
   if (defensive) {
