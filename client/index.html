@@ -1134,10 +1134,18 @@
     .nom-panel  { padding: 10px 10px calc(8px + env(safe-area-inset-bottom, 0px)) !important; }
     .act-hud    { padding: 8px 10px calc(10px + env(safe-area-inset-bottom, 0px)) !important; }
 
-    /* Keep the centre of the board clear: the scenario banner docks to the
-       bottom and the colour-key legend is hidden on small screens. The board
-       HUD controls (zoom/arc/sig/trails) stay top-left — small and essential. */
-    #scen-banner.scen-banner { top: auto !important; bottom: 8px; right: 8px; max-width: 60vw; }
+    /* Keep the centre of the board clear: hide the colour-key legend, and show the
+       scenario/VP banner top-right with ONLY the VP / AP / FL buttons (no text). */
+    #scen-banner.scen-banner {
+      top: 8px !important; bottom: auto !important; right: 6px; left: auto;
+      max-width: none; padding: 0; background: transparent; border: none; backdrop-filter: none;
+    }
+    #scen-banner .scen-banner-text { display: none; }
+    #scen-banner .scen-banner-btns {
+      margin-top: 0 !important; border-top: none !important; padding-top: 0 !important;
+      display: flex; gap: 5px;
+    }
+    #scen-banner .scen-banner-btns button { padding: 9px 12px !important; font-size: 12px !important; margin: 0 !important; }
     .board-legend { display: none; }
 
     /* The scenery-placement and deployment phase HUDs live in the top-left board
@@ -1155,8 +1163,8 @@
     }
 
     /* Mobile stays in 2D (pinch-zoom + pan); hide the 3D toggle and declutter the
-       board by removing the arc / signature / trails toggles (keep zoom-reset). */
-    #btn-3d-toggle, #btn-arc-toggle, #btn-sig-toggle, #btn-trails-toggle { display: none; }
+       board by removing the arc / signature / trails / zoom-reset toggles. */
+    #btn-3d-toggle, #btn-arc-toggle, #btn-sig-toggle, #btn-trails-toggle, #btn-zoom-reset { display: none; }
     /* Let our JS own all board touch gestures (drag-pan + pinch-zoom). */
     #board { touch-action: none; }
 
@@ -9328,8 +9336,8 @@ function renderScenBanner() {
   const apActive  = !!state.apEditOpen;
   const flActive  = !!document.getElementById('fleet-view-overlay');
   const btnStyle  = (active) => `display:inline-block;margin:0 2px 0 0;padding:2px 6px;font-family:var(--mono);font-size:9px;letter-spacing:0.08em;cursor:pointer;border-radius:2px;border:1px solid ${active ? 'var(--border-bright)' : 'var(--border)'};background:rgba(8,16,15,0.85);color:${active ? 'var(--text)' : 'var(--text-mute)'};`;
-  bn.innerHTML = `<b>${_bnAsym ? 'Asymmetric' : (obj ? obj.name : '')}</b>${lines}
-    <div style="margin-top:5px;border-top:1px solid rgba(255,255,255,0.07);padding-top:5px;">
+  bn.innerHTML = `<div class="scen-banner-text"><b>${_bnAsym ? 'Asymmetric' : (obj ? obj.name : '')}</b>${lines}</div>
+    <div class="scen-banner-btns" style="margin-top:5px;border-top:1px solid rgba(255,255,255,0.07);padding-top:5px;">
       <button id="btn-vp-toggle" style="${btnStyle(vpActive)}" title="Toggle VP breakdown">VP</button>
       <button id="btn-ap-toggle" style="${btnStyle(apActive)}" title="Toggle Ability Points">AP</button>
       <button id="btn-fleet-toggle" style="${btnStyle(flActive)}" title="Toggle Fleet View">FL</button>
@@ -9356,6 +9364,23 @@ function renderBrand() {
   }
   if (state.phase === 'play' && state.score) {
     const u = state.score.player1, s = state.score.player2;
+    const openVp = (e) => {
+      const r = e.currentTarget.getBoundingClientRect();
+      state.vpBreakdownOpen = true;
+      state.vpAnchor = { top: r.bottom, left: r.left };
+      renderAll(true);
+    };
+    if (_isMobileLayout()) {
+      // Condensed top bar: just "p1vp – p2vp" in player colours.
+      brandEl.innerHTML = `<button id="brand-vp-btn" title="Victory Point breakdown"
+        style="display:flex;align-items:center;gap:7px;background:none;border:none;padding:0;cursor:pointer;font-family:var(--display);font-weight:700;font-size:20px;line-height:1;">
+        <span style="color:var(--ucm);">${u.vp}</span>
+        <span style="color:var(--text-mute);font-size:15px;">–</span>
+        <span style="color:var(--shal);">${s.vp}</span>
+      </button>`;
+      brandEl.querySelector('#brand-vp-btn').addEventListener('click', openVp);
+      return;
+    }
     brandEl.innerHTML = `<button id="brand-vp-btn" title="Click for Victory Point breakdown"
       style="display:flex;align-items:center;gap:8px;background:none;border:none;padding:0;cursor:pointer;font-family:var(--display);">
       <span style="color:var(--ucm);font-size:11px;letter-spacing:0.1em;font-weight:700;">${factionName('player1').toUpperCase()}</span>
@@ -9366,12 +9391,7 @@ function renderBrand() {
       <span style="color:var(--shal);font-weight:700;font-size:17px;line-height:1;">${s.vp}</span>
       <span style="color:var(--shal);font-size:11px;letter-spacing:0.1em;font-weight:700;">${factionName('player2').toUpperCase()}</span>
     </button>`;
-    brandEl.querySelector('#brand-vp-btn').addEventListener('click', (e) => {
-      const r = e.currentTarget.getBoundingClientRect();
-      state.vpBreakdownOpen = true;
-      state.vpAnchor = { top: r.bottom, left: r.left };
-      renderAll(true);
-    });
+    brandEl.querySelector('#brand-vp-btn').addEventListener('click', openVp);
     return;
   }
   brandEl.innerHTML = `<span id="brand-red">${factionName('player1').toUpperCase()}</span><span class="vs">VS</span><span class="shal-name" id="brand-blue">${factionName('player2').toUpperCase()}</span>`;
@@ -9479,6 +9499,7 @@ function _syncBoardBottomInset() {
     if (!_isMobileLayout()) closeMobileDrawers();
     _syncBoardBottomInset();
     if (!_view3d) _applyViewBox();
+    try { renderBrand(); } catch (e) {} // swap condensed/full brand across the breakpoint
   });
 }
 
@@ -15837,17 +15858,22 @@ function initPanel(el, title, id, defaultX = 8, defaultY = 8, onClose = null, ce
 let _mapZoom = 1;        // >1 = zoomed in
 let _mapPanX = 0;        // SVG-space offset from the board origin
 let _mapPanY = 0;
-const _MAP_ZOOM_MIN = 1;
+const _MAP_ZOOM_MIN = 0.5;
 const _MAP_ZOOM_MAX = 8;
 const _MAP_BOARD    = 576; // total board size in SVG units
 
 function _applyViewBox() {
   const size = _MAP_BOARD / _mapZoom;
-  // On mobile allow panning past the edges (overscroll up to half a viewport) so
-  // the corners/edges are easy to centre and zoom into; clamp tightly on desktop.
-  const margin = _isMobileLayout() ? size * 0.5 : 0;
-  _mapPanX = Math.max(-margin, Math.min(_MAP_BOARD - size + margin, _mapPanX));
-  _mapPanY = Math.max(-margin, Math.min(_MAP_BOARD - size + margin, _mapPanY));
+  if (size >= _MAP_BOARD) {
+    // Zoomed out past the full board — centre it (board smaller than the viewport).
+    _mapPanX = _mapPanY = (_MAP_BOARD - size) / 2;
+  } else {
+    // On mobile allow panning past the edges (overscroll up to half a viewport) so
+    // the corners/edges are easy to centre and zoom into; clamp tightly on desktop.
+    const margin = _isMobileLayout() ? size * 0.5 : 0;
+    _mapPanX = Math.max(-margin, Math.min(_MAP_BOARD - size + margin, _mapPanX));
+    _mapPanY = Math.max(-margin, Math.min(_MAP_BOARD - size + margin, _mapPanY));
+  }
   board.setAttribute('viewBox', `${_mapPanX} ${_mapPanY} ${size} ${size}`);
 }
 
