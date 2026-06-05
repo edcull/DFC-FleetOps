@@ -383,6 +383,12 @@ async function maybeAiTurn(room) {
   try {
     let guard = 400;
     while (guard-- > 0) {
+      // Capture the play-start snapshot as soon as we enter play phase.
+      // (Normally done in onMessage, but AI vs AI bypasses the WS handler.)
+      if (room.state.phase === 'play' && !room.playStartState) {
+        room.playStartState    = structuredClone(room.state);
+        room.playStartRngState = room.rng.getState();
+      }
       const side = effectiveAiSide();
       if (shouldAiAct(room.state, side)) {
         await triggerAi({ ...room, aiSide: side }, (intent) => {
