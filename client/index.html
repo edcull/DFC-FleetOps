@@ -9190,13 +9190,18 @@ function _wireActHudCollapse(hud, gid) {
   if (!_isMobileLayout()) return;
   const handle = hud.querySelector('.dfc-panel-handle');
   if (!handle) return;
-  // A new group activating starts expanded.
-  if (gid !== _actHudGid) { _actHudGid = gid; _actHudCollapsed = false; _actHudPrevAiming = false; }
-  // Targeting transitions nudge the collapse state, but the user can still toggle
-  // freely afterwards (e.g. expand to cancel targeting).
+  // When just watching (replay / spectator) the movement/action HUD isn't needed —
+  // default it collapsed (attack / battalion / repair / scoring panels are separate
+  // and still shown). Otherwise a new group activating starts expanded.
+  const watching = _replayMode || _isSpectator;
+  if (gid !== _actHudGid) { _actHudGid = gid; _actHudCollapsed = watching; _actHudPrevAiming = false; }
+  // Targeting transitions nudge the collapse state (but not while just watching, where
+  // it should stay collapsed); the user can still toggle the bar manually.
   const aiming = _actHudAiming();
-  if (aiming && !_actHudPrevAiming) _actHudCollapsed = true;   // entered targeting → collapse
-  else if (!aiming && _actHudPrevAiming) _actHudCollapsed = false; // target locked/cancelled → expand
+  if (!watching) {
+    if (aiming && !_actHudPrevAiming) _actHudCollapsed = true;   // entered targeting → collapse
+    else if (!aiming && _actHudPrevAiming) _actHudCollapsed = false; // target locked/cancelled → expand
+  }
   _actHudPrevAiming = aiming;
   let chev = handle.querySelector('.act-collapse-chev');
   if (!chev) { chev = document.createElement('span'); chev.className = 'act-collapse-chev'; handle.appendChild(chev); }
