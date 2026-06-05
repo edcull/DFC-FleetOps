@@ -9882,7 +9882,7 @@ function _closeFleetViewPanels() {
 // manual close.
 let _lastAutoFleetKey = null;
 function _maybeAutoOpenFleet() {
-  if (!_isMobileLayout() || state.phase !== 'play') { _lastAutoFleetKey = null; return; }
+  if (!_isMobileLayout() || state.phase !== 'play' || _replayMode) { _lastAutoFleetKey = null; return; }
   const myTurn = _isSpectator ? false : (!_netSide ? !!state.activeSide : (state.activeSide === _netSide));
   if (!myTurn) return;
   const activated = Object.values(state.groups).filter(g => g.activated).length;
