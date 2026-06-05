@@ -1061,6 +1061,10 @@
   ::-webkit-scrollbar-thumb { background: var(--border-bright); border-radius: 3px; }
   ::-webkit-scrollbar-thumb:hover { background: var(--text-mute); }
 
+  /* Order buttons inside the activation HUD — desktop uses the detail panel, so
+     this 3×2 grid is shown only on mobile. */
+  .act-orders { display: none; grid-template-columns: repeat(3, 1fr); gap: 4px; margin: 4px 0 6px; }
+
   /* Setup mobile tab bar (Player 1 / Player 2 / Scenario) — shown only ≤860px. */
   .setup-mtabs { display: none; gap: 5px; margin-bottom: 12px; }
   .setup-mtabs button {
@@ -1169,6 +1173,7 @@
     /* The top-left HUD text (player-to-activate / selected ship) is hidden on mobile;
        the board toggles live in the scenario banner row instead. */
     #hud-active, #hud-turn-info { display: none !important; }
+    .act-orders { display: grid; }
     .board-legend { display: none; }
 
     /* The scenery-placement and deployment phase HUDs live in the top-left board
@@ -9233,9 +9238,16 @@ function renderActivationHUD() {
 
   // Contextual hint: guides the player through each activation stage
   let hintLine = '';
+  let ordersGrid = '';
   const _allOnTable = grp.ships.every(s => s.destroyed || !s.offTable);
   if (!grp.order && _allOnTable) {
     hintLine = `<div style="font-size:10px;color:var(--hull-warn);margin-bottom:4px;">Select Group orders</div>`;
+    // On mobile, surface the six order buttons here (3×2 grid) — reuses the
+    // detail-panel [data-order] handler. Hidden on desktop via CSS.
+    const _oppDis = netIsMySide(def.side) ? '' : 'disabled';
+    ordersGrid = `<div class="act-orders">` +
+      Object.keys(ORDERS).map(k => `<button class="order-btn" data-order="${k}" ${_oppDis}>${ORDERS[k].short}</button>`).join('') +
+      `</div>`;
   } else if (grp.order && !anyMoved && _orderNeedsMove) {
     hintLine = `<div style="font-size:10px;color:var(--hull-warn);margin-bottom:4px;">Click to set movement order</div>`;
   } else if (grp.order && (!_orderNeedsMove || anyMoved)) {
@@ -9248,6 +9260,7 @@ function renderActivationHUD() {
   hud.innerHTML = `
     <div class="act-hud-name" style="color:var(--${sideClass});">${def.name}</div>
     ${hintLine}
+    ${ordersGrid}
     ${undoBtn}
     ${finishBtn}
     ${cancelOrderBtn}
