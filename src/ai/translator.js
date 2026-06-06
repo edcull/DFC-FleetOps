@@ -3,7 +3,7 @@
 
 import { INCH } from '../engine/constants.js';
 import { moveCone, dsEnemyBattalions, dsBattalions, connectedGateships, coherencyInches } from '../engine/mutators.js';
-import { bestMoveToward, findBestTarget } from './options.js';
+import { bestMoveToward, findBestTarget, baseDiameterPx } from './options.js';
 
 // Ground-launch aura ranges + target constraints (mirrors the client's LAUNCH_TYPES /
 // tryGroundLaunch). Launch range isn't gated, so the AI must check it itself or it
@@ -42,15 +42,46 @@ function formationOK(pts, cohPx, need) {
   return true;
 }
 
-// Move a group toward (tx,ty) WITHOUT breaking coherency. Every ship heads for one
-// shared waypoint — the formation centroid advanced toward the target. We try the
-// largest advance that still leaves the group coherent (simulating each ship's
-// move first), backing off toward 0 (converge on the centroid) if needed, so the AI
-// never intentionally strings ships out of formation. Returns the chosen waypoint.
+// N distinct target slots packed around (cx,cy), each ~one base diameter apart, so the
+// group's ships aim at *different* points. Aiming them all at one spot makes them pile up,
+// and the engine resolves the overlap by shoving ships back along their shared path — the
+// "conga line". Concentric rings keep every slot at least a base diameter from the others.
+function packSlots(cx, cy, n, diamPx) {
+  const slots = [{ x: cx, y: cy }];
+  const spacing = diamPx + 2;
+  for (let ring = 1; slots.length < n; ring++) {
+    const rad = spacing * ring;
+    const count = Math.max(1, Math.floor((2 * Math.PI * rad) / spacing));
+    for (let i = 0; i < count && slots.length < n; i++) {
+      const a = (i / count) * 2 * Math.PI + ring * 0.6;
+      slots.push({ x: cx + Math.cos(a) * rad, y: cy + Math.sin(a) * rad });
+    }
+  }
+  return slots;
+}
+
+// True if no two destinations (same layer) sit closer than a base diameter — i.e. the
+// ships won't end up overlapping (and so won't be shoved into a line).
+function nonOverlapOK(pts, diamPx) {
+  for (let i = 0; i < pts.length; i++) {
+    for (let j = i + 1; j < pts.length; j++) {
+      if ((pts[i].layer || 'orbit') !== (pts[j].layer || 'orbit')) continue;
+      if (Math.hypot(pts[i].x - pts[j].x, pts[i].y - pts[j].y) < diamPx - 1) return false;
+    }
+  }
+  return true;
+}
+
+// Move a group toward (tx,ty) without breaking coherency and without stacking ships. The
+// formation centroid advances toward the target; each ship is then sent to its own slot in
+// a non-overlapping cluster around that waypoint (nearest slot, greedily). We pick the
+// largest advance whose simulated destinations stay coherent AND non-overlapping, backing
+// off toward the centroid otherwise.
 function moveGroupCoherent(state, rng, gid, movers, tx, ty, applyFn) {
   const def = state.groups[gid].def;
   const cohPx = coherencyInches(def) * INCH;
   const need = movers.length >= 4 ? 2 : 1;
+  const diamPx = baseDiameterPx(def);
 
   const cones = {};
   let reach = Infinity;
@@ -66,23 +97,41 @@ function moveGroupCoherent(state, rng, gid, movers, tx, ty, applyFn) {
   const dC = Math.hypot(tx - cx, ty - cy) || 1;
   const ux = (tx - cx) / dC, uy = (ty - cy) / dC;
 
-  // Simulate the group moving toward a waypoint and return the resulting positions.
-  const simulate = (wx, wy) => movers.map(({ s, si }) => {
-    const mc = cones[si];
-    if (!mc.o || mc.o.moveMax <= 0) return { x: s.x, y: s.y, layer: s.layer };
-    const d = bestMoveToward(s, mc, wx, wy);
-    return { x: d.x, y: d.y, layer: s.layer };
-  });
+  // For an advance: pack distinct slots around the waypoint, give each ship its nearest
+  // free slot, and simulate each ship's reachable move toward it.
+  const planAt = (adv) => {
+    const wx = cx + ux * adv, wy = cy + uy * adv;
+    const slots = packSlots(wx, wy, movers.length, diamPx);
+    const used = new Array(slots.length).fill(false);
+    const target = {};
+    for (const { s, si } of movers) {
+      let bi = 0, bd = Infinity;
+      for (let k = 0; k < slots.length; k++) {
+        if (used[k]) continue;
+        const d = (s.x - slots[k].x) ** 2 + (s.y - slots[k].y) ** 2;
+        if (d < bd) { bd = d; bi = k; }
+      }
+      used[bi] = true; target[si] = slots[bi];
+    }
+    const dests = movers.map(({ s, si }) => {
+      const mc = cones[si];
+      if (!mc.o || mc.o.moveMax <= 0) return { x: s.x, y: s.y, layer: s.layer };
+      const d = bestMoveToward(s, mc, target[si].x, target[si].y);
+      return { x: d.x, y: d.y, layer: s.layer };
+    });
+    return { target, dests };
+  };
 
-  // Largest advance (fraction of reach) that keeps the group coherent; fall back to
-  // converging on the centroid (advance 0), which only ever pulls ships together.
-  let wx = cx, wy = cy;
+  let chosen = null;
   for (const frac of [1, 0.85, 0.7, 0.55, 0.4, 0.25, 0.12, 0]) {
-    const adv = Math.min(reach * frac, dC);
-    const cwx = cx + ux * adv, cwy = cy + uy * adv;
-    if (formationOK(simulate(cwx, cwy), cohPx, need)) { wx = cwx; wy = cwy; break; }
+    const cand = planAt(Math.min(reach * frac, dC));
+    if (formationOK(cand.dests, cohPx, need) && nonOverlapOK(cand.dests, diamPx)) { chosen = cand; break; }
   }
-  for (const { si } of movers) moveShipToward(state, rng, gid, si, wx, wy, applyFn);
+  if (!chosen) chosen = planAt(0); // converge on the centroid — least overlap available
+  for (const { si } of movers) {
+    const t = chosen.target[si];
+    moveShipToward(state, rng, gid, si, t.x, t.y, applyFn);
+  }
 }
 
 // Find the best dropsite to bombard: enemy/contested DS with most battalions,
