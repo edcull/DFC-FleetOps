@@ -2,12 +2,44 @@
 // Does NOT call legalActions() (which only covers pass/endRound/commitScenario).
 // Instead generates candidates and validates each with isLegal().
 
-import { ORDERS, INCH } from '../engine/constants.js';
+import { ORDERS, INCH, DEPLOYMENTS } from '../engine/constants.js';
 import { isLegal } from '../engine/gating.js';
-import { moveCone, weaponCanTarget, dropsiteController, canDeployNow } from '../engine/mutators.js';
+import { moveCone, weaponCanTarget, dropsiteController, canDeployNow, isInZone, coherencyInches } from '../engine/mutators.js';
 
 const BOARD_PX = 48 * INCH;
 const TONNAGE_ORDER = { C: 0, H: 1, M: 2, L: 3 };
+
+// ── Deployment-zone geometry ────────────────────────────────────────────────
+// Deploy/arrival legality (the in-zone constraint) is NOT enforced by gating —
+// it's a setup rule the UI self-enforces. The AI must respect it too, else it
+// deploys/arrives illegally outside its zone.
+
+// The deployment zone geometry (inches) for a side, or null if unconstrained.
+export function deployZoneFor(state, side) {
+  const dep = DEPLOYMENTS[state?.scenario?.deployment];
+  const zoneName = state?.deployZone?.[side] || (side === 'player1' ? 'south' : 'north');
+  return dep?.zones?.[zoneName] || null;
+}
+
+// Nearest in-zone position (px) to a preferred px point. Returns the preferred
+// point unchanged when it's already legal (or when there's no zone), otherwise
+// grid-samples the board and returns the closest legal cell. null if the zone
+// somehow contains no sampled point.
+export function legalZonePosPx(zone, preferXpx, preferYpx) {
+  if (!zone) return { x: preferXpx, y: preferYpx };
+  const pxIn = preferXpx / INCH, pyIn = preferYpx / INCH;
+  if (isInZone(pxIn, pyIn, zone)) return { x: preferXpx, y: preferYpx };
+  let best = null, bestD = Infinity;
+  for (let xi = 0.5; xi < 48; xi += 0.75) {
+    for (let yi = 0.5; yi < 48; yi += 0.75) {
+      if (!isInZone(xi, yi, zone)) continue;
+      const d = (xi - pxIn) ** 2 + (yi - pyIn) ** 2;
+      if (d < bestD) { bestD = d; best = { x: Math.round(xi * INCH), y: Math.round(yi * INCH) }; }
+    }
+  }
+  return best;
+}
+
 
 // Ground-asset launch ranges (inches). gate_dropship needs the Voidgate network
 // (handled separately in the activation handler), so it's excluded here.
@@ -219,13 +251,14 @@ export function generatePlanningOptions(state, aiSide) {
 
 export function generateDeployOptions(state, aiSide) {
   const opts = [];
-  const deployZone = state.deployZone?.[aiSide] || 'south';
+  const deployZoneName = state.deployZone?.[aiSide] || (aiSide === 'player1' ? 'south' : 'north');
+  const zone = deployZoneFor(state, aiSide);
   const dropsites = state.scenarioData?.dropsites || [];
-  const centerY = deployZone === 'south' ? BOARD_PX * 0.82 : BOARD_PX * 0.18;
-
+  // Anchor near a dropsite (so droppers start close), biased to the friendly edge.
+  const edgeYpx = deployZoneName === 'south' ? BOARD_PX * 0.97 : BOARD_PX * 0.03;
   const nearDs = dropsites
     .filter(d => !d.destroyed)
-    .sort((a, b) => Math.abs(a.y * INCH - centerY) - Math.abs(b.y * INCH - centerY))[0];
+    .sort((a, b) => Math.abs(a.y * INCH - edgeYpx) - Math.abs(b.y * INCH - edgeYpx))[0];
 
   for (const [gid, grp] of Object.entries(state.groups)) {
     if (grp.def?.side !== aiSide) continue;
@@ -236,18 +269,26 @@ export function generateDeployOptions(state, aiSide) {
     if (si < 0) continue;
     if (!isLegal(state, { type: 'deployShip', gid, si }, aiSide)) continue;
 
-    const heading = deployZone === 'south' ? -90 : 90; // face north or south
-    const positions = [
-      { x: BOARD_PX / 2, y: centerY },
-      nearDs ? { x: nearDs.x * INCH, y: centerY } : null,
-      { x: BOARD_PX * 0.35, y: centerY },
-      { x: BOARD_PX * 0.65, y: centerY },
-    ].filter(Boolean);
-
-    for (const pos of positions) {
-      opts.push({ id: `opt_dep_${gid}_${opts.length}`, gid, si, x: pos.x, y: pos.y, heading });
-      break; // one candidate per group per call
+    const heading = deployZoneName === 'south' ? -90 : 90; // face north or south
+    // Cluster within coherency of the group's already-placed ships; otherwise pick a
+    // fresh anchor near a dropsite at the friendly edge.
+    const coh = coherencyInches(grp.def) * INCH;
+    const placed = grp.ships.filter(s => !s.destroyed && !s.offTable);
+    let prefX, prefY;
+    if (placed.length) {
+      const c = centroid(grp.ships);                  // stay tight to the formation
+      const k = placed.length;
+      prefX = c.x + Math.cos(k * 2.4) * Math.min(coh * 0.5, INCH * 1.5);
+      prefY = c.y + Math.sin(k * 2.4) * Math.min(coh * 0.5, INCH * 1.5);
+    } else {
+      prefX = nearDs ? nearDs.x * INCH : BOARD_PX / 2;
+      prefY = edgeYpx;
     }
+    // Snap into the legal deployment zone.
+    const pos = legalZonePosPx(zone, Math.max(INCH, Math.min(BOARD_PX - INCH, prefX)),
+                                     Math.max(INCH, Math.min(BOARD_PX - INCH, prefY)));
+    if (!pos) continue;
+    opts.push({ id: `opt_dep_${gid}_${opts.length}`, gid, si, x: Math.round(pos.x), y: Math.round(pos.y), heading });
     break; // handle one group at a time; triggerAi will loop
   }
   return opts;

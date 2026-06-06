@@ -5,6 +5,26 @@ import { INCH } from '../engine/constants.js';
 import { moveCone, dsEnemyBattalions, dsBattalions, connectedGateships } from '../engine/mutators.js';
 import { bestMoveToward, findBestTarget } from './options.js';
 
+// Ground-launch aura ranges + target constraints (mirrors the client's LAUNCH_TYPES /
+// tryGroundLaunch). Launch range isn't gated, so the AI must check it itself or it
+// lands battalions on dropsites it can't actually reach.
+const GROUND_LAUNCH = {
+  dropship:    { aura: 3, sameLayer: true },
+  bulk_lander: { aura: 6 },
+  drop_pod:    { aura: 3, city: true },
+};
+function groundLaunchInRange(type, ship, ds) {
+  const spec = GROUND_LAUNCH[type];
+  if (!spec || !ship || !ds) return false;
+  if (Math.hypot(ship.x - ds.x * INCH, ship.y - ds.y * INCH) > spec.aura * INCH + 2) return false;
+  if (spec.sameLayer) {
+    const dsLayer = ds.base?.layer === 'Atmosphere' ? 'atmosphere' : 'orbit';
+    if ((ship.layer || 'orbit') !== dsLayer) return false;
+  }
+  if (spec.city && ds.base?.category !== 'city') return false;
+  return true;
+}
+
 // Find the best dropsite to bombard: enemy/contested DS with most battalions,
 // within scan range of the firing ship (arc checked by gating).
 function findBestBombardmentTarget(state, aiSide, ship, scan) {
@@ -239,7 +259,16 @@ export function buildActivation(state, rng, gid, order, movePlan, aiSide, applyF
           }
         }
       } else {
-        applyFn({ type: 'launchGroundAsset', gid, si: launchSi, li, dsId, count, locationKey: 'ground' });
+        // Only land battalions if the ship is genuinely within launch range (and on
+        // the right layer / a city for drop pods) — the launch gating doesn't check.
+        const ds = state.scenarioData?.dropsites?.find(d => d.id === dsId);
+        if (groundLaunchInRange(launchType, grp.ships[launchSi], ds)) {
+          // Bulk Landers drop half (rounded down) into a contested dropsite — match the
+          // client; skip if that rounds to zero.
+          let landCount = count;
+          if (launchType === 'bulk_lander' && dsEnemyBattalions(ds, def.side) > 0) landCount = Math.floor(count / 2);
+          if (landCount > 0) applyFn({ type: 'launchGroundAsset', gid, si: launchSi, li, dsId, count: landCount, locationKey: 'ground' });
+        }
       }
     }
   }

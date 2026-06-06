@@ -1,9 +1,9 @@
-import { generateActivationOptions, mapLlmOptions } from '../options.js';
+import { generateActivationOptions, mapLlmOptions, deployZoneFor, legalZonePosPx } from '../options.js';
 import { mctsChooseOption } from '../mcts.js';
 import { buildActivation } from '../translator.js';
 import { buildStateBriefing, buildGroupCapabilities } from '../state-parser.js';
 import { llmAvailable, llmGenerateOptions } from '../llm.js';
-import { canActivateOffTable, dropsiteController } from '../../engine/mutators.js';
+import { canActivateOffTable, dropsiteController, coherencyInches } from '../../engine/mutators.js';
 import { payloadShips } from '../../engine/state.js';
 import { INCH } from '../../engine/constants.js';
 
@@ -11,9 +11,10 @@ const BOARD_PX = 48 * INCH;
 
 // Arrive all ships in a group at the deployment edge, x-aligned with their primary target.
 function arriveGroup(state, gid, grp, aiSide, applyFn, overrideTargetX = null) {
-  const zone    = state.deployZone?.[aiSide] || 'south';
-  const edgeY   = zone === 'south' ? BOARD_PX - INCH : INCH;
-  const heading = zone === 'south' ? -90 : 90;
+  const zoneName = state.deployZone?.[aiSide] || 'south';
+  const zoneGeo  = deployZoneFor(state, aiSide); // legal arrival region (in-zone constraint)
+  const edgeY   = zoneName === 'south' ? BOARD_PX - INCH : INCH;
+  const heading = zoneName === 'south' ? -90 : 90;
   const enemySide = aiSide === 'player1' ? 'player2' : 'player1';
   const dropsites = state.scenarioData?.dropsites || [];
   const def = grp.def;
@@ -47,11 +48,19 @@ function arriveGroup(state, gid, grp, aiSide, applyFn, overrideTargetX = null) {
     }
   }
 
+  // Anchor the group inside the legal deployment zone near targetX on the friendly edge,
+  // then arrive each ship within coherency of the anchor (and still in-zone), so the
+  // group neither arrives out of its zone nor out of formation.
+  const clampX = v => Math.max(INCH * 2, Math.min(BOARD_PX - INCH * 2, v));
+  const anchor = legalZonePosPx(zoneGeo, clampX(targetX), edgeY) || { x: clampX(targetX), y: edgeY };
+  const coh    = coherencyInches(def) * INCH;
   const liveShips = grp.ships.map((s, si) => ({ s, si })).filter(({ s }) => !s.destroyed && s.offTable);
   liveShips.forEach(({ si }, idx) => {
-    const offset = (idx - (liveShips.length - 1) / 2) * INCH * 2;
-    const x = Math.round(Math.max(INCH * 2, Math.min(BOARD_PX - INCH * 2, targetX + offset)));
-    applyFn({ type: 'arriveShip', gid, si, x, y: edgeY, heading });
+    const r  = idx === 0 ? 0 : Math.min(coh * 0.5, INCH * 1.5);
+    const px = clampX(anchor.x + Math.cos(idx * 2.4) * r);
+    const py = Math.max(INCH * 2, Math.min(BOARD_PX - INCH * 2, anchor.y + Math.sin(idx * 2.4) * r));
+    const pos = legalZonePosPx(zoneGeo, px, py) || anchor;
+    applyFn({ type: 'arriveShip', gid, si, x: Math.round(pos.x), y: Math.round(pos.y), heading });
   });
 }
 

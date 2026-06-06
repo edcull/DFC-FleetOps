@@ -17,6 +17,8 @@ const _AI_FACTIONS   = ['ucm', 'shaltari', 'phr', 'resistance', 'scourge', 'biof
 const _AI_LAYOUTS    = ['diagonal', 'edge_case', 'eruption', 'gatecrash', 'moonlight',
                         'moonstruck', 'take_and_hold', 'power_grab', 'shock_and_yaw'];
 const _AI_APPROACHES = ['close_enough', 'standoff', 'column', 'counterattack'];
+const _AI_DEPLOYMENTS = ['line', 'table_corners', 'midboard', 'from_corners',
+                         'attacker_defender', 'encirclement', 'defender_edge', 'diagonal_corners'];
 const _AI_OBJECTIVES = ['standard', 'attrition', 'survey', 'demolish', 'focal_points'];
 const _AI_SECONDARIES = ['annihilate', 'take_prizes', 'gather_intel', 'decapitate',
                          'key_site', 'priority_target', 'long_shot', 'objectives_beyond'];
@@ -155,10 +157,11 @@ router.post('/rooms', (req, res) => {
     room.state.secondaryChoice.f2 = _pickN(_AI_SECONDARIES, 2);
     room.state.playerNames = { f1: `AI-Red (${label})`, f2: `AI-Blue (${label})` };
     room.state.scenario = {
-      layout:   _pick(_AI_LAYOUTS),
-      approach: _pick(_AI_APPROACHES),
-      objective: _pick(_AI_OBJECTIVES),
-      variant:  'none',
+      layout:     _pick(_AI_LAYOUTS),
+      approach:   _pick(_AI_APPROACHES),
+      deployment: _pick(_AI_DEPLOYMENTS), // give the game a real deployment zone
+      objective:  _pick(_AI_OBJECTIVES),
+      variant:    'none',
     };
     for (const [slot, faction] of [['f1', factionP1], ['f2', factionP2]]) {
       const fleet = buildAiFleet({ faction, targetPts: 1000, admiralLevel: 0, personality });
