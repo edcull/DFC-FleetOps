@@ -2,7 +2,7 @@
 // Mutates state directly via applyFn so post-move targeting is accurate.
 
 import { INCH } from '../engine/constants.js';
-import { moveCone, dsEnemyBattalions, dsBattalions, connectedGateships } from '../engine/mutators.js';
+import { moveCone, dsEnemyBattalions, dsBattalions, connectedGateships, coherencyInches } from '../engine/mutators.js';
 import { bestMoveToward, findBestTarget } from './options.js';
 
 // Ground-launch aura ranges + target constraints (mirrors the client's LAUNCH_TYPES /
@@ -23,6 +23,66 @@ function groundLaunchInRange(type, ship, ds) {
   }
   if (spec.city && ds.base?.category !== 'city') return false;
   return true;
+}
+
+// True if the hypothetical positions `pts` ([{x,y,layer}]) satisfy DFC coherency:
+// each ship within `cohPx` of at least `need` same-layer group-mates (need=2 for
+// groups of 4+, else 1). Groups of ≤1 are always coherent.
+function formationOK(pts, cohPx, need) {
+  if (pts.length <= 1) return true;
+  for (let i = 0; i < pts.length; i++) {
+    let neighbours = 0;
+    for (let j = 0; j < pts.length; j++) {
+      if (i === j) continue;
+      if ((pts[i].layer || 'orbit') !== (pts[j].layer || 'orbit')) continue;
+      if (Math.hypot(pts[i].x - pts[j].x, pts[i].y - pts[j].y) <= cohPx) neighbours++;
+    }
+    if (neighbours < need) return false;
+  }
+  return true;
+}
+
+// Move a group toward (tx,ty) WITHOUT breaking coherency. Every ship heads for one
+// shared waypoint — the formation centroid advanced toward the target. We try the
+// largest advance that still leaves the group coherent (simulating each ship's
+// move first), backing off toward 0 (converge on the centroid) if needed, so the AI
+// never intentionally strings ships out of formation. Returns the chosen waypoint.
+function moveGroupCoherent(state, rng, gid, movers, tx, ty, applyFn) {
+  const def = state.groups[gid].def;
+  const cohPx = coherencyInches(def) * INCH;
+  const need = movers.length >= 4 ? 2 : 1;
+
+  const cones = {};
+  let reach = Infinity;
+  for (const { si } of movers) {
+    const mc = moveCone(state, gid, si, false);
+    cones[si] = mc;
+    if (mc.o && mc.o.moveMax > 0) reach = Math.min(reach, mc.maxR - 1);
+  }
+  if (!isFinite(reach)) reach = 0;
+
+  const cx = movers.reduce((a, o) => a + o.s.x, 0) / movers.length;
+  const cy = movers.reduce((a, o) => a + o.s.y, 0) / movers.length;
+  const dC = Math.hypot(tx - cx, ty - cy) || 1;
+  const ux = (tx - cx) / dC, uy = (ty - cy) / dC;
+
+  // Simulate the group moving toward a waypoint and return the resulting positions.
+  const simulate = (wx, wy) => movers.map(({ s, si }) => {
+    const mc = cones[si];
+    if (!mc.o || mc.o.moveMax <= 0) return { x: s.x, y: s.y, layer: s.layer };
+    const d = bestMoveToward(s, mc, wx, wy);
+    return { x: d.x, y: d.y, layer: s.layer };
+  });
+
+  // Largest advance (fraction of reach) that keeps the group coherent; fall back to
+  // converging on the centroid (advance 0), which only ever pulls ships together.
+  let wx = cx, wy = cy;
+  for (const frac of [1, 0.85, 0.7, 0.55, 0.4, 0.25, 0.12, 0]) {
+    const adv = Math.min(reach * frac, dC);
+    const cwx = cx + ux * adv, cwy = cy + uy * adv;
+    if (formationOK(simulate(cwx, cwy), cohPx, need)) { wx = cwx; wy = cwy; break; }
+  }
+  for (const { si } of movers) moveShipToward(state, rng, gid, si, wx, wy, applyFn);
 }
 
 // Find the best dropsite to bombard: enemy/contested DS with most battalions,
@@ -146,33 +206,13 @@ export function buildActivation(state, rng, gid, order, movePlan, aiSide, applyF
   const tx = movePlan?.x ?? null;
   const ty = movePlan?.y ?? null;
 
-  // Move lead ship first
-  const leadSi = grp.ships.findIndex(s => !s.destroyed && !s.offTable && !s.movedThisRound);
-  let leadDestX = null, leadDestY = null;
-
-  if (leadSi >= 0 && tx !== null) {
-    const ship = grp.ships[leadSi];
-    const mc = moveCone(state, gid, leadSi, false);
-    if (mc.o && mc.o.moveMax > 0) {
-      const dest = bestMoveToward(ship, mc, tx, ty);
-      leadDestX = Math.round(dest.x);
-      leadDestY = Math.round(dest.y);
-      moveShipToward(state, rng, gid, leadSi, tx, ty, applyFn);
-    }
-  }
-
-  // Move remaining ships toward the same destination as the lead.
-  // Using the identical target avoids distance/angle gating failures that arise
-  // from derived offset positions landing just outside the ship's move cone.
-  // Ships that end up at the same pixel are fine in DFC (stacking is allowed).
-  const followX = leadDestX ?? tx ?? null;
-  const followY = leadDestY ?? ty ?? null;
-
-  for (let si = 0; si < grp.ships.length; si++) {
-    if (si === leadSi) continue;
-    const s = grp.ships[si];
-    if (s.destroyed || s.offTable || s.movedThisRound) continue;
-    if (followX !== null) moveShipToward(state, rng, gid, si, followX, followY, applyFn);
+  // Advance the whole group toward the target as a formation — coherency-guaranteed,
+  // so a ship is never intentionally left out of formation.
+  const movers = grp.ships
+    .map((s, si) => ({ s, si }))
+    .filter(o => !o.s.destroyed && !o.s.offTable && !o.s.movedThisRound);
+  if (tx !== null && movers.length) {
+    moveGroupCoherent(state, rng, gid, movers, tx, ty, applyFn);
   }
 
   // Launch fighters/bombers for orders that permit launching (GQ, WF, CC, SR).
