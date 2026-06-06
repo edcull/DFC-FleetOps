@@ -44,11 +44,17 @@ export function shouldAiAct(state, side) {
   // the owning side (here, the AI) must acknowledge it.
   if (state.atmoDamage) return state.atmoDamage.side === side;
 
-  // Defender save step: AI must advance the attack modal past the save phase.
-  if (state.attackModal?.step === 'save') {
-    const atkSide = state.attackModal.bomberSide || state.activeSide;
-    const defSide = atkSide === 'player1' ? 'player2' : 'player1';
-    if (side === defSide) return true;
+  // An open attack modal must be resolved before the active side can do anything else
+  // (finishActivation is now gated on it). The defender drives the save step; the
+  // attacker's own steps are already resolved inside buildActivation, so the attacker
+  // must wait here rather than spin trying to finish a still-open activation.
+  if (state.attackModal) {
+    if (state.attackModal.step === 'save') {
+      const atkSide = state.attackModal.bomberSide || state.activeSide;
+      const defSide = atkSide === 'player1' ? 'player2' : 'player1';
+      return side === defSide;
+    }
+    return false;
   }
 
   if (state.repairPhase) return false; // repair is handled client-side

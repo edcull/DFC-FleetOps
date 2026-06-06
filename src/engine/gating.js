@@ -176,6 +176,10 @@ export function isLegal(state, intent, side) {
     case 'finishActivation': {
       const { gid } = intent;
       if (state.phase !== 'play') return false;
+      // An attack must be fully resolved before the activation can finish — otherwise
+      // the turn advances before the attack's damage (and any kills) land, which can
+      // strand the active side. The client UI blocks this; enforce it here too.
+      if (state.attackModal) return false;
       const grp = state.groups[gid];
       if (!grp || grp.activated) return false;
       const def = getDef(state, gid);

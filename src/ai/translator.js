@@ -143,16 +143,12 @@ function resolveAttackModal(state, rng, applyFn) {
         // Pick 'ground' first; if no ground battalion exists, pick any valid location.
         const q = M.bombardCollateralQueue && M.bombardCollateralQueue[0];
         if (!q) { to = null; break; }
+        // Gating needs the queue head's dsId and a location actually holding q.side's
+        // battalions; without dsId the intent is illegal and the modal would hang.
         const ds = state.scenarioData?.dropsites?.find(d => d.id === q.dsId);
-        let loc = 'ground';
-        if (ds) {
-          const b = dsBattalions(ds);
-          if (!b.ground || (b.ground[q.side] || 0) === 0) {
-            const alt = Object.keys(b).find(k => k !== 'ground' && (b[k][q.side] || 0) > 0);
-            if (alt) loc = alt;
-          }
-        }
-        if (!applyFn({ type: 'resolveBombardCollateral', loc })) { to = null; }
+        const b = ds ? dsBattalions(ds) : {};
+        const loc = Object.keys(b).find(k => (b[k]?.[q.side] || 0) > 0);
+        if (!loc || !applyFn({ type: 'resolveBombardCollateral', dsId: q.dsId, loc })) { to = null; break; }
         continue; // proceedQueues inside the mutator handles transitions
       }
       case 'impel': {

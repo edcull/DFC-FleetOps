@@ -65,15 +65,19 @@ function arriveGroup(state, gid, grp, aiSide, applyFn, overrideTargetX = null) {
 }
 
 export async function handleActivation(state, rng, aiSide, personality, applyFn, useLlm = false) {
-  // Auto-finish groups not yet eligible to arrive this round.
+  // Auto-finish reserve groups that have nothing to bring on this round: either no
+  // live ship left to arrive (e.g. wiped out mid-round — canActivateOffTable doesn't
+  // check for survivors, so without this the AI loops forever "arriving" a dead group)
+  // or not yet eligible to arrive.
   for (const [gid, grp] of Object.entries(state.groups)) {
     if (grp.def?.side !== aiSide || grp.activated) continue;
     if (!grp.ships.every(s => s.destroyed || s.offTable)) continue;
+    const hasLiveReserve = grp.ships.some(s => !s.destroyed && s.offTable);
     const { eligible } = canActivateOffTable(state, grp.def);
-    if (!eligible) {
+    if (!hasLiveReserve || !eligible) {
       if (applyFn({ type: 'finishActivation', gid })) return;
     }
-    // Eligible reserve groups: leave them — LLM or heuristic will choose which to arrive.
+    // Eligible reserve groups with live ships: leave them — LLM or heuristic chooses which to arrive.
   }
 
   // Ask LLM BEFORE arriving any ship.
@@ -106,7 +110,7 @@ export async function handleActivation(state, rng, aiSide, personality, applyFn,
   if (!options.length && !chosen) {
     for (const [gid, grp] of Object.entries(state.groups)) {
       if (grp.def?.side !== aiSide || grp.activated) continue;
-      if (!grp.ships.every(s => s.destroyed || s.offTable)) continue;
+      if (!grp.ships.some(s => !s.destroyed && s.offTable)) continue; // need a live ship to arrive
       const { eligible } = canActivateOffTable(state, grp.def);
       if (!eligible) continue;
       arriveGroup(state, gid, grp, aiSide, applyFn);

@@ -596,6 +596,20 @@ async function maybeAiTurn(room) {
     // guard is large; solo only runs until it's the human's turn.
     let guard = both ? 200000 : 200;
     let iters = 0;
+    // Defensive no-progress guard for AI vs AI: if the game state stops changing for a
+    // long stretch, break rather than spin to the 200000 guard (which would block the
+    // event loop for minutes and lock the spectator's view).
+    let progSig = '', progStuck = 0;
+    const computeProgSig = () => {
+      const s = room.state;
+      let n = 0;
+      for (const g of Object.values(s.groups || {})) for (const sh of g.ships) {
+        n += (sh.activated ? 1 : 0) + (sh.destroyed ? 2 : 0) + (sh.offTable ? 4 : 0)
+           + (sh.movedThisRound ? 8 : 0) + (sh.firedThisActivation ? 16 : 0);
+      }
+      const aps = (s.launchedAssets || []).reduce((a, x) => a + (x.moved ? 1 : 0) + (x.count || 0), 0);
+      return `${s.phase}|${s.round}|${s.activeSide}|${!!s.gameOver}|${s.assetPhase?.step}|${s.assetActiveSide}|${s.battalionCombat?.stage}|${s.dropsiteActivation?.side}|${n}|${aps}`;
+    };
     while (guard-- > 0) {
       if (room.state.gameOver) break;
       // Capture the play-start snapshot as soon as we enter play phase.
@@ -629,12 +643,25 @@ async function maybeAiTurn(room) {
             if (!_applyAnySide(room, { type: 'endRound' })) break; // begin the end-of-round sequence
           } else break;
         }
-        // Stay responsive and let spectators watch progress: yield to the event loop
-        // periodically and broadcast the running state.
-        if ((++iters % 40) === 0) {
-          if ((iters % 200) === 0) broadcast(room, { type: 'full', state: room.state });
-          await new Promise(r => setImmediate(r));
+        // No-progress safety net: any real progress (activations, kills, arrivals,
+        // moves, asset/phase changes) flips the signature; 3000 unchanged iterations
+        // means we're stuck, so bail instead of freezing the server.
+        const sigNow = computeProgSig();
+        if (sigNow === progSig) {
+          if (++progStuck > 3000) { console.warn(`[${room.id}] AI vs AI no progress — stopping`); break; }
+        } else { progSig = sigNow; progStuck = 0; }
+        // Yield after EVERY step so the event loop can service spectator connections,
+        // new requests and outgoing broadcasts between activations. A single MCTS-heavy
+        // activation can take hundreds of ms; only yielding every 40 steps let those
+        // pile up and the whole app appeared to lock up. Broadcast the running state on
+        // a light time throttle so spectators watch it unfold live.
+        iters++;
+        const now = Date.now();
+        if (now - (room._lastAiBcast || 0) >= 200) {
+          room._lastAiBcast = now;
+          broadcast(room, { type: 'full', state: room.state });
         }
+        await new Promise(r => setImmediate(r));
         continue;
       }
 
