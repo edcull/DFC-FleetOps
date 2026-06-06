@@ -404,6 +404,24 @@
      the last render, so a re-roll visibly re-tumbles just the affected dice.
      Colour coding (hit/crit/miss, saved/unsaved) is carried by the die's own
      class and is preserved throughout. */
+  /* Spectator loading overlay — shown until a spectated (esp. AI-vs-AI) game is live. */
+  #spec-loading {
+    position: fixed; inset: 0; z-index: 100000;
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 20px;
+    background: radial-gradient(circle at 50% 38%, var(--bg-elev) 0%, var(--bg) 72%);
+    text-align: center; padding: 24px;
+  }
+  #spec-loading .sl-spinner {
+    width: 56px; height: 56px; border-radius: 50%;
+    border: 4px solid rgba(255,255,255,0.10); border-top-color: var(--ucm); border-right-color: var(--shal);
+    animation: specSpin 0.9s linear infinite;
+  }
+  @keyframes specSpin { to { transform: rotate(360deg); } }
+  #spec-loading .sl-title { font-family: var(--display); font-weight: 700; letter-spacing: 2px; font-size: 17px; color: var(--text); }
+  #spec-loading .sl-sub { font-size: 11px; letter-spacing: 0.5px; color: var(--text-mute); max-width: 280px; line-height: 1.5; }
+  #spec-loading .sl-room { font-family: var(--mono, monospace); font-size: 12px; letter-spacing: 0.1em; color: var(--shal); }
+  @media (prefers-reduced-motion: reduce) { #spec-loading .sl-spinner { animation: none; } }
+
   @keyframes dieRoll {
     0%   { transform: rotate(-220deg) scale(0.35); opacity: 0.15; filter: blur(1.4px); }
     45%  { transform: rotate(18deg)   scale(1.22); opacity: 1;    filter: blur(0); }
@@ -16610,6 +16628,7 @@ function _netApplyRemote(remoteState) {
   try { renderAll(); } catch(e) { console.error('[net] renderAll error during remote apply:', e); }
   autoAdvanceShipSelection(state.selectedGroupId);
   _netReceiving = false;
+  if (_isSpectator) _maybeHideSpectatorLoading();
 }
 
 function _netUpdateBadge() {
@@ -16618,6 +16637,44 @@ function _netUpdateBadge() {
   if (dotEl) dotEl.style.background = dot;
   const roomEl = document.getElementById('log-net-room');
   if (roomEl) roomEl.textContent = _netRoom;
+}
+
+// ── Spectator loading overlay ─────────────────────────────────────────────────
+// Shown while connecting to a spectated game so the user doesn't stare at an empty
+// board. For AI-vs-AI we keep it up until the battle actually starts (the server
+// computes the whole game), then reveal the live spectator view.
+let _specLoadingEl = null;
+let _specLoadingTimer = null;
+function _showSpectatorLoading(isAi) {
+  if (_specLoadingEl) return;
+  const el = document.createElement('div');
+  el.id = 'spec-loading';
+  el.innerHTML = `
+    <div class="sl-spinner"></div>
+    <div class="sl-title">${isAi ? 'STARTING AI vs AI BATTLE' : 'JOINING GAME'}</div>
+    <div class="sl-sub">${isAi
+      ? 'Generating fleets and running the opening moves — the live battle will appear in a moment.'
+      : 'Connecting to the game…'}</div>
+    ${_netRoom ? `<div class="sl-room">ROOM ${_netRoom}</div>` : ''}`;
+  document.body.appendChild(el);
+  _specLoadingEl = el;
+  // Safety net: never trap the user on the spinner if the game never reports ready.
+  _specLoadingTimer = setTimeout(_hideSpectatorLoading, 45000);
+}
+function _hideSpectatorLoading() {
+  if (_specLoadingTimer) { clearTimeout(_specLoadingTimer); _specLoadingTimer = null; }
+  if (_specLoadingEl) { _specLoadingEl.remove(); _specLoadingEl = null; }
+}
+// Hide once the spectated game is actually underway. AI-vs-AI: wait for the play phase
+// (or game over) so we skip the instant setup/deploy flicker; other games: as soon as
+// we have any live state.
+function _maybeHideSpectatorLoading() {
+  if (!_specLoadingEl) return;
+  const PREGAME = ['setup', 'scenery', 'nominations', 'protect', 'deploy'];
+  const live = state.aiVsAi
+    ? (!PREGAME.includes(state.phase) || !!state.gameOver)   // AI-vs-AI: wait for the battle
+    : (state.phase && state.phase !== 'setup');              // others: any live game state
+  if (live) _hideSpectatorLoading();
 }
 
 function _netConnect() {
@@ -17297,7 +17354,7 @@ async function showModeSelector() {
         try {
           const r = await fetch('/api/rooms', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ aiVsAi: true }) });
           const d = await r.json();
-          if (d.roomId) { location.href = `${location.pathname}?room=${d.roomId}&side=spectator`; return; }
+          if (d.roomId) { location.href = `${location.pathname}?room=${d.roomId}&side=spectator&ai=1`; return; }
           throw new Error('no room');
         } catch {
           aiTestBtn.disabled = false;
@@ -17972,6 +18029,7 @@ if (_netRoom && (_netSide === 'player1' || _netSide === 'player2')) {
   if (!currentUser?.loggedIn) {
     showAuthScreen();
   } else {
+    _showSpectatorLoading(_netParams.get('ai') === '1');
     renderAll();
     _netConnect();
   }
