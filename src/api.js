@@ -3,7 +3,7 @@
 import { Router } from 'express';
 import { createRoom, getRoom, getAllRooms, joinRoom, leaveRoom, broadcast, send, recordIntent } from './rooms.js';
 import { isLegal } from './engine/gating.js';
-import { apply, dsBattalions } from './engine/mutators.js';
+import { apply, dsBattalions, kindsForAssetType } from './engine/mutators.js';
 import { saveRoom, loadSave, loadAllSaves } from './saves.js';
 import { APP_VERSION, RULEBOOK_VERSION, ERRATA_VERSION } from './engine/version.js';
 import { getRoomSlot, setRoomSlot, getSaveOwners, deleteSaveDb } from './db.js';
@@ -79,6 +79,40 @@ function _resolveAttackModalBoth(room) {
     }
     if (to ? !_applyAnySide(room, { type: 'attackStep', to }) : !_applyAnySide(room, { type: 'finishAttack' })) return;
   }
+}
+
+// AI vs AI: resolve the asset-phase bomber/torpedo attacks a human normally drives.
+// When a bomber/torpedo moves into base contact it auto-locks a target, and
+// assetStageDone flags state.assetPhase._pendingBomberResolve instead of advancing.
+// Mirrors the client's resolvePendingBomberAttacks: open one attack modal per
+// target group, resolve it, drop dead targets, then re-run assetStageDone to advance.
+// All progress is made through recorded intents so AI-vs-AI replays stay consistent.
+function _resolvePendingBomberBoth(room) {
+  const ap = room.state.assetPhase;
+  const pbr = ap && ap._pendingBomberResolve;
+  if (!pbr) return false;
+  const kinds = kindsForAssetType(pbr.type);
+  const assets = room.state.launchedAssets || [];
+  const inScope = a => a.bomberTarget && a.side === pbr.side && kinds.includes(a.kind);
+  // Drop any lock on a target that's already gone (recorded, so replay matches).
+  const dead = assets.find(a => {
+    if (!inScope(a)) return false;
+    const ts = room.state.groups[a.bomberTarget.gid]?.ships[a.bomberTarget.si];
+    return !ts || ts.destroyed || ts.offTable;
+  });
+  if (dead) return _applyAnySide(room, { type: 'assetUntarget', assetId: dead.id });
+  const live = assets.filter(inScope);
+  if (live.length) {
+    const f = live[0];
+    const pool = live.filter(a => a.kind === f.kind
+      && a.bomberTarget.gid === f.bomberTarget.gid && a.bomberTarget.si === f.bomberTarget.si);
+    if (!_applyAnySide(room, { type: 'beginBomberAttack', assetIds: pool.map(a => a.id),
+        targetGid: f.bomberTarget.gid, targetSi: f.bomberTarget.si, side: f.side, kind: f.kind })) return false;
+    _resolveAttackModalBoth(room);
+    return true;
+  }
+  // No live attacks remain — re-run the stage advance, which clears _pendingBomberResolve.
+  return _applyAnySide(room, { type: 'assetStageDone', side: pbr.side, assetType: pbr.type });
 }
 
 export const router = Router();
@@ -571,6 +605,7 @@ async function maybeAiTurn(room) {
       if (both) {
         // Resolve the interrupt states a human/client normally drives.
         if (room.state.attackModal)      { _resolveAttackModalBoth(room); }
+        else if (room.state.assetPhase?._pendingBomberResolve) { if (!_resolvePendingBomberBoth(room)) break; }
         else if (room.state.atmoDamage)  { if (!_applyAnySide(room, { type: 'confirmEndActivation' })) break; }
         else if (room.state.repairPhase) { if (!_applyAnySide(room, { type: 'advanceRound' })) break; } // finishes repair → advances
         // Battalion-combat init: the asset phase opened (step !== 'assets') but isn't
