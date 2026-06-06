@@ -1114,7 +1114,17 @@
   @media (max-width: 1100px) {
     .app { grid-template-columns: 200px 1fr 240px; }
   }
+  /* Replay bar: full text labels on desktop; the short ("R") round token is mobile-only. */
+  #replay-bar .rl-short { display: none; }
   @media (max-width: 860px) {
+    /* Replay bar must stay on ONE line on narrow screens (else it pushes DETAIL off the
+       top bar). Collapse every button to its icon glyph, drop button text, shrink gaps. */
+    #replay-bar { padding: 5px 8px; gap: 4px; font-size: 11px; overflow: hidden; min-width: 0; }
+    #replay-bar .rlbl { display: none; }
+    #replay-bar .rl-short { display: inline; }
+    #replay-bar .btn { padding: 4px 7px !important; flex: 0 0 auto; }
+    #replay-bar #replay-counter { margin-left: 4px; font-size: 10px; }
+    #replay-bar #replay-round-label { margin-left: 2px; font-size: 10px; }
     /* Single column — the board fills the screen; the two side panels become
        slide-over drawers toggled from the top bar. */
     .app { grid-template-columns: 1fr; grid-template-rows: 48px auto 1fr; }
@@ -1318,17 +1328,17 @@
     <div id="topbar-user" style="display:flex;align-items:center;gap:6px;padding:0 10px;font-family:var(--mono);font-size:9px;color:var(--text-mute);white-space:nowrap;"></div>
   </header>
 
-  <div id="replay-bar" style="display:none;grid-column:1/-1;z-index:9999;background:#0d1a1f;border-bottom:2px solid #2a7fff;padding:6px 14px;align-items:center;gap:10px;font-family:var(--mono);font-size:11px;color:#ccc;">
-    <span style="color:#2a7fff;font-weight:bold;letter-spacing:1px;">↺ REPLAY</span>
-    <button class="btn" id="replay-round-prev" title="Previous round" style="padding:3px 8px;">⟨⟨ RND</button>
-    <button class="btn" id="replay-prev" title="Previous step" style="padding:3px 8px;">◀ PREV</button>
-    <button class="btn" id="replay-play-pause" style="padding:3px 10px;">▶ PLAY</button>
-    <button class="btn" id="replay-next" title="Next step" style="padding:3px 8px;">NEXT ▶</button>
-    <button class="btn" id="replay-round-next" title="Next round" style="padding:3px 8px;">RND ⟩⟩</button>
-    <span id="replay-counter" style="color:#8ab;margin-left:6px;">Step 0 / 0</span>
-    <span id="replay-round-label" style="color:#8ab;margin-left:2px;"></span>
+  <div id="replay-bar" style="display:none;grid-column:1/-1;z-index:9999;background:#0d1a1f;border-bottom:2px solid #2a7fff;padding:6px 14px;align-items:center;gap:10px;font-family:var(--mono);font-size:11px;color:#ccc;flex-wrap:nowrap;">
+    <span class="rl-title" style="color:#2a7fff;font-weight:bold;letter-spacing:1px;">↺<span class="rlbl"> REPLAY</span></span>
+    <button class="btn" id="replay-round-prev" title="Previous round" style="padding:3px 8px;">⟨⟨<span class="rlbl"> RND</span></button>
+    <button class="btn" id="replay-prev" title="Previous step" style="padding:3px 8px;">◀<span class="rlbl"> PREV</span></button>
+    <button class="btn" id="replay-play-pause" title="Play / pause" style="padding:3px 10px;"><span class="rl-icon">▶</span><span class="rlbl"> PLAY</span></button>
+    <button class="btn" id="replay-next" title="Next step" style="padding:3px 8px;"><span class="rlbl">NEXT </span>▶</button>
+    <button class="btn" id="replay-round-next" title="Next round" style="padding:3px 8px;"><span class="rlbl">RND </span>⟩⟩</button>
+    <span id="replay-counter" style="color:#8ab;margin-left:6px;white-space:nowrap;">Step 0 / 0</span>
+    <span id="replay-round-label" style="color:#8ab;margin-left:2px;white-space:nowrap;"></span>
     <span style="flex:1;"></span>
-    <button class="btn" id="exit-replay" style="padding:3px 10px;color:#f66;border-color:#f66;">✕ EXIT REPLAY</button>
+    <button class="btn" id="exit-replay" title="Exit replay" style="padding:3px 10px;color:#f66;border-color:#f66;">✕<span class="rlbl"> EXIT REPLAY</span></button>
   </div>
 
   <aside class="panel left" id="panel-left">
@@ -10057,13 +10067,19 @@ function renderReplayControls() {
   const total = _replayData.intentLog.length - 1; // max step index
   const counter = document.getElementById('replay-counter');
   const roundLabel = document.getElementById('replay-round-label');
-  if (counter) counter.textContent = `Step ${_replayStep + 1} / ${_replayData.intentLog.length}`;
+  if (counter) counter.innerHTML = `<span class="rlbl">Step </span>${_replayStep + 1} / ${_replayData.intentLog.length}`;
   if (roundLabel) {
     const r = state.round || 1;
-    roundLabel.textContent = `— Round ${r}`;
+    roundLabel.innerHTML = `<span class="rlbl">— Round </span><span class="rl-short">R</span>${r}`;
   }
   const playPause = document.getElementById('replay-play-pause');
-  if (playPause) playPause.textContent = _replayInterval ? '⏸ PAUSE' : '▶ PLAY';
+  if (playPause) {
+    const playing = !!_replayInterval;
+    const icon = playPause.querySelector('.rl-icon');
+    const lbl  = playPause.querySelector('.rlbl');
+    if (icon) icon.textContent = playing ? '⏸' : '▶';
+    if (lbl)  lbl.textContent  = playing ? ' PAUSE' : ' PLAY';
+  }
   const prevBtn = document.getElementById('replay-prev');
   if (prevBtn) prevBtn.disabled = _replayStep < 0;
   const nextBtn = document.getElementById('replay-next');
@@ -14502,10 +14518,12 @@ document.addEventListener('click', (e) => {
     dispatch({ type: 'endRound' });
     return;
   }
-  if (e.target.matches('#exit-replay'))    { exitReplay(); return; }
-  if (e.target.matches('#replay-prev'))    { replayGoTo(_replayStep - 1); return; }
-  if (e.target.matches('#replay-next'))    { replayGoTo(_replayStep + 1); return; }
-  if (e.target.matches('#replay-play-pause')) {
+  // Use closest(): replay buttons now hold child <span>s (icon glyph + collapsible
+  // label), so a tap can land on the span rather than the button itself.
+  if (e.target.closest('#exit-replay'))    { exitReplay(); return; }
+  if (e.target.closest('#replay-prev'))    { replayGoTo(_replayStep - 1); return; }
+  if (e.target.closest('#replay-next'))    { replayGoTo(_replayStep + 1); return; }
+  if (e.target.closest('#replay-play-pause')) {
     if (_replayInterval) {
       clearInterval(_replayInterval);
       _replayInterval = null;
@@ -14519,7 +14537,7 @@ document.addEventListener('click', (e) => {
     renderReplayControls();
     return;
   }
-  if (e.target.matches('#replay-round-prev')) {
+  if (e.target.closest('#replay-round-prev')) {
     // Seek to the most recent advanceRound before current step
     const log = _replayData ? _replayData.intentLog : [];
     let target = -1;
@@ -14529,7 +14547,7 @@ document.addEventListener('click', (e) => {
     replayGoTo(target);
     return;
   }
-  if (e.target.matches('#replay-round-next')) {
+  if (e.target.closest('#replay-round-next')) {
     // Seek to the step right after the next advanceRound
     const log = _replayData ? _replayData.intentLog : [];
     for (let i = _replayStep + 1; i < log.length; i++) {
