@@ -3782,6 +3782,11 @@ export function applyBeginActivation(state) {
   state.activeSide = state.initiative.holder;
   state.initiativeHolder = state.initiative.holder;
   state.initiative = null;
+  // If the holder has nothing to activate this round (e.g. wiped off the table with
+  // only ineligible reserves left), hand off immediately. No finishActivation will
+  // ever fire to call advanceActiveSide, so the turn would otherwise stall — the
+  // opponent activates their remaining groups, or the round ends if neither can act.
+  if (!sideHasPendingActivation(state, state.activeSide)) advanceActiveSide(state);
   return state;
 }
 
