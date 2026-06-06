@@ -396,10 +396,17 @@ describe('logEvent', () => {
     logEvent(s, '');
     expect(s.eventLog ?? []).toHaveLength(0);
   });
-  it('caps log at 400 entries', () => {
+  it('caps log at 4000 entries (retains a full game for the end-game report)', () => {
     const s = makeState();
-    for (let i = 0; i < 405; i++) logEvent(s, `event ${i}`);
-    expect(s.eventLog.length).toBeLessThanOrEqual(401); // shifts after 400
+    for (let i = 0; i < 4005; i++) logEvent(s, `event ${i}`);
+    expect(s.eventLog.length).toBeLessThanOrEqual(4001); // shifts after 4000
+  });
+  it('stores an event category, defaulting to misc', () => {
+    const s = makeState();
+    logEvent(s, 'a hit', 'attack');
+    logEvent(s, 'something');
+    expect(s.eventLog[0].cat).toBe('attack');
+    expect(s.eventLog[1].cat).toBe('misc');
   });
 });
 

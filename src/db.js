@@ -76,6 +76,7 @@ export function initDb() {
   try { _db.exec(`ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'player'`); } catch {}
   try { _db.exec(`ALTER TABLE users ADD COLUMN ai_access INTEGER NOT NULL DEFAULT 0`); } catch {}
   try { _db.exec(`ALTER TABLE saves ADD COLUMN is_ai INTEGER NOT NULL DEFAULT 0`); } catch {}
+  try { _db.exec(`ALTER TABLE saves ADD COLUMN game_over INTEGER NOT NULL DEFAULT 0`); } catch {}
 
   return _db;
 }
@@ -124,14 +125,14 @@ export function upsertSave(data, userId = null, player2UserId = null) {
   const hasReplay = !!(data.playStartState || data.play_start_state_json);
   db.prepare(`
     INSERT INTO saves (
-      room_id, owner_user_id, player2_user_id, phase, round, is_hotseat, is_ai, seed,
+      room_id, owner_user_id, player2_user_id, phase, round, is_hotseat, is_ai, game_over, seed,
       player_names_json, factions_json, side_colors_json, has_replay,
       app_version, rulebook_version, errata_version,
       current_state_json, current_rng_state,
       play_start_state_json, play_start_rng_state, intent_log_json,
       updated_at, saved_at
     ) VALUES (
-      @roomId, @ownerId, @player2Id, @phase, @round, @isHotseat, @isAi, @seed,
+      @roomId, @ownerId, @player2Id, @phase, @round, @isHotseat, @isAi, @gameOver, @seed,
       @playerNamesJson, @factionsJson, @sideColorsJson, @hasReplay,
       @appVersion, @rulebookVersion, @errataVersion,
       @currentStateJson, @currentRngState,
@@ -145,6 +146,7 @@ export function upsertSave(data, userId = null, player2UserId = null) {
       round                 = excluded.round,
       is_hotseat            = excluded.is_hotseat,
       is_ai                 = excluded.is_ai,
+      game_over             = excluded.game_over,
       seed                  = excluded.seed,
       player_names_json     = excluded.player_names_json,
       factions_json         = excluded.factions_json,
@@ -168,6 +170,7 @@ export function upsertSave(data, userId = null, player2UserId = null) {
     round:             data.round ?? null,
     isHotseat:         data.isHotseat ? 1 : 0,
     isAi:              data.isAi     ? 1 : 0,
+    gameOver:          data.gameOver ? 1 : 0,
     seed:              data.seed ?? null,
     playerNamesJson:   data.playerNames ? JSON.stringify(data.playerNames) : null,
     factionsJson:      data.factions    ? JSON.stringify(data.factions)    : null,
@@ -249,6 +252,7 @@ function _hydrateSaveMetadata(row) {
     round:       row.round,
     isHotseat:   !!row.is_hotseat,
     isAi:        !!row.is_ai,
+    gameOver:    !!row.game_over,
     savedAt:     row.saved_at,
     hasReplay:   !!row.has_replay,
     playerNames: _parseJson(row.player_names_json) ?? {},

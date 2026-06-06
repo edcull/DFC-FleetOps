@@ -422,6 +422,26 @@
   #spec-loading .sl-room { font-family: var(--mono, monospace); font-size: 12px; letter-spacing: 0.1em; color: var(--shal); }
   @media (prefers-reduced-motion: reduce) { #spec-loading .sl-spinner { animation: none; } }
 
+  /* End-game report modal */
+  #report-overlay { position: fixed; inset: 0; z-index: 100001; display: flex; align-items: center;
+    justify-content: center; padding: 16px; background: rgba(2,6,10,0.78); backdrop-filter: blur(4px); }
+  #report-overlay .rep-card { display: flex; flex-direction: column; width: 100%; max-width: 720px;
+    max-height: calc(100% - 16px); background: var(--bg-elev, #0d1722); border: 1px solid var(--border);
+    border-radius: 6px; overflow: hidden; box-shadow: 0 18px 60px rgba(0,0,0,0.6); }
+  #report-overlay .rep-head { padding: 12px 16px; border-bottom: 1px solid var(--border); }
+  #report-overlay .rep-tabs { display: flex; flex-wrap: wrap; gap: 2px; padding: 6px 10px 0;
+    border-bottom: 1px solid var(--border); background: rgba(255,255,255,0.02); }
+  #report-overlay .rep-tab { padding: 6px 12px; font-family: var(--mono); font-size: 11px; letter-spacing: 0.05em;
+    background: none; border: none; border-bottom: 2px solid transparent; color: var(--text-mute); cursor: pointer; }
+  #report-overlay .rep-tab.active { color: var(--text); border-bottom-color: var(--accent, #4ad6ff); }
+  #report-overlay .rep-body { padding: 12px 16px; overflow-y: auto; }
+  #report-overlay .rep-sec { margin-bottom: 14px; }
+  #report-overlay .rep-sec-title { font-family: var(--display); font-size: 11px; letter-spacing: 0.12em;
+    text-transform: uppercase; margin-bottom: 5px; padding-bottom: 3px; border-bottom: 1px solid var(--border); }
+  #report-overlay .rep-line { font-size: 11px; color: var(--text-dim); padding: 2px 0; line-height: 1.4; }
+  #report-overlay .rep-line.detail { color: var(--text-mute); font-size: 10px; padding-left: 12px; }
+  #report-overlay .rep-empty { font-size: 11px; color: var(--text-mute); text-align: center; padding: 24px 0; }
+
   @keyframes dieRoll {
     0%   { transform: rotate(-220deg) scale(0.35); opacity: 0.15; filter: blur(1.4px); }
     45%  { transform: rotate(18deg)   scale(1.22); opacity: 1;    filter: blur(0); }
@@ -7889,12 +7909,14 @@ function renderGameOver() {
       </div>
       ${u.vp === s.vp ? `<div class="init-result" style="font-size:10px;color:var(--text-mute);text-align:center;margin-top:6px;">VP tied — broken by Kill Points</div>` : ''}
       ${(G.scoreLog||[]).map(l => `<div class="am-line" style="font-size:10px;">${l}</div>`).join('')}
-      <div style="margin-top:12px;">
+      <div style="margin-top:12px;display:flex;flex-direction:column;gap:6px;">
+        <button class="btn" id="gameover-report" style="width:100%;">📋 GAME REPORT</button>
         <button class="btn-primary" id="gameover-reset" style="width:100%;">NEW GAME →</button>
       </div>
     </div>`;
   document.body.appendChild(overlay);
   initPanel(overlay, 'GAME OVER', 'gameover-overlay', 100, 50);
+  overlay.querySelector('#gameover-report').addEventListener('click', () => { _reportRound = 1; openGameReport(state); });
   overlay.querySelector('#gameover-reset').addEventListener('click', () => {
     state.gameOver = null; state.score = { player1:{vp:0,kp:0}, player2:{vp:0,kp:0} }; state.scoredRounds = []; state.scoreLog = []; state.lastScoring = null; state.captured = {player1:0,player2:0}; state.admiralKilled = {player1:false,player2:false};
     state.secondaryNominations = { player1:{}, player2:{} }; state.shipReconOps = {}; state.reconKills = { player1:0, player2:0 }; state.nominationPhase = false;
@@ -7902,6 +7924,100 @@ function renderGameOver() {
     state.phase = 'setup'; state.scenario = null; state.scenarioData = null; state.groups = {};
     state.selectedGroupId = null; state.selectedShipIdx = null; state.round = 1;
     rebuildFleets(); renderAll();
+  });
+}
+
+/* ── End-game report ──────────────────────────────────────────────────────────
+   A turn-by-turn (tab per round) breakdown of a game, built purely from the
+   categorised state.eventLog. Works for the live game (pass `state`) and for a
+   completed saved game (pass the fetched save's currentState). */
+let _reportRound = 1;
+const _REPORT_SECTIONS = [
+  { cat: 'vp',        title: 'Victory Points',        color: 'var(--hull-good, #6ec97a)' },
+  { cat: 'attack',    title: 'Attacks & Casualties',  color: 'var(--hull-crit, #e0556a)' },
+  { cat: 'launch',    title: 'Launches & Assets',     color: 'var(--shal, #e0556a)' },
+  { cat: 'ground',    title: 'Ground Assault',        color: 'var(--ucm, #4ad6ff)' },
+  { cat: 'battalion', title: 'Battalion Combat',      color: 'var(--hull-warn, #e0a955)' },
+  { cat: 'repair',    title: 'Repairs',               color: 'var(--text-dim, #9fb2c0)' },
+];
+function _repEsc(t) {
+  return String(t).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+}
+function _repName(R, side) {
+  const slot = side === 'player1' ? 'f1' : 'f2';
+  return (R.playerNames && R.playerNames[slot]) || (side === 'player1' ? 'Player 1' : 'Player 2');
+}
+function openGameReport(R) {
+  if (!R) return;
+  const log = (R.eventLog || []).filter(e => e && e.cat !== 'misc');
+  const maxRound = Math.max(1, R.round || 1, ...((R.eventLog || []).map(e => e.round || 1)));
+  const rounds = [];
+  for (let r = 1; r <= maxRound; r++) rounds.push(r);
+  if (!rounds.includes(_reportRound)) _reportRound = rounds[0] || 1;
+
+  const old = document.getElementById('report-overlay');
+  if (old) old.remove();
+  const overlay = document.createElement('div');
+  overlay.id = 'report-overlay';
+
+  const G = R.gameOver;
+  const sc = R.score || { player1: { vp: 0, kp: 0 }, player2: { vp: 0, kp: 0 } };
+  const p1 = _repEsc(_repName(R, 'player1')), p2 = _repEsc(_repName(R, 'player2'));
+  const resultLine = G
+    ? (G.winner === 'draw' ? 'DRAW' : `${_repEsc(_repName(R, G.winner))} WINS`)
+    : `In progress — Round ${R.round || 1}`;
+  const resultCol = (G && G.winner !== 'draw') ? `var(--${sideCssKey(G.winner)})` : 'var(--text)';
+
+  const renderBody = () => {
+    const roundLog = log.filter(e => (e.round || 1) === _reportRound);
+    const secs = _REPORT_SECTIONS.map(s => {
+      const lines = roundLog.filter(e => e.cat === s.cat);
+      if (!lines.length) return '';
+      const items = lines.map(e => {
+        const detail = /^[·•]/.test(e.text.trim());
+        return `<div class="rep-line${detail ? ' detail' : ''}">${_repEsc(e.text)}</div>`;
+      }).join('');
+      return `<div class="rep-sec">
+        <div class="rep-sec-title" style="color:${s.color};">${s.title} <span style="opacity:0.55;font-size:9px;">${lines.length}</span></div>
+        ${items}
+      </div>`;
+    }).join('');
+    return secs || `<div class="rep-empty">No recorded events for Round ${_reportRound}.</div>`;
+  };
+
+  overlay.innerHTML = `
+    <div class="rep-card">
+      <div class="rep-head">
+        <div style="display:flex;align-items:center;gap:10px;">
+          <div style="font-family:var(--display);font-weight:700;letter-spacing:0.1em;font-size:14px;flex:1;">📋 GAME REPORT</div>
+          <button class="btn" id="rep-close" style="padding:4px 10px;font-size:11px;">✕ CLOSE</button>
+        </div>
+        <div style="display:flex;align-items:center;justify-content:center;gap:14px;margin-top:8px;">
+          <div style="text-align:right;flex:1;"><span style="color:var(--ucm);font-size:11px;">${p1}</span>
+            <b style="color:var(--ucm);font-size:16px;margin-left:6px;">${sc.player1.vp}</b>
+            <span style="color:var(--text-mute);font-size:9px;"> VP · ${sc.player1.kp} KP</span></div>
+          <div style="color:${resultCol};font-size:11px;font-weight:700;white-space:nowrap;">${resultLine}</div>
+          <div style="text-align:left;flex:1;"><b style="color:var(--shal);font-size:16px;margin-right:6px;">${sc.player2.vp}</b>
+            <span style="color:var(--shal);font-size:11px;">${p2}</span>
+            <span style="color:var(--text-mute);font-size:9px;"> VP · ${sc.player2.kp} KP</span></div>
+        </div>
+      </div>
+      <div class="rep-tabs" id="rep-tabs">
+        ${rounds.map(r => `<button class="rep-tab${r === _reportRound ? ' active' : ''}" data-rep-round="${r}">ROUND ${r}</button>`).join('')}
+      </div>
+      <div class="rep-body" id="rep-body">${renderBody()}</div>
+    </div>`;
+  document.body.appendChild(overlay);
+
+  const close = () => overlay.remove();
+  overlay.querySelector('#rep-close').addEventListener('click', close);
+  overlay.addEventListener('click', e => { if (e.target === overlay) close(); });
+  overlay.querySelectorAll('[data-rep-round]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      _reportRound = parseInt(btn.dataset.repRound, 10);
+      overlay.querySelectorAll('.rep-tab').forEach(t => t.classList.toggle('active', t === btn));
+      overlay.querySelector('#rep-body').innerHTML = renderBody();
+    });
   });
 }
 
@@ -9254,6 +9370,14 @@ function renderActivationHUD() {
 
   // Attack overlay takes precedence — hide activation HUD while attack modal is up
   if (state.attackModal) return;
+
+  // Once the game is over, or while the End-Phase scoring overlay is showing, hide the
+  // activation HUD (incl. the ACTIVATIONS COMPLETE / END ROUND control) — it's scoring
+  // time, not activation time, and a stale END ROUND under the GAME OVER panel is noise.
+  if (state.gameOver) return;
+  const _scoringUp = state.scoringModal
+    || (state._lastScoreLog && state._lastScoreLog.length && _scoringHudDismissedRound < (state.round || 0));
+  if (_scoringUp) return;
 
   // ── Asset phase action HUD ──
   if (state.assetPhase && state.assetPhase.step === 'assets') {
@@ -17186,7 +17310,9 @@ async function showModeSelector() {
         <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:4px;padding:10px 12px;">
           <div style="font-size:10px;color:var(--text-dim);font-family:var(--mono);line-height:1.5;">${fmtSave(s)}</div>
           <div style="display:flex;gap:6px;margin-top:8px;">
-            <button class="btn-primary" data-ms-resume="${s.roomId}" style="flex:1;padding:7px 6px;font-size:11px;">▶ RESUME</button>
+            ${s.gameOver
+              ? `<button class="btn-primary" data-ms-report="${s.roomId}" style="flex:1;padding:7px 6px;font-size:11px;" title="Turn-by-turn end-game report">📋 REPORT</button>`
+              : `<button class="btn-primary" data-ms-resume="${s.roomId}" style="flex:1;padding:7px 6px;font-size:11px;">▶ RESUME</button>`}
             <button class="btn" data-ms-replay="${s.roomId}" style="flex:1;padding:7px 6px;font-size:11px;${!s.hasReplay ? 'opacity:0.35;cursor:not-allowed;' : ''}" ${!s.hasReplay ? 'disabled title="No replay data for this save"' : ''}>↺ REPLAY</button>
             <button class="btn" data-ms-delete="${s.roomId}" style="padding:7px 10px;font-size:11px;color:var(--hull-crit);border-color:var(--hull-crit);" title="Delete save">🗑</button>
           </div>
@@ -17444,6 +17570,22 @@ async function showModeSelector() {
           } catch (err) {
             alert('Could not load replay: ' + err.message);
             btn.disabled = false; btn.textContent = '↺ REPLAY';
+          }
+        };
+      });
+      overlay.querySelectorAll('[data-ms-report]').forEach(btn => {
+        btn.onclick = async () => {
+          const id = btn.dataset.msReport;
+          btn.disabled = true; btn.textContent = '…';
+          try {
+            const save = await fetch(`/api/saves/${id}`).then(r => r.json());
+            if (save.error || !save.currentState) { alert(save.error || 'No game data for this save.'); btn.disabled = false; btn.textContent = '📋 REPORT'; return; }
+            _reportRound = 1;
+            openGameReport(save.currentState);
+          } catch (err) {
+            alert('Could not load report: ' + err.message);
+          } finally {
+            btn.disabled = false; btn.textContent = '📋 REPORT';
           }
         };
       });

@@ -23,6 +23,7 @@ export async function saveRoom(room, userId = null) {
     sideColors:        room.state.sideColors || null,
     isHotseat:         room.isHotseat || false,
     isAi:              !!room.aiSide,
+    gameOver:          !!room.state.gameOver,
     playStartState:    room.playStartState,
     playStartRngState: room.playStartRngState,
     currentState:      structuredClone(room.state),

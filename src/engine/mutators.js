@@ -303,24 +303,25 @@ export function awardVP(state, side, vp, reason, round) {
   state.scoreLog = state.scoreLog || [];
   const entry = { round: round != null ? round : (state.round || 0), side, vp, reason };
   state.scoreLog.push(entry);
-  logEvent(state, `${factionName(state, side)} ${vp >= 0 ? '+' : ''}${vp} VP — ${reason}`);
+  logEvent(state, `${factionName(state, side)} ${vp >= 0 ? '+' : ''}${vp} VP — ${reason}`, 'vp');
   return `${factionName(state, side)} ${vp >= 0 ? '+' : ''}${vp} VP (${reason})`;
 }
 
 /* Append a game event to the log (orders, moves, shots, launches, extracts, etc.). */
-export function logEvent(state, text) {
+export function logEvent(state, text, cat = 'misc') {
   if (!text) return;
   state.eventLog = state.eventLog || [];
-  state.eventLog.push({ round: state.round || 0, text, ts: Date.now() });
-  // Cap the stored history to keep things light.
-  if (state.eventLog.length > 400) state.eventLog.shift();
+  state.eventLog.push({ round: state.round || 0, text, cat, ts: Date.now() });
+  // Cap the stored history. Large enough to retain a whole 6-round game so the
+  // end-game report has every round's events (a busy game runs a few thousand lines).
+  if (state.eventLog.length > 4000) state.eventLog.shift();
 }
 
 /* Award a destroyed ship's points to the killer's Kill Points (2× if captured). */
 export function recordKill(state, def, killerSide, captured, killedShipKey) {
   if (!killerSide || !state.score || !state.score[killerSide]) return;
   state.score[killerSide].kp += shipPoints(def) * (captured ? 2 : 1);
-  logEvent(state, `${factionName(state, killerSide)} ${captured ? 'captured' : 'destroyed'} ${def.name} (+${shipPoints(def) * (captured ? 2 : 1)} KP)`);
+  logEvent(state, `${factionName(state, killerSide)} ${captured ? 'captured' : 'destroyed'} ${def.name} (+${shipPoints(def) * (captured ? 2 : 1)} KP)`, 'attack');
   if (captured && state.captured) state.captured[killerSide] += shipPoints(def);
   // Extract: +1 VP per enemy Ship destroyed while it was carrying Recon Operatives.
   if (killedShipKey && state.shipReconOps && state.shipReconOps[killedShipKey] > 0) {
@@ -1224,7 +1225,10 @@ export function resolveDropsiteRemainder(ds) {
 /* Finish a dropsite: resolve remaining combat, mark it done, return to pick stage. */
 export function bcResolveDropsite(state, bc, ds) {
   const rem = resolveDropsiteRemainder(ds);
-  rem.forEach(r => bc.log.push(`${ds.base.name}: ${r.where} remainder — ${r.removed} each`));
+  rem.forEach(r => {
+    bc.log.push(`${ds.base.name}: ${r.where} remainder — ${r.removed} each`);
+    logEvent(state, `${ds.base.name}: ${r.where} remainder — ${r.removed} battalions each side destroyed`, 'battalion');
+  });
   bc.done = bc.done || [];
   if (!bc.done.includes(ds.id)) bc.done.push(ds.id);
   bc.dsId = null;
@@ -2777,9 +2781,9 @@ export function finishAttack(state, M) {
       if (ts && ts.destroyed) kills++;
     });
     const tgtList = Object.values(tgtNames).join(', ') || 'target';
-    if (totDmg > 0 || kills > 0) logEvent(state, `${atkName} hit ${tgtList} for ${totDmg} dmg${kills ? ` · ${kills} destroyed` : ''}`);
-    else logEvent(state, `${atkName} fired at ${tgtList} — no damage`);
-    (M.log || []).forEach(line => logEvent(state, `· ${line}`));
+    if (totDmg > 0 || kills > 0) logEvent(state, `${atkName} hit ${tgtList} for ${totDmg} dmg${kills ? ` · ${kills} destroyed` : ''}`, 'attack');
+    else logEvent(state, `${atkName} fired at ${tgtList} — no damage`, 'attack');
+    (M.log || []).forEach(line => logEvent(state, `· ${line}`, 'attack'));
   }
   let hint = null;
   if (M.bomber) {
@@ -3051,7 +3055,7 @@ function advanceRoundInternal(state, rng) {
   }
 
   state.round = state.round + 1;
-  logEvent(state, `── Round ${state.round} begins ──`);
+  logEvent(state, `── Round ${state.round} begins ──`, 'round');
   Object.values(state.groups).forEach(g => {
     g.activated = false;
     g.order = null;
@@ -3188,7 +3192,7 @@ export function applyOrder(state, rng, gid, order) {
         s.dcRepaired = true;
         const rec = (def.tonnage === 'H' || def.tonnage === 'C') ? Math.ceil(rollDie(rng) / 2) : 1;
         s.hull = Math.min(s.maxHull, s.hull + rec);
-        logEvent(state, `${def.name} Damage Control: +${rec} Hull`);
+        logEvent(state, `${def.name} Damage Control: +${rec} Hull`, 'repair');
       }
     });
   }
@@ -3346,7 +3350,7 @@ export function commitMove(state, rng, gid, si, tx, ty, layerToggle) {
           else if (c.effectKey === 'energy') ship.spikes = (ship.spikes || 0) + 1;
           else if (c.effectKey === 'structural') ship.hull = Math.max(0, ship.hull - 1);
           else if (!ship.crippling.includes(c.effectKey)) ship.crippling.push(c.effectKey);
-          logEvent(state, `${def.name} crippled: ${c.effectName}`);
+          logEvent(state, `${def.name} crippled: ${c.effectName}`, 'attack');
         }
         if (ship.hull <= 0 && !ship.destroyed) {
           ship.destroyed = true;
@@ -3911,7 +3915,7 @@ function applyLaunchGroundAsset(state, intent) {
         const fk = (ds.features || [])[fi];
         if (fk && FEATURES[fk]) locLabel = FEATURES[fk].name;
       }
-      logEvent(state, `${def.name} landed ${count} battalion${count !== 1 ? 's' : ''} → ${locLabel}`);
+      logEvent(state, `${def.name} landed ${count} battalion${count !== 1 ? 's' : ''} → ${locLabel}`, 'ground');
     }
     state.groundLaunchLines = state.groundLaunchLines || [];
     state.groundLaunchLines.push({ fromGid: gid, fromSi: si, dsId, side: def.side,
@@ -3943,6 +3947,7 @@ function applyLaunchAsset(state, intent) {
   state.launchedAssets = state.launchedAssets || [];
   state._assetId = (state._assetId || 0) + 1;
   state.launchedAssets.push({ id: 'a' + state._assetId, kind, count, side: def.side, x, y, moved: false, fromGid: gid, fromSi: si });
+  logEvent(state, `${def.name} launched ${count} ${kind}${count !== 1 ? 's' : ''}`, 'launch');
   ship.launchedThisRound = (ship.launchedThisRound || 0) + count;
   if (entry.link) { ship.usedLinks = ship.usedLinks || {}; ship.usedLinks[entry.link] = entry.type || entry.link; }
   state.launching = null;
@@ -4176,7 +4181,7 @@ function applyLaunchDropsiteAsset(state, intent) {
     const ds = state.scenarioData && state.scenarioData.dropsites && state.scenarioData.dropsites.find(d => d.id === fromDropsite);
     if (ds) { ds.launchedFeatures = ds.launchedFeatures || []; if (!ds.launchedFeatures.includes(fromFeature)) ds.launchedFeatures.push(fromFeature); }
   }
-  logEvent(state, `Dropsite launched ${count} ${kind}${count > 1 ? 's' : ''}`);
+  logEvent(state, `Dropsite launched ${count} ${kind}${count > 1 ? 's' : ''}`, 'launch');
   state.launching = null;
   return state;
 }
@@ -4309,6 +4314,7 @@ function applyAssetMove(state, rng, intent) {
       state.dogfightResult = { attackerSide: mover.side, foeSide: enemy, foeKind: foe.kind,
         attackerBefore: mover.count + rem, attackerAfter: mover.count,
         foeBefore: foe.count + rem, foeAfter: foe.count, removed: rem };
+      logEvent(state, `Dogfight: ${factionName(state, mover.side)} fighters vs ${factionName(state, enemy)} ${foe.kind}s — ${rem} each destroyed`, 'launch');
       state.launchedAssets = state.launchedAssets.filter(a => a.count > 0);
       // Keep assetMove on the surviving mover so the player can see the result and confirm.
       state.assetMove = mover.count > 0 ? { id: mover.id, count: mover.count } : null;
@@ -4537,7 +4543,10 @@ export function apply(state, intent, rng) {
       if (!ds) return state;
       const actor = bc.stage === 'init' ? (state.initiativeHolder || 'player1') : (state.initiativeHolder === 'player1' ? 'player2' : 'player1');
       const r = assignGroundToFeature(ds, actor, intent.featKey);
-      if (r.removed > 0) bc.log.push(`${ds.base.name}: ground vs ${r.where} — ${r.removed} each`);
+      if (r.removed > 0) {
+        bc.log.push(`${ds.base.name}: ground vs ${r.where} — ${r.removed} each`);
+        logEvent(state, `${ds.base.name}: ground vs ${r.where} — ${r.removed} battalions each side destroyed`, 'battalion');
+      }
       if (bc.stage === 'init') bc.stage = 'other'; else bcResolveDropsite(state, bc, ds);
       return state;
     }

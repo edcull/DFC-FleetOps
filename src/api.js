@@ -340,6 +340,7 @@ router.get('/saves', async (req, res) => {
         sideColors:  s.sideColors  ?? null,
         isHotseat:   s.isHotseat || false,
         isAi:        s.isAi      || false,
+        gameOver:    s.gameOver  || false,
         hasReplay:   !!s.hasReplay,
       }))
   );
