@@ -67,35 +67,33 @@ export function placeNonOverlap(anchorX, anchorY, placed, diamPx, zone) {
   const clear = (x, y) => placed.every(p => Math.hypot(x - p.x, y - p.y) >= rNew + (p.r ?? rNew) + 1) && inZone(x, y);
   const ax = cX(anchorX), ay = cY(anchorY);
   if (clear(ax, ay)) return { x: ax, y: ay };
-  // Grid-search the nearest clear, in-zone spot. A dense grid (rather than rings) is
-  // needed because edge-line zones are a thin strip — most ring angles fall outside it.
-  // If the zone is too packed for a fully-clear spot, keep the in-zone point that's as
-  // Cap separation generously so ships fan out across the zone rather than packing tight
-  // near the anchor — wider spacing leaves room for every ship and avoids the overlaps the
-  // engine resolves into a conga line. (Tight packing strands later ships and overlaps more.)
-  const clearSep = 12 * INCH;
-  // Separation = nearest neighbour's edge-to-centre gap (so a big base repels candidates
-  // by its full radius), capped so any clearly-clear spot scores the same.
+  // Grid-search the NEAREST clear, in-zone spot to the anchor. A dense grid (rather than
+  // rings) is needed because edge-line zones are a thin strip — most ring angles fall
+  // outside it. Choosing the nearest clear spot (not the most-separated one) keeps a
+  // group's ships clustered near their own anchor/centroid so they stay in COHERENCY —
+  // the anchor is the group centroid for follow-on ships — while the radius-aware `clear`
+  // test still guarantees no base overlaps the conga-line resolver would shove apart.
+  // If the zone is too packed for any clear spot, fall back to the in-zone point with the
+  // largest neighbour gap (least overlap).
   const sepTo = (x, y) => placed.length
     ? Math.min(...placed.map(p => Math.hypot(x - p.x, y - p.y) - (p.r ?? rNew)))
-    : clearSep;
-  // Scan the WHOLE board at a fine step (edge-line zones are only a ~0.6" band, so a coarse
-  // grid steps over them; far corners can be ~48" from the anchor). Score each in-zone point
-  // by separation from already-placed ships (capped at clearSep, so any non-overlapping spot
-  // is "good enough") with a pull toward the anchor as the tie-break. This packs a group's
-  // ships near each other / their objective at touching distance, only spreading further when
-  // the local area is full — and never stacks (which the engine would conga-line).
+    : Infinity;
   const step = 2;
-  let best = null, bestScore = -Infinity;
+  let best = null, bestDist = Infinity;   // nearest fully-clear spot
+  let fb = null, fbSep = -Infinity;       // fallback: least-overlapping spot
   for (let x = m; x <= BOARD_PX - m; x += step) {
     for (let y = m; y <= BOARD_PX - m; y += step) {
       if (!inZone(x, y)) continue;
-      const sep = Math.min(sepTo(x, y), clearSep);
-      const score = sep * 1000 - Math.hypot(x - ax, y - ay);
-      if (score > bestScore) { bestScore = score; best = { x, y }; }
+      if (clear(x, y)) {
+        const d = (x - ax) ** 2 + (y - ay) ** 2;
+        if (d < bestDist) { bestDist = d; best = { x, y }; }
+      } else if (!best) {
+        const sep = sepTo(x, y);
+        if (sep > fbSep) { fbSep = sep; fb = { x, y }; }
+      }
     }
   }
-  return best || { x: ax, y: ay };
+  return best || fb || { x: ax, y: ay };
 }
 
 // Ground-asset launch ranges (inches). gate_dropship needs the Voidgate network
