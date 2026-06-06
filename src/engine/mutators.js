@@ -2781,9 +2781,13 @@ export function finishAttack(state, M) {
       if (ts && ts.destroyed) kills++;
     });
     const tgtList = Object.values(tgtNames).join(', ') || 'target';
-    if (totDmg > 0 || kills > 0) logEvent(state, `${atkName} hit ${tgtList} for ${totDmg} dmg${kills ? ` · ${kills} destroyed` : ''}`, 'attack');
-    else logEvent(state, `${atkName} fired at ${tgtList} — no damage`, 'attack');
-    (M.log || []).forEach(line => logEvent(state, `· ${line}`, 'attack'));
+    // Asset (bomber/torpedo/fire-ship/feature) attacks get their own category so the
+    // end-game report can surface them alongside launches rather than burying them in
+    // ship gunnery.
+    const atkCat = M.bomber ? 'bomber' : 'attack';
+    if (totDmg > 0 || kills > 0) logEvent(state, `${atkName} hit ${tgtList} for ${totDmg} dmg${kills ? ` · ${kills} destroyed` : ''}`, atkCat);
+    else logEvent(state, `${atkName} fired at ${tgtList} — no damage`, atkCat);
+    (M.log || []).forEach(line => logEvent(state, `· ${line}`, atkCat));
   }
   let hint = null;
   if (M.bomber) {

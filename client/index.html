@@ -7932,14 +7932,24 @@ function renderGameOver() {
    categorised state.eventLog. Works for the live game (pass `state`) and for a
    completed saved game (pass the fetched save's currentState). */
 let _reportRound = 1;
+const _REP_BLUE = '#4ad6ff', _REP_RED = 'var(--hull-crit, #ff5252)', _REP_ORANGE = 'var(--hull-warn, #ffb547)';
 const _REPORT_SECTIONS = [
-  { cat: 'vp',        title: 'Victory Points',        color: 'var(--hull-good, #6ec97a)' },
-  { cat: 'attack',    title: 'Attacks & Casualties',  color: 'var(--hull-crit, #e0556a)' },
-  { cat: 'launch',    title: 'Launches & Assets',     color: 'var(--shal, #e0556a)' },
-  { cat: 'ground',    title: 'Ground Assault',        color: 'var(--ucm, #4ad6ff)' },
-  { cat: 'battalion', title: 'Battalion Combat',      color: 'var(--hull-warn, #e0a955)' },
-  { cat: 'repair',    title: 'Repairs',               color: 'var(--text-dim, #9fb2c0)' },
+  { cat: 'vp',        title: 'Victory Points',        color: '#6ec97a' },
+  { cat: 'attack',    title: 'Attacks & Casualties',  color: _REP_RED },
+  { cat: 'bomber',    title: 'Bomber & Asset Attacks', color: _REP_BLUE },
+  { cat: 'launch',    title: 'Launches & Assets',     color: _REP_BLUE },
+  { cat: 'ground',    title: 'Ground Assault',        color: '#6ec97a' },
+  { cat: 'battalion', title: 'Battalion Combat',      color: _REP_ORANGE },
+  { cat: 'repair',    title: 'Repairs',               color: _REP_ORANGE },
 ];
+// Per-line colour: launches/bomber runs are blue, a ship destroyed/captured is red,
+// a crippling result is orange. Everything else inherits the section's dim text colour.
+function _repLineColor(e) {
+  if (e.cat === 'launch' || e.cat === 'bomber') return _REP_BLUE;
+  if (/crippled/i.test(e.text)) return _REP_ORANGE;
+  if (/\b(destroyed|captured)\b/i.test(e.text)) return _REP_RED;
+  return '';
+}
 function _repEsc(t) {
   return String(t).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 }
@@ -7975,7 +7985,8 @@ function openGameReport(R) {
       if (!lines.length) return '';
       const items = lines.map(e => {
         const detail = /^[·•]/.test(e.text.trim());
-        return `<div class="rep-line${detail ? ' detail' : ''}">${_repEsc(e.text)}</div>`;
+        const col = _repLineColor(e);
+        return `<div class="rep-line${detail ? ' detail' : ''}"${col ? ` style="color:${col};"` : ''}>${_repEsc(e.text)}</div>`;
       }).join('');
       return `<div class="rep-sec">
         <div class="rep-sec-title" style="color:${s.color};">${s.title} <span style="opacity:0.55;font-size:9px;">${lines.length}</span></div>
