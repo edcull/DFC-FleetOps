@@ -1,9 +1,9 @@
-import { generateActivationOptions, mapLlmOptions, deployZoneFor, legalZonePosPx } from '../options.js';
+import { generateActivationOptions, mapLlmOptions, deployZoneFor, legalZonePosPx, baseDiameterPx, placeNonOverlap } from '../options.js';
 import { mctsChooseOption } from '../mcts.js';
 import { buildActivation } from '../translator.js';
 import { buildStateBriefing, buildGroupCapabilities } from '../state-parser.js';
 import { llmAvailable, llmGenerateOptions } from '../llm.js';
-import { canActivateOffTable, dropsiteController, coherencyInches } from '../../engine/mutators.js';
+import { canActivateOffTable, dropsiteController } from '../../engine/mutators.js';
 import { payloadShips } from '../../engine/state.js';
 import { INCH } from '../../engine/constants.js';
 
@@ -49,17 +49,16 @@ function arriveGroup(state, gid, grp, aiSide, applyFn, overrideTargetX = null) {
   }
 
   // Anchor the group inside the legal deployment zone near targetX on the friendly edge,
-  // then arrive each ship within coherency of the anchor (and still in-zone), so the
-  // group neither arrives out of its zone nor out of formation.
+  // then arrive each ship at a spot whose base doesn't overlap a group-mate's, so they
+  // stay in their zone and in formation without conga-lining.
   const clampX = v => Math.max(INCH * 2, Math.min(BOARD_PX - INCH * 2, v));
   const anchor = legalZonePosPx(zoneGeo, clampX(targetX), edgeY) || { x: clampX(targetX), y: edgeY };
-  const coh    = coherencyInches(def) * INCH;
+  const diamPx = baseDiameterPx(def);
+  const placedPos = grp.ships.filter(s => !s.destroyed && !s.offTable).map(s => ({ x: s.x, y: s.y }));
   const liveShips = grp.ships.map((s, si) => ({ s, si })).filter(({ s }) => !s.destroyed && s.offTable);
-  liveShips.forEach(({ si }, idx) => {
-    const r  = idx === 0 ? 0 : Math.min(coh * 0.5, INCH * 1.5);
-    const px = clampX(anchor.x + Math.cos(idx * 2.4) * r);
-    const py = Math.max(INCH * 2, Math.min(BOARD_PX - INCH * 2, anchor.y + Math.sin(idx * 2.4) * r));
-    const pos = legalZonePosPx(zoneGeo, px, py) || anchor;
+  liveShips.forEach(({ si }) => {
+    const pos = placeNonOverlap(anchor.x, anchor.y, placedPos, diamPx, zoneGeo);
+    placedPos.push(pos);
     applyFn({ type: 'arriveShip', gid, si, x: Math.round(pos.x), y: Math.round(pos.y), heading });
   });
 }

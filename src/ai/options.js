@@ -4,7 +4,7 @@
 
 import { ORDERS, INCH, DEPLOYMENTS } from '../engine/constants.js';
 import { isLegal } from '../engine/gating.js';
-import { moveCone, weaponCanTarget, dropsiteController, canDeployNow, isInZone, coherencyInches } from '../engine/mutators.js';
+import { moveCone, weaponCanTarget, dropsiteController, canDeployNow, isInZone, distancePointToSegmentIn } from '../engine/mutators.js';
 
 const BOARD_PX = 48 * INCH;
 const TONNAGE_ORDER = { C: 0, H: 1, M: 2, L: 3 };
@@ -40,6 +40,56 @@ export function legalZonePosPx(zone, preferXpx, preferYpx) {
   return best;
 }
 
+// Ship base diameter (px) by tonnage — matches the engine's shipBaseRadiusPx.
+const BASE_DIAM_IN = { L: 30 / 25.4, M: 40 / 25.4, H: 50 / 25.4, C: 60 / 25.4 };
+export function baseDiameterPx(def) { return (BASE_DIAM_IN[def?.tonnage] || 30 / 25.4) * INCH; }
+
+// A position near (anchorX, anchorY), inside `zone`, whose base (diameter diamPx) does
+// not overlap any already-placed base in `placed` ([{x,y}]). Ships dropped on the same
+// spot get shoved into a "conga line" by the engine's overlap resolver, so the AI must
+// space them itself. Grid-searches for the nearest clear, in-zone spot.
+export function placeNonOverlap(anchorX, anchorY, placed, diamPx, zone) {
+  // Clamp only by the base radius — edge-line deployment zones hug the board edge, so a
+  // larger margin would push every candidate out of the zone (leaving ships stacked).
+  const m = Math.max(diamPx / 2, 2);
+  const cX = v => Math.max(m, Math.min(BOARD_PX - m, v));
+  const cY = v => Math.max(m, Math.min(BOARD_PX - m, v));
+  // In-zone test that tolerates base contact: a large ship touching the table edge has
+  // its centre up to a base-radius past the zone's 0.6" nudge tolerance, so for edge-line
+  // zones accept points within about a base-radius of an edge segment. Otherwise it's
+  // impossible to place Medium+ ships at the edge and they stack.
+  const rIn = diamPx / 2 / INCH;
+  const inZone = (x, y) => {
+    if (!zone) return true;
+    if (isInZone(x / INCH, y / INCH, zone)) return true;
+    if (zone.edgeLines) return zone.edgeLines.some(seg => distancePointToSegmentIn(x / INCH, y / INCH, seg) <= rIn + 0.15);
+    return false;
+  };
+  const clear = (x, y) => placed.every(p => Math.hypot(x - p.x, y - p.y) >= diamPx + 2) && inZone(x, y);
+  const ax = cX(anchorX), ay = cY(anchorY);
+  if (clear(ax, ay)) return { x: ax, y: ay };
+  // Grid-search the nearest clear, in-zone spot. A dense grid (rather than rings) is
+  // needed because edge-line zones are a thin strip — most ring angles fall outside it.
+  // If the zone is too packed for a fully-clear spot, keep the in-zone point that's as
+  // far as possible from its nearest neighbour (least overlap) rather than restacking.
+  const minSep = diamPx + 2;
+  const sepTo = (x, y) => placed.length ? Math.min(...placed.map(p => Math.hypot(x - p.x, y - p.y))) : Infinity;
+  const step = Math.max(diamPx * 0.35, 3);
+  const R = diamPx * 14;
+  let best = null, bestD = Infinity, fb = null, fbSep = -1;
+  for (let dx = -R; dx <= R; dx += step) {
+    for (let dy = -R; dy <= R; dy += step) {
+      const x = cX(ax + dx), y = cY(ay + dy);
+      if (!inZone(x, y)) continue;
+      const sep = sepTo(x, y);
+      if (sep >= minSep) {
+        const d = (x - ax) ** 2 + (y - ay) ** 2;
+        if (d < bestD) { bestD = d; best = { x, y }; }
+      } else if (sep > fbSep) { fbSep = sep; fb = { x, y }; }
+    }
+  }
+  return best || fb || { x: ax, y: ay };
+}
 
 // Ground-asset launch ranges (inches). gate_dropship needs the Voidgate network
 // (handled separately in the activation handler), so it's excluded here.
@@ -270,24 +320,19 @@ export function generateDeployOptions(state, aiSide) {
     if (!isLegal(state, { type: 'deployShip', gid, si }, aiSide)) continue;
 
     const heading = deployZoneName === 'south' ? -90 : 90; // face north or south
-    // Cluster within coherency of the group's already-placed ships; otherwise pick a
+    // Anchor on the group's already-placed ships (stay in formation); otherwise pick a
     // fresh anchor near a dropsite at the friendly edge.
-    const coh = coherencyInches(grp.def) * INCH;
     const placed = grp.ships.filter(s => !s.destroyed && !s.offTable);
-    let prefX, prefY;
-    if (placed.length) {
-      const c = centroid(grp.ships);                  // stay tight to the formation
-      const k = placed.length;
-      prefX = c.x + Math.cos(k * 2.4) * Math.min(coh * 0.5, INCH * 1.5);
-      prefY = c.y + Math.sin(k * 2.4) * Math.min(coh * 0.5, INCH * 1.5);
-    } else {
-      prefX = nearDs ? nearDs.x * INCH : BOARD_PX / 2;
-      prefY = edgeYpx;
-    }
-    // Snap into the legal deployment zone.
-    const pos = legalZonePosPx(zone, Math.max(INCH, Math.min(BOARD_PX - INCH, prefX)),
-                                     Math.max(INCH, Math.min(BOARD_PX - INCH, prefY)));
-    if (!pos) continue;
+    const placedPos = placed.map(s => ({ x: s.x, y: s.y }));
+    let anchorX, anchorY;
+    if (placed.length) { const c = centroid(grp.ships); anchorX = c.x; anchorY = c.y; }
+    else { anchorX = nearDs ? nearDs.x * INCH : BOARD_PX / 2; anchorY = edgeYpx; }
+    // Snap the anchor into the legal zone, then find a spot whose base doesn't overlap
+    // any already-deployed ship of this group (so they don't conga-line).
+    const za = legalZonePosPx(zone, Math.max(INCH, Math.min(BOARD_PX - INCH, anchorX)),
+                                    Math.max(INCH, Math.min(BOARD_PX - INCH, anchorY)));
+    if (!za) continue;
+    const pos = placeNonOverlap(za.x, za.y, placedPos, baseDiameterPx(grp.def), zone);
     opts.push({ id: `opt_dep_${gid}_${opts.length}`, gid, si, x: Math.round(pos.x), y: Math.round(pos.y), heading });
     break; // handle one group at a time; triggerAi will loop
   }
