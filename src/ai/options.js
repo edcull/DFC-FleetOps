@@ -45,43 +45,57 @@ const BASE_DIAM_IN = { L: 30 / 25.4, M: 40 / 25.4, H: 50 / 25.4, C: 60 / 25.4 };
 export function baseDiameterPx(def) { return (BASE_DIAM_IN[def?.tonnage] || 30 / 25.4) * INCH; }
 
 // A position near (anchorX, anchorY), inside `zone`, whose base (diameter diamPx) does
-// not overlap any already-placed base in `placed` ([{x,y}]). Ships dropped on the same
-// spot get shoved into a "conga line" by the engine's overlap resolver, so the AI must
-// space them itself. Grid-searches for the nearest clear, in-zone spot.
+// not overlap any already-placed base in `placed` ([{x, y, r}], r = base radius px).
+// Ships dropped on the same spot get shoved into a "conga line" by the engine's overlap
+// resolver, so the AI must space them itself. Grid-searches for the nearest clear,
+// in-zone spot. The engine flags overlap when centre distance < rA + rB (sum of radii),
+// so clearance must be measured against EACH neighbour's own radius — a small ship placed
+// at its own diameter from a big ship still overlaps the big ship's larger base.
 export function placeNonOverlap(anchorX, anchorY, placed, diamPx, zone) {
   // Use a tiny board margin so candidates can reach right up to an edge-line zone (those
   // hug the table edge). A larger margin would push every candidate out of zone — the
   // engine/client treat a ship as in-zone by its CENTRE (isInZone, 0.6" tolerance) and
   // let the base overhang the edge, so we must match that, not place by base contact.
   const m = 3;
+  const rNew = diamPx / 2;
   const cX = v => Math.max(m, Math.min(BOARD_PX - m, v));
   const cY = v => Math.max(m, Math.min(BOARD_PX - m, v));
   // In-zone exactly as the game judges it: the ship's centre must satisfy isInZone.
   const inZone = (x, y) => !zone || isInZone(x / INCH, y / INCH, zone);
-  const clear = (x, y) => placed.every(p => Math.hypot(x - p.x, y - p.y) >= diamPx + 2) && inZone(x, y);
+  // Need centre-distance ≥ rNew + neighbour radius (+1px slack past the engine's overlap
+  // test). Fall back to rNew for legacy callers that pass bare {x,y} (same-size assumption).
+  const clear = (x, y) => placed.every(p => Math.hypot(x - p.x, y - p.y) >= rNew + (p.r ?? rNew) + 1) && inZone(x, y);
   const ax = cX(anchorX), ay = cY(anchorY);
   if (clear(ax, ay)) return { x: ax, y: ay };
   // Grid-search the nearest clear, in-zone spot. A dense grid (rather than rings) is
   // needed because edge-line zones are a thin strip — most ring angles fall outside it.
   // If the zone is too packed for a fully-clear spot, keep the in-zone point that's as
-  // far as possible from its nearest neighbour (least overlap) rather than restacking.
-  const minSep = diamPx + 2;
-  const sepTo = (x, y) => placed.length ? Math.min(...placed.map(p => Math.hypot(x - p.x, y - p.y))) : Infinity;
-  const step = Math.max(diamPx * 0.35, 3);
-  const R = diamPx * 14;
-  let best = null, bestD = Infinity, fb = null, fbSep = -1;
-  for (let dx = -R; dx <= R; dx += step) {
-    for (let dy = -R; dy <= R; dy += step) {
-      const x = cX(ax + dx), y = cY(ay + dy);
+  // Cap separation generously so ships fan out across the zone rather than packing tight
+  // near the anchor — wider spacing leaves room for every ship and avoids the overlaps the
+  // engine resolves into a conga line. (Tight packing strands later ships and overlaps more.)
+  const clearSep = 12 * INCH;
+  // Separation = nearest neighbour's edge-to-centre gap (so a big base repels candidates
+  // by its full radius), capped so any clearly-clear spot scores the same.
+  const sepTo = (x, y) => placed.length
+    ? Math.min(...placed.map(p => Math.hypot(x - p.x, y - p.y) - (p.r ?? rNew)))
+    : clearSep;
+  // Scan the WHOLE board at a fine step (edge-line zones are only a ~0.6" band, so a coarse
+  // grid steps over them; far corners can be ~48" from the anchor). Score each in-zone point
+  // by separation from already-placed ships (capped at clearSep, so any non-overlapping spot
+  // is "good enough") with a pull toward the anchor as the tie-break. This packs a group's
+  // ships near each other / their objective at touching distance, only spreading further when
+  // the local area is full — and never stacks (which the engine would conga-line).
+  const step = 2;
+  let best = null, bestScore = -Infinity;
+  for (let x = m; x <= BOARD_PX - m; x += step) {
+    for (let y = m; y <= BOARD_PX - m; y += step) {
       if (!inZone(x, y)) continue;
-      const sep = sepTo(x, y);
-      if (sep >= minSep) {
-        const d = (x - ax) ** 2 + (y - ay) ** 2;
-        if (d < bestD) { bestD = d; best = { x, y }; }
-      } else if (sep > fbSep) { fbSep = sep; fb = { x, y }; }
+      const sep = Math.min(sepTo(x, y), clearSep);
+      const score = sep * 1000 - Math.hypot(x - ax, y - ay);
+      if (score > bestScore) { bestScore = score; best = { x, y }; }
     }
   }
-  return best || fb || { x: ax, y: ay };
+  return best || { x: ax, y: ay };
 }
 
 // Ground-asset launch ranges (inches). gate_dropship needs the Voidgate network
@@ -382,6 +396,16 @@ export function generateDeployOptions(state, aiSide) {
     .filter(d => !d.destroyed)
     .sort((a, b) => Math.abs(a.y * INCH - edgeYpx) - Math.abs(b.y * INCH - edgeYpx))[0];
 
+  // Every already-deployed friendly ship (ALL groups) — so placement never overlaps a
+  // ship from another group either (cross-group overlap is what the engine resolves into
+  // a conga line).
+  const allPlaced = [];
+  for (const g of Object.values(state.groups)) {
+    if (g.def?.side !== aiSide) continue;
+    const gr = baseDiameterPx(g.def) / 2;
+    for (const s of g.ships) if (!s.destroyed && !s.offTable) allPlaced.push({ x: s.x, y: s.y, r: gr });
+  }
+
   for (const [gid, grp] of Object.entries(state.groups)) {
     if (grp.def?.side !== aiSide) continue;
     // Only deploy ships that are eligible now (vanguard or directly_deploy approach).
@@ -392,19 +416,26 @@ export function generateDeployOptions(state, aiSide) {
     if (!isLegal(state, { type: 'deployShip', gid, si }, aiSide)) continue;
 
     const heading = deployZoneName === 'south' ? -90 : 90; // face north or south
-    // Anchor on the group's already-placed ships (stay in formation); otherwise pick a
-    // fresh anchor near a dropsite at the friendly edge.
     const placed = grp.ships.filter(s => !s.destroyed && !s.offTable);
-    const placedPos = placed.map(s => ({ x: s.x, y: s.y }));
-    let anchorX, anchorY;
-    if (placed.length) { const c = centroid(grp.ships); anchorX = c.x; anchorY = c.y; }
-    else { anchorX = nearDs ? nearDs.x * INCH : BOARD_PX / 2; anchorY = edgeYpx; }
-    // Snap the anchor into the legal zone, then find a spot whose base doesn't overlap
-    // any already-deployed ship of this group (so they don't conga-line).
+    let anchorX, anchorY = edgeYpx;
+    if (placed.length) {
+      // Keep a group together near its own already-placed ships.
+      const c = centroid(grp.ships); anchorX = c.x; anchorY = c.y;
+    } else if (defIsDropper(grp.def) || defIsGateMother(grp.def) || defIsVoidgate(grp.def)) {
+      // Drop-capable groups start near a dropsite.
+      anchorX = nearDs ? nearDs.x * INCH : BOARD_PX / 2;
+    } else {
+      // Combat groups spread across the zone width (deterministic per group) so the fleet
+      // fans out instead of piling onto one spot.
+      const h = [...gid].reduce((a, c) => a + c.charCodeAt(0), 0);
+      anchorX = INCH * 3 + (h % 97) / 97 * (BOARD_PX - INCH * 6);
+    }
     const za = legalZonePosPx(zone, Math.max(INCH, Math.min(BOARD_PX - INCH, anchorX)),
                                     Math.max(INCH, Math.min(BOARD_PX - INCH, anchorY)));
     if (!za) continue;
-    const pos = placeNonOverlap(za.x, za.y, placedPos, baseDiameterPx(grp.def), zone);
+    // Don't overlap THIS ship against the rest of its own group it'll deploy alongside,
+    // nor any already-placed ship of any group.
+    const pos = placeNonOverlap(za.x, za.y, allPlaced, baseDiameterPx(grp.def), zone);
     opts.push({ id: `opt_dep_${gid}_${opts.length}`, gid, si, x: Math.round(pos.x), y: Math.round(pos.y), heading });
     break; // handle one group at a time; triggerAi will loop
   }

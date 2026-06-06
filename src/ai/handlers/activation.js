@@ -54,11 +54,19 @@ function arriveGroup(state, gid, grp, aiSide, applyFn, overrideTargetX = null) {
   const clampX = v => Math.max(INCH * 2, Math.min(BOARD_PX - INCH * 2, v));
   const anchor = legalZonePosPx(zoneGeo, clampX(targetX), edgeY) || { x: clampX(targetX), y: edgeY };
   const diamPx = baseDiameterPx(def);
-  const placedPos = grp.ships.filter(s => !s.destroyed && !s.offTable).map(s => ({ x: s.x, y: s.y }));
+  // Avoid overlapping ANY friendly ship already on the table (every group), not just this
+  // group's — cross-group overlap is what gets resolved into a conga line.
+  const rSelf = diamPx / 2;
+  const placedPos = [];
+  for (const g of Object.values(state.groups)) {
+    if (g.def?.side !== aiSide) continue;
+    const gr = baseDiameterPx(g.def) / 2;
+    for (const s of g.ships) if (!s.destroyed && !s.offTable) placedPos.push({ x: s.x, y: s.y, r: gr });
+  }
   const liveShips = grp.ships.map((s, si) => ({ s, si })).filter(({ s }) => !s.destroyed && s.offTable);
   liveShips.forEach(({ si }) => {
     const pos = placeNonOverlap(anchor.x, anchor.y, placedPos, diamPx, zoneGeo);
-    placedPos.push(pos);
+    placedPos.push({ x: pos.x, y: pos.y, r: rSelf });
     applyFn({ type: 'arriveShip', gid, si, x: Math.round(pos.x), y: Math.round(pos.y), heading });
   });
 }
