@@ -2125,7 +2125,7 @@ export function rollHits(state, rng, M) {
     if (r === 6) sixes++;
     dice.push({ r, isHit, isCrit });
   }
-  M.hitResult = { dice, hits, crits, lock, forceSix };
+  M.hitResult = { dice, hits, crits, lock, forceSix, critMargin };
   if (hits > 0 && !M.bomber && M.attackerGid) {
     const tg = state.groups[s.targetGid];
     if (tg) { tg.hitByThisRound = tg.hitByThisRound || []; if (!tg.hitByThisRound.includes(M.attackerGid)) tg.hitByThisRound.push(M.attackerGid); }
@@ -2686,7 +2686,16 @@ export function attackReroll(state, rng, M, which) {
     const n = Math.min(M.rerollN || maxRR, maxRR);
     if (atkSide && n > 0) {
       state.planning.ap[atkSide] -= n;
-      missIdx.slice(0, n).forEach(i => { const d = hr.dice[i]; d.r = rollDie(rng); d.isHit = d.r >= hr.lock; d.isCrit = d.r >= hr.lock + 2; });
+      // Re-rolled dice must honour the same hit/crit rules as the original roll —
+      // notably forceSix (atmosphere: hits 6+ only, no crits) and the target's crit
+      // margin (Reinforced Armour = lock+3). Ignoring forceSix here let a re-rolled 4
+      // count as a hit against a Descent ship in atmosphere.
+      const _cm = hr.critMargin || 2;
+      missIdx.slice(0, n).forEach(i => {
+        const d = hr.dice[i]; d.r = rollDie(rng);
+        d.isHit  = hr.forceSix ? (d.r === 6) : (d.r >= hr.lock);
+        d.isCrit = hr.forceSix ? false : (d.r >= hr.lock + _cm);
+      });
       hr.hits = hr.dice.filter(d => d.isHit).length;
       hr.crits = hr.dice.filter(d => d.isCrit).length;
       hr.rerolled = true; M.rerollN = null;

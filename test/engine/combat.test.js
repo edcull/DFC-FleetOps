@@ -93,6 +93,25 @@ describe('rollHits', () => {
     rollHits(state, seqRng(4, 3, 5), M);              // 4,5 hit vs mauler-lock 4
     expect(M.hitResult.hits).toBe(2);
   });
+
+  it('AP re-roll honours forceSix (orbit → atmosphere Descent target): a re-rolled 4 is NOT a hit', () => {
+    // Orbit attacker vs a Descent ship in atmosphere → forceSix (hits 6+ only, no crit).
+    // A re-rolled die must obey the same rule; previously the re-roll used lock+ and let a 4 count.
+    const { state, M } = setup({
+      defenderSpec: { special: 'Descent' },
+      weaponSpec: { att: 4, lock: '4+', type: 'E', special: '' },
+    });
+    state.groups['player2:def'].ships[0].layer = 'atmosphere';
+    rollHits(state, seqRng(2, 3, 4, 5), M);            // forceSix: no 6s → 0 hits
+    expect(M.hitResult.forceSix).toBe(true);
+    expect(M.hitResult.hits).toBe(0);
+    // Attacker spends AP to re-roll all four misses; they come up 4,4,4,6.
+    state.planning = { ap: { player1: 4, player2: 0 } };
+    M.rerollN = 4;
+    attackReroll(state, seqRng(4, 4, 4, 6), M, 'hit');
+    expect(M.hitResult.hits).toBe(1);                 // only the 6 hits
+    expect(M.hitResult.crits).toBe(0);                // forceSix scores no crits
+  });
 });
 
 // ---------------------------------------------------------------------------
