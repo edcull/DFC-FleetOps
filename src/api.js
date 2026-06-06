@@ -13,13 +13,16 @@ import { parseNewRecruit } from './fleet/parser.js';
 import { FLEET_DB } from './fleet/db.js';
 
 // ── AI vs AI test-mode helpers ────────────────────────────────────────────────
+// AI vs AI uses only standard (core-rulebook) scenario components — no Scenario Expansion
+// (SE1 / bespoke) layouts, deployments or objectives. All of these are the standard d6
+// tables; the se1_* layouts and the bespoke:true deployments/objectives are excluded.
 const _AI_FACTIONS   = ['ucm', 'shaltari', 'phr', 'resistance', 'scourge', 'bioficer'];
 const _AI_LAYOUTS    = ['diagonal', 'edge_case', 'eruption', 'gatecrash', 'moonlight',
                         'moonstruck', 'take_and_hold', 'power_grab', 'shock_and_yaw'];
 const _AI_APPROACHES = ['close_enough', 'standoff', 'column', 'counterattack'];
 const _AI_DEPLOYMENTS = ['line', 'table_corners', 'midboard', 'from_corners',
-                         'attacker_defender', 'encirclement', 'defender_edge', 'diagonal_corners'];
-const _AI_OBJECTIVES = ['standard', 'attrition', 'survey', 'demolish', 'focal_points'];
+                         'attacker_defender', 'encirclement'];
+const _AI_OBJECTIVES = ['standard', 'attrition', 'survey'];
 const _AI_SECONDARIES = ['annihilate', 'take_prizes', 'gather_intel', 'decapitate',
                          'key_site', 'priority_target', 'long_shot', 'objectives_beyond'];
 function _pick(arr) { return arr[Math.floor(Math.random() * arr.length)]; }

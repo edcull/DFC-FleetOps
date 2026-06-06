@@ -4,7 +4,7 @@
 
 import { ORDERS, INCH, DEPLOYMENTS } from '../engine/constants.js';
 import { isLegal } from '../engine/gating.js';
-import { moveCone, weaponCanTarget, dropsiteController, canDeployNow, isInZone, distancePointToSegmentIn, connectedGateships } from '../engine/mutators.js';
+import { moveCone, weaponCanTarget, dropsiteController, canDeployNow, isInZone, connectedGateships } from '../engine/mutators.js';
 
 const BOARD_PX = 48 * INCH;
 const TONNAGE_ORDER = { C: 0, H: 1, M: 2, L: 3 };
@@ -49,22 +49,15 @@ export function baseDiameterPx(def) { return (BASE_DIAM_IN[def?.tonnage] || 30 /
 // spot get shoved into a "conga line" by the engine's overlap resolver, so the AI must
 // space them itself. Grid-searches for the nearest clear, in-zone spot.
 export function placeNonOverlap(anchorX, anchorY, placed, diamPx, zone) {
-  // Clamp only by the base radius — edge-line deployment zones hug the board edge, so a
-  // larger margin would push every candidate out of the zone (leaving ships stacked).
-  const m = Math.max(diamPx / 2, 2);
+  // Use a tiny board margin so candidates can reach right up to an edge-line zone (those
+  // hug the table edge). A larger margin would push every candidate out of zone — the
+  // engine/client treat a ship as in-zone by its CENTRE (isInZone, 0.6" tolerance) and
+  // let the base overhang the edge, so we must match that, not place by base contact.
+  const m = 3;
   const cX = v => Math.max(m, Math.min(BOARD_PX - m, v));
   const cY = v => Math.max(m, Math.min(BOARD_PX - m, v));
-  // In-zone test that tolerates base contact: a large ship touching the table edge has
-  // its centre up to a base-radius past the zone's 0.6" nudge tolerance, so for edge-line
-  // zones accept points within about a base-radius of an edge segment. Otherwise it's
-  // impossible to place Medium+ ships at the edge and they stack.
-  const rIn = diamPx / 2 / INCH;
-  const inZone = (x, y) => {
-    if (!zone) return true;
-    if (isInZone(x / INCH, y / INCH, zone)) return true;
-    if (zone.edgeLines) return zone.edgeLines.some(seg => distancePointToSegmentIn(x / INCH, y / INCH, seg) <= rIn + 0.15);
-    return false;
-  };
+  // In-zone exactly as the game judges it: the ship's centre must satisfy isInZone.
+  const inZone = (x, y) => !zone || isInZone(x / INCH, y / INCH, zone);
   const clear = (x, y) => placed.every(p => Math.hypot(x - p.x, y - p.y) >= diamPx + 2) && inZone(x, y);
   const ax = cX(anchorX), ay = cY(anchorY);
   if (clear(ax, ay)) return { x: ax, y: ay };
