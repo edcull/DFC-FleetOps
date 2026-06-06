@@ -4,7 +4,7 @@
 
 import { ORDERS, INCH, DEPLOYMENTS } from '../engine/constants.js';
 import { isLegal } from '../engine/gating.js';
-import { moveCone, weaponCanTarget, dropsiteController, canDeployNow, isInZone, distancePointToSegmentIn } from '../engine/mutators.js';
+import { moveCone, weaponCanTarget, dropsiteController, canDeployNow, isInZone, distancePointToSegmentIn, connectedGateships } from '../engine/mutators.js';
 
 const BOARD_PX = 48 * INCH;
 const TONNAGE_ORDER = { C: 0, H: 1, M: 2, L: 3 };
@@ -99,6 +99,56 @@ const NO_LAUNCH_ORDERS = new Set(['MT', 'DC']);
 function defIsDropper(def) {
   return !!def && (def.launch || []).some(l => LAUNCH_RANGE[l.type] != null);
 }
+// Shaltari Mothership: drops battalions by channelling through a connected Voidgate
+// (Gateship) parked within 3" of the target dropsite — it doesn't approach the dropsite
+// itself. defIsGateMother flags the launcher; defIsVoidgate flags the gates.
+function defIsGateMother(def) {
+  return !!def && (def.launch || []).some(l => l.type === 'gate_dropship');
+}
+function defIsVoidgate(def) { return !!def && (def.gateship || 0) > 0; }
+
+// One shared gate objective for the whole Shaltari force: the contestable dropsite
+// nearest any on-table Mothership (so Voidgates and Motherships converge on the SAME
+// dropsite and keep the 18" network intact instead of scattering to separate ones).
+function gateObjective(state, aiSide) {
+  const dss = (state.scenarioData?.dropsites || []).filter(d => !d.destroyed && dropsiteController(d) !== aiSide);
+  if (!dss.length) return null;
+  const mothers = [];
+  for (const g of Object.values(state.groups)) {
+    if (g.def?.side !== aiSide || !(g.def?.launch || []).some(l => l.type === 'gate_dropship')) continue;
+    for (const s of g.ships) if (!s.destroyed && !s.offTable) mothers.push(s);
+  }
+  let best = null, bd = Infinity;
+  for (const ds of dss) {
+    const d = mothers.length
+      ? Math.min(...mothers.map(m => dist2d(m.x, m.y, ds.x * INCH, ds.y * INCH)))
+      : 0; // no Mothership on table yet — any contestable DS; tie-break below by index
+    if (d < bd) { bd = d; best = ds; }
+  }
+  return best;
+}
+
+// Gate-drop plan for a Mothership: if a connected Voidgate is already parked within 3"
+// (same layer) of a contestable dropsite, channel a drop there this activation. Returns
+// { li, dsId, count, type:'gate_dropship' } | null. The Mothership needn't move — it just
+// needs to stay in the 18" Voidgate network.
+function gateLaunchPlan(state, grp, ship, aiSide) {
+  if (!ship) return null;
+  const launches = grp.def?.launch || [];
+  const li = launches.findIndex(l => l.type === 'gate_dropship');
+  if (li < 0) return null;
+  const gates = connectedGateships(state, aiSide, ship.x, ship.y);
+  if (!gates.length) return null;
+  const dropsites = (state.scenarioData?.dropsites || [])
+    .filter(d => !d.destroyed && dropsiteController(d) !== aiSide);
+  for (const ds of dropsites) {
+    const dsLayer = ds.base?.layer === 'Atmosphere' ? 'atmosphere' : 'orbit';
+    const ok = gates.some(g => (g.layer || 'orbit') === dsLayer
+      && dist2d(g.x, g.y, ds.x * INCH, ds.y * INCH) <= 3 * INCH + 1);
+    if (ok) return { li, dsId: ds.id, count: launches[li].n, type: 'gate_dropship' };
+  }
+  return null;
+}
 
 // Plan to drop battalions at the nearest contestable dropsite this group can reach
 // (launch range + a move's worth of slack). Returns { li, dsId, count, type } | null.
@@ -173,6 +223,28 @@ function candidateTargets(state, gid, aiSide) {
   const ship = grp.ships[si];
   const enemySide = aiSide === 'player1' ? 'player2' : 'player1';
   const dropsites = state.scenarioData?.dropsites || [];
+  const contestable = dropsites
+    .filter(ds => !ds.destroyed && dropsiteController(ds) !== aiSide)
+    .sort((a, b) => dist2d(ship.x, ship.y, a.x * INCH, a.y * INCH) - dist2d(ship.x, ship.y, b.x * INCH, b.y * INCH));
+
+  // Shaltari gate play needs the whole network to commit to ONE nearby objective, or the
+  // Voidgates over-extend and break the 18" chain to the Mothership. Pick the contestable
+  // dropsite nearest the Mothership (the network anchor) as the shared objective: Voidgates
+  // charge it (to park within 3"); the Mothership advances behind them to stay chained.
+  if (defIsVoidgate(grp.def) || defIsGateMother(grp.def)) {
+    const obj = gateObjective(state, aiSide);
+    if (obj) {
+      const ox = obj.x * INCH, oy = obj.y * INCH;
+      if (defIsGateMother(grp.def)) {
+        // Stay ~14" short of the objective so the 18" chain holds while the Voidgates
+        // close the last stretch to within 3".
+        const d = dist2d(ship.x, ship.y, ox, oy) || 1;
+        const back = Math.max(0, d - 14 * INCH);
+        return [{ x: ship.x + (ox - ship.x) / d * back, y: ship.y + (oy - ship.y) / d * back, reason: 'vp' }];
+      }
+      return [{ x: ox, y: oy, reason: 'vp' }]; // Voidgate: charge the shared objective
+    }
+  }
 
   const targets = [];
 
@@ -247,9 +319,12 @@ export function generateActivationOptions(state, aiSide) {
 
     // Drop-capable groups: plan to land battalions at the nearest reachable dropsite,
     // and try launch-permitting orders first so that option actually gets generated.
+    // Shaltari Motherships drop via the Voidgate network instead of approaching a dropsite.
     const dropper  = defIsDropper(grp.def);
-    const dropPlan = dropper ? dropLaunchPlan(state, grp, grp.ships[si], aiSide) : null;
-    const orderList = dropper
+    const gateMother = defIsGateMother(grp.def);
+    const dropPlan = dropper ? dropLaunchPlan(state, grp, grp.ships[si], aiSide)
+                   : gateMother ? gateLaunchPlan(state, grp, grp.ships[si], aiSide) : null;
+    const orderList = (dropper || gateMother)
       ? [...validOrders].sort((a, b) => (NO_LAUNCH_ORDERS.has(a) ? 1 : 0) - (NO_LAUNCH_ORDERS.has(b) ? 1 : 0))
       : validOrders;
 
@@ -278,8 +353,12 @@ export function generateActivationOptions(state, aiSide) {
           movePlan: dest,      // {x, y, reason}
           movePos,             // best reachable pixel pos (pre-move check)
           weapTargets,         // [{wi, targetGid, targetSi}]
-          // Drop battalions when this order can launch and we're heading to a dropsite.
-          launchPlan: (dropPlan && !NO_LAUNCH_ORDERS.has(order) && dest.reason === 'vp') ? dropPlan : null,
+          // Drop battalions when the order permits launching: a normal dropper drops while
+          // heading to a dropsite; a Mothership channels through the gate network from
+          // wherever it is, so its plan isn't tied to the move destination.
+          launchPlan: NO_LAUNCH_ORDERS.has(order) ? null
+                    : gateMother ? dropPlan
+                    : (dropPlan && dest.reason === 'vp') ? dropPlan : null,
         });
       }
     }

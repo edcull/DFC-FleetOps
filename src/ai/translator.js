@@ -320,9 +320,11 @@ export function buildActivation(state, rng, gid, order, movePlan, aiSide, applyF
     const launchSi = grp.ships.findIndex(s => !s.destroyed && !s.offTable);
     if (launchSi >= 0 && dsId) {
       if (launchType === 'gate_dropship') {
-        // Find a Voidgate on the AI's side within 3" of the target dropsite.
+        // Find a connected Voidgate within 3" of the target dropsite on the SAME layer
+        // (atmosphere for cities) — the drop is channelled through it.
         const ds = state.scenarioData?.dropsites?.find(d => d.id === dsId);
         if (ds) {
+          const dsLayer = ds.base?.layer === 'Atmosphere' ? 'atmosphere' : 'orbit';
           // Validate Voidgate is reachable via the 18" connected network from the Mothership.
           const motherShip = grp.ships[launchSi];
           const reachable  = motherShip
@@ -334,7 +336,8 @@ export function buildActivation(state, rng, gid, order, movePlan, aiSide, applyF
             if (eg.def?.side !== def.side || !eg.def?.gateship) continue;
             eg.ships.forEach((s, si) => {
               if (s.destroyed || s.offTable) return;
-              if (!reachableKey.has(`${egid}:${si}`)) return; // outside Mothership's network
+              if ((s.layer || 'orbit') !== dsLayer) return;      // gate & dropsite must share a layer
+              if (!reachableKey.has(`${egid}:${si}`)) return;    // outside Mothership's network
               const d = Math.hypot(s.x - ds.x * INCH, s.y - ds.y * INCH);
               if (d < bestDist && d <= 3 * INCH) { bestDist = d; bestGate = { gid: egid, si }; }
             });
