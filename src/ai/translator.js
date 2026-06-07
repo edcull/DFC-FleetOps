@@ -4,7 +4,7 @@
 import { INCH, ORDERS } from '../engine/constants.js';
 import { moveCone, dsEnemyBattalions, dsBattalions, connectedGateships, coherencyInches, outOfFormationSet, shipInNetwork } from '../engine/mutators.js';
 import { isLegal } from '../engine/gating.js';
-import { bestMoveToward, findBestTarget, baseDiameterPx, gateRunnerPlan, gateMotherPlan } from './options.js';
+import { bestMoveToward, findBestTarget, baseDiameterPx, gateRunnerPlan, gateMotherPlan, corvettePlan } from './options.js';
 
 // Ground-launch aura ranges + target constraints (mirrors the client's LAUNCH_TYPES /
 // tryGroundLaunch). Launch range isn't gated, so the AI must check it itself or it
@@ -303,6 +303,15 @@ export function buildActivation(state, rng, gid, order, movePlan, aiSide, applyF
       order = plan.order;
       movePlan = { x: plan.x, y: plan.y, reason: 'vp' };
       if (plan.launch) launchPlan = plan.launch;
+    }
+  }
+  // Corvette: dive into Atmosphere to hunt enemy Descent ships / contest cities, rather than
+  // loitering in Orbit where these fragile hulls just get shot. Scripted (MCTS won't do it).
+  else if (/corvette/i.test(def?.role || '')) {
+    const plan = corvettePlan(state, gid, aiSide);
+    if (plan && isLegal(state, { type: 'applyOrder', gid, order: plan.order }, aiSide)) {
+      order = plan.order;
+      movePlan = { x: plan.x, y: plan.y, reason: 'kill', toggle: plan.toggle };
     }
   }
   // (Normal bulk-lander/dropship droppers are intentionally NOT forced onto Course Change:

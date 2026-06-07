@@ -2,7 +2,7 @@
 // Does NOT call legalActions() (which only covers pass/endRound/commitScenario).
 // Instead generates candidates and validates each with isLegal().
 
-import { ORDERS, INCH, DEPLOYMENTS } from '../engine/constants.js';
+import { ORDERS, INCH, DEPLOYMENTS, OBJECTIVES } from '../engine/constants.js';
 import { isLegal } from '../engine/gating.js';
 import { moveCone, weaponCanTarget, dropsiteController, canDeployNow, isInZone, connectedGateships } from '../engine/mutators.js';
 
@@ -103,6 +103,29 @@ const NO_LAUNCH_ORDERS = new Set(['MT', 'DC']);
 
 function defIsDropper(def) {
   return !!def && (def.launch || []).some(l => LAUNCH_RANGE[l.type] != null);
+}
+// Descent ships can sit safely in Atmosphere (others take burn damage there) and are very hard
+// to hit while in it — so it's both protection and where ground drops happen.
+function defIsDescent(def) { return !!def && /Descent/i.test(def.special || ''); }
+function defIsCorvette(def) { return !!def && /corvette/i.test(def.role || ''); }
+// Missions where landing Battalions scores (so drop-capable ships should prioritise dropping).
+function isDropMission(state) {
+  const obj = state?.scenario?.objective;
+  return !obj || obj === 'extract' || OBJECTIVES[obj]?.scoring === 'control_contest';
+}
+// Nearest enemy Descent ship currently in Atmosphere (px point) | null — corvettes hunt these.
+function nearestEnemyDescentInAtmo(state, aiSide, fromX, fromY) {
+  const enemySide = aiSide === 'player1' ? 'player2' : 'player1';
+  let best = null, bd = Infinity;
+  for (const g of Object.values(state.groups)) {
+    if (g.def?.side !== enemySide || !defIsDescent(g.def)) continue;
+    for (const s of g.ships) {
+      if (s.destroyed || s.offTable || (s.layer || 'orbit') !== 'atmosphere') continue;
+      const d = dist2d(fromX, fromY, s.x, s.y);
+      if (d < bd) { bd = d; best = { x: s.x, y: s.y }; }
+    }
+  }
+  return best;
 }
 // Shaltari Mothership: drops battalions by channelling through a connected Voidgate
 // (Gateship) parked within 3" of the target dropsite — it doesn't approach the dropsite
@@ -231,6 +254,34 @@ export function gateMotherPlan(state, gid, aiSide) {
   const order = d <= 0.5 * (def.thrust || 10) * INCH + 1 ? 'CC' : 'GQ';
   return { order, x: tx, y: ty };
 }
+// Corvettes are fast, fragile Descent ships (Air-to-Air weapons) — too vulnerable to loiter in
+// Orbit. Script them to use their speed to dive into Atmosphere: onto the nearest enemy Descent
+// ship landing there (to deny it) or onto a contestable city (to protect/contest). Max Thrust to
+// close the gap, then descend on General Quarters to engage. Returns { order, x, y, toggle } | null.
+export function corvettePlan(state, gid, aiSide) {
+  const grp = state.groups[gid];
+  const def = grp?.def;
+  if (!defIsCorvette(def) || !defIsDescent(def)) return null;
+  const si = grp.ships.findIndex(s => !s.destroyed && !s.offTable);
+  if (si < 0) return null;
+  const ship = grp.ships[si];
+  let tgt = nearestEnemyDescentInAtmo(state, aiSide, ship.x, ship.y);
+  if (!tgt) {
+    const city = (state.scenarioData?.dropsites || [])
+      .filter(d => !d.destroyed && dropsiteController(d) !== aiSide && d.base?.layer === 'Atmosphere')
+      .sort((a, b) => dist2d(ship.x, ship.y, a.x * INCH, a.y * INCH) - dist2d(ship.x, ship.y, b.x * INCH, b.y * INCH))[0];
+    if (city) tgt = { x: city.x * INCH, y: city.y * INCH };
+  }
+  if (!tgt) return null;
+  const inAtmo = (ship.layer || 'orbit') === 'atmosphere';
+  const dist = dist2d(ship.x, ship.y, tgt.x, tgt.y);
+  const thrustPx = (def.thrust || 14) * INCH;
+  if (inAtmo) return { order: 'GQ', x: tgt.x, y: tgt.y, toggle: false };              // already down — engage
+  if (dist <= thrustPx + 1) return { order: 'GQ', x: tgt.x, y: tgt.y, toggle: true }; // reach + descend + fire
+  if (dist <= 2 * thrustPx + 1) return { order: 'MT', x: tgt.x, y: tgt.y, toggle: true }; // sprint-dive for cover
+  return { order: 'GQ', x: tgt.x, y: tgt.y, toggle: false };                          // close the gap in Orbit
+}
+
 // { li, dsId, count, type:'gate_dropship' } | null. The Mothership needn't move — it just
 // needs to stay in the 18" Voidgate network.
 function gateLaunchPlan(state, grp, ship, aiSide) {
@@ -347,6 +398,14 @@ function candidateTargets(state, gid, aiSide) {
     }
   }
 
+  // Drop-capable ships on a scoring/extract mission ALWAYS head for a dropsite to land
+  // battalions — shooting is opportunistic (buildActivation still fires after the move). Chasing
+  // enemy groups instead is what loses the objective game (UCM left every city to the enemy).
+  if (defIsDropper(grp.def) && isDropMission(state)) {
+    if (contestable.length) return [{ x: contestable[0].x * INCH, y: contestable[0].y * INCH, reason: 'vp' }];
+    return [{ x: ship.x, y: ship.y, reason: 'hold' }];
+  }
+
   const targets = [];
 
   // 1. Nearest uncontrolled or enemy-controlled dropsite
@@ -391,9 +450,13 @@ function findBestTarget(state, gid, si, wi, aiSide) {
       const tship = tgrp.ships[tsi];
       if (tship.destroyed || tship.offTable || tship.attachedTo) continue;
       if (!weaponCanTarget(state, def, ship, w, tgrp.def, tship, tgrp)) continue;
+      const tAtmoDescent = defIsDescent(tgrp.def) && (tship.layer || 'orbit') === 'atmosphere';
       const score = (tgrp.def.pts || 0)
         + (tship.hull < (tship.maxHull || 1) / 2 ? 50 : 0)   // prefer crippled
-        + (defIsDropper(tgrp.def) ? 150 : 0);                // prioritise enemy drop ships to stop landings
+        + (defIsDropper(tgrp.def) ? 150 : 0)                 // prioritise enemy drop ships to stop landings
+        // Corvettes (Air-to-Air, ignore the atmosphere penalty) exist to hunt enemy Descent ships
+        // landing in Atmosphere — make that their overriding target.
+        + (defIsCorvette(def) && tAtmoDescent ? 400 : 0);
       if (score > bestScore) { bestScore = score; best = { gid: targetGid, si: tsi }; }
     }
   }
@@ -444,7 +507,7 @@ export function generateActivationOptions(state, aiSide) {
       }
     }
     const damaged = grp.ships.some(s => !s.destroyed && !s.offTable && s.hull < (s.maxHull ?? s.hull));
-    let nearest = Infinity;
+    let nearest = Infinity, nearestEnemy = Infinity;
     if (si >= 0) {
       const shipObj = grp.ships[si];
       const enemySide = aiSide === 'player1' ? 'player2' : 'player1';
@@ -456,24 +519,35 @@ export function generateActivationOptions(state, aiSide) {
         if (g.def?.side !== enemySide) continue;
         for (const es of g.ships) {
           if (es.destroyed || es.offTable) continue;
-          nearest = Math.min(nearest, dist2d(shipObj.x, shipObj.y, es.x, es.y));
+          const d = dist2d(shipObj.x, shipObj.y, es.x, es.y);
+          nearest = Math.min(nearest, d);
+          nearestEnemy = Math.min(nearestEnemy, d);
         }
       }
     }
     const fullThrustPx = (grp.def?.thrust || 8) * INCH;
     const farAdvance = nearest > fullThrustPx; // more than one full move from anything worth reaching
+    // Max Thrust is risky: no firing, no launching, and it can fling a ship deep into enemy guns.
+    // Only allow it to cross genuinely open space — when even a full 2× Thrust sprint can't put the
+    // ship inside an enemy's likely threat reach next turn (their move + ~18" of weapon range).
+    const mtSafe = farAdvance && nearestEnemy > 2 * fullThrustPx + 18 * INCH;
 
     const rank = {};
     for (const o of validOrders) {
       let r = 0;
       if (o === 'GQ') r = 3;                                              // versatile default
       else if (o === 'WF') r = hasTargets && !farAdvance ? 4 : 1;         // alpha strike when in range
-      else if (o === 'MT') r = (farAdvance && !hasTargets) ? 3.5 : 0.3;   // sprint when nothing to shoot
+      else if (o === 'MT') r = mtSafe ? 2.5 : 0.1;                        // sprint only across open space
       else if (o === 'DC') r = (damaged && !hasTargets) ? 3.5 : 0.2;      // repair when it can't fight
       else if (o === 'SR') r = 1.2;                                       // shed spikes / sneak
       else if (o === 'CC') r = 0.5;                                       // hold/aim (mostly via override)
-      // Droppers must keep an order that can launch (MT/DC can't), so demote those for them.
-      if ((dropper || gateMother) && NO_LAUNCH_ORDERS.has(o)) r -= 5;
+      // Drop-capable groups prioritise the move+launch order so they actually land battalions;
+      // never let them alpha-strike (WF) or sit on no-launch orders instead of dropping.
+      if (dropper || gateMother) {
+        if (o === 'GQ') r += 4;
+        if (o === 'WF') r -= 3;
+        if (NO_LAUNCH_ORDERS.has(o)) r -= 5;
+      }
       rank[o] = r;
     }
     const orderList = [...validOrders].sort((a, b) => rank[b] - rank[a]);

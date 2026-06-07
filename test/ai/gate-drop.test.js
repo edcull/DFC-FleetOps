@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { gateRunnerPlan, gateMotherPlan, generateActivationOptions } from '../../src/ai/options.js';
+import { gateRunnerPlan, gateMotherPlan, generateActivationOptions, corvettePlan } from '../../src/ai/options.js';
 import { handlePreGame } from '../../src/ai/handlers/pregame.js';
 import { buildActivation } from '../../src/ai/translator.js';
 import { evaluate } from '../../src/ai/evaluate.js';
@@ -297,6 +297,50 @@ describe('gateMotherPlan — Mothership hangs back (survivability)', () => {
     expect(plan.launch).toBeUndefined();        // no drop live yet → reposition
     expect(plan.y).toBeLessThan(300);           // BACK toward our edge (north), not into the front
     expect(plan.y).toBeCloseTo(300 - 15 * 12, -1); // ~15" behind the forward gate
+  });
+});
+
+describe('UCM tactical rules — droppers, Max Thrust, corvettes', () => {
+  const ordersOf = (s) => [...new Set(generateActivationOptions(s, 'player1').filter(o => o.groupId).map(o => o.order))];
+
+  it('drop-capable ships only target dropsites (never chase enemies) on a scoring mission', () => {
+    const s = makeState(); s.activeSide = 'player1'; s.scenario = { objective: 'standard' };
+    s.scenarioData = { dropsites: [{ id: 'ds1', type: 'small_station', base: { layer: 'Orbit' }, x: 24, y: 18, destroyed: false, battalions: { ground: { player1: 0, player2: 0 } } }] };
+    addGroup(s, shipDef({ id: 'player1:tp', side: 'player1', name: 'Troopship', role: 'Troopship', thrust: 8,
+      launch: [{ name: 'Bulk Landers', n: 4, type: 'bulk_lander' }], weapons: [weapon({ arc: 'F/S', att: 4, lock: '4+' })] }),
+      [shipInstance({ x: 288, y: 240, heading: -90 })]);
+    addGroup(s, shipDef({ id: 'player2:e', side: 'player2' }), [shipInstance({ x: 300, y: 250 })]); // enemy right next to it
+    const opts = generateActivationOptions(s, 'player1').filter(o => o.groupId);
+    expect(opts.every(o => o.movePlan?.reason === 'vp')).toBe(true);   // dropsite only, no 'kill'
+    expect(ordersOf(s)).toContain('GQ');                               // move+launch order
+    expect(ordersOf(s)).not.toContain('WF');                          // not alpha-striking instead of dropping
+    expect(opts.some(o => o.launchPlan)).toBe(true);                  // a drop plan is attached
+  });
+
+  it('avoids Max Thrust near the enemy but allows it across open space', () => {
+    const near = makeState(); near.activeSide = 'player1'; near.scenario = { objective: 'standard' }; near.scenarioData = { dropsites: [] };
+    addGroup(near, shipDef({ id: 'player1:a', side: 'player1', thrust: 10, weapons: [weapon({ arc: 'F' })] }), [shipInstance({ x: 200, y: 200, heading: 0 })]);
+    addGroup(near, shipDef({ id: 'player2:b', side: 'player2' }), [shipInstance({ x: 340, y: 200 })]); // ~12" away
+    expect(ordersOf(near)).not.toContain('MT');
+
+    const open = makeState(); open.activeSide = 'player1'; open.scenario = { objective: 'standard' };
+    open.scenarioData = { dropsites: [{ id: 'ds1', base: {}, x: 46, y: 46, destroyed: false, battalions: {} }] };
+    addGroup(open, shipDef({ id: 'player1:a', side: 'player1', thrust: 8, weapons: [weapon({ arc: 'F' })] }), [shipInstance({ x: 30, y: 30, heading: 45 })]);
+    addGroup(open, shipDef({ id: 'player2:b', side: 'player2' }), [shipInstance({ x: 560, y: 560 })]); // far away
+    expect(ordersOf(open)).toContain('MT');
+  });
+
+  it('corvettes dive into Atmosphere onto the nearest enemy Descent ship', () => {
+    const s = makeState(); s.activeSide = 'player1'; s.scenario = { objective: 'standard' };
+    s.scenarioData = { dropsites: [{ id: 'ds1', type: 'large_city', base: { layer: 'Atmosphere' }, x: 24, y: 24, destroyed: false, battalions: {} }] };
+    addGroup(s, shipDef({ id: 'player1:cv', side: 'player1', name: 'Corvette', role: 'Corvette', special: 'Descent', thrust: 14, weapons: [weapon({ arc: 'F/S/R', special: 'Air to Air' })] }),
+      [shipInstance({ x: 288, y: 200, heading: 90, layer: 'orbit' })]);
+    addGroup(s, shipDef({ id: 'player2:sc', side: 'player2', name: 'Strike Carrier', role: 'Strike Carrier', special: 'Descent' }),
+      [Object.assign(shipInstance({ x: 288, y: 288 }), { layer: 'atmosphere' })]);
+    const plan = corvettePlan(s, 'player1:cv', 'player1');
+    expect(plan).toBeTruthy();
+    expect(plan.toggle).toBe(true);          // descends to Atmosphere
+    expect(plan.y).toBeCloseTo(288, -1);     // toward the enemy Descent ship
   });
 });
 
