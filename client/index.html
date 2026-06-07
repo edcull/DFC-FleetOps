@@ -7884,6 +7884,20 @@ function renderVPBreakdown() {
   if (secToggle) secToggle.addEventListener('click', () => { state.vpSecOpen = !state.vpSecOpen; renderAll(true); });
 }
 
+/* Trigger a client-side download of `obj` as a pretty-printed JSON file. */
+function _downloadJson(filename, obj) {
+  try {
+    const blob = new Blob([JSON.stringify(obj, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = filename;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  } catch (err) {
+    alert('Could not download file: ' + err.message);
+  }
+}
+
 /* End-of-game summary modal. */
 function renderGameOver() {
   let overlay = document.getElementById('gameover-overlay');
@@ -7910,13 +7924,21 @@ function renderGameOver() {
       ${u.vp === s.vp ? `<div class="init-result" style="font-size:10px;color:var(--text-mute);text-align:center;margin-top:6px;">VP tied — broken by Kill Points</div>` : ''}
       ${(G.scoreLog||[]).map(l => `<div class="am-line" style="font-size:10px;">${l}</div>`).join('')}
       <div style="margin-top:12px;display:flex;flex-direction:column;gap:6px;">
-        <button class="btn" id="gameover-report" style="width:100%;">📋 GAME REPORT</button>
+        <div style="display:flex;gap:6px;">
+          <button class="btn" id="gameover-report" style="flex:1;">📋 GAME REPORT</button>
+          <button class="btn" id="gameover-download" style="flex:1;" title="Save the full game state as a JSON file">⬇ STATE FILE</button>
+        </div>
         <button class="btn-primary" id="gameover-reset" style="width:100%;">NEW GAME →</button>
       </div>
     </div>`;
   document.body.appendChild(overlay);
   initPanel(overlay, 'GAME OVER', 'gameover-overlay', 100, 50);
   overlay.querySelector('#gameover-report').addEventListener('click', () => { _reportRound = 1; openGameReport(state); });
+  overlay.querySelector('#gameover-download').addEventListener('click', () => {
+    const tag = (state.factions?.f1 || playerNameForSide('player1')) + '-vs-' + (state.factions?.f2 || playerNameForSide('player2'));
+    const stamp = new Date().toISOString().slice(0, 16).replace(/[:T]/g, '-');
+    _downloadJson(`dfc-state-${tag}-${stamp}.json`.replace(/[^a-z0-9.\-]/gi, '_'), state);
+  });
   overlay.querySelector('#gameover-reset').addEventListener('click', () => {
     state.gameOver = null; state.score = { player1:{vp:0,kp:0}, player2:{vp:0,kp:0} }; state.scoredRounds = []; state.scoreLog = []; state.lastScoring = null; state.captured = {player1:0,player2:0}; state.admiralKilled = {player1:false,player2:false};
     state.secondaryNominations = { player1:{}, player2:{} }; state.shipReconOps = {}; state.reconKills = { player1:0, player2:0 }; state.nominationPhase = false;
