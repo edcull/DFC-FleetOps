@@ -246,6 +246,24 @@ function buildFull({ faction, targetPts, admiralLevel = 0, personality = 'balanc
       nameCount[name] = (nameCount[name] || 0) + 1;
     }
 
+    // 0. Shaltari drop backbone: the gate-drop game only works with a redundant forward
+    //    Voidgate network and enough Motherships to channel battalions, so guarantee
+    //    ≥3 Voidgates and ≥1 Mothership per 500 pts before anything else. (Open-Network
+    //    Voidgates are what connectedGateships chains through; Motherships carry the drops.)
+    if (faction === 'shaltari') {
+      const vg = db['Voidgate'];
+      for (let i = 0; i < 3; i++) if (vg && fits('Voidgate', vg)) add('Voidgate', vg);
+      const wantMothers = Math.max(1, Math.ceil(targetPts / 500));
+      const dropCap = def => (def.launch || []).filter(l => l.type === 'gate_dropship').reduce((a, l) => a + (l.n || 0), 0);
+      const motherCands = [...mSorted, ...lSorted, ...hSorted]
+        .filter(s => dropCap(s.def) > 0)
+        .sort((a, b) => dropCap(b.def) - dropCap(a.def) || groupCost(a.def) - groupCost(b.def));
+      for (let slot = 0; slot < wantMothers; slot++) {
+        const pickM = motherCands.find(s => fits(s.name, s.def));
+        if (pickM) add(pickM.name, pickM.def);
+      }
+    }
+
     // 1. Medium backbone: 2–3 groups picked with exponential-decay weighting from top-8.
     const mPool = [...mSorted];
     const numMedium = 2 + Math.floor(Math.random() * 2); // 2 or 3
