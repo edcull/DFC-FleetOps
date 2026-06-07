@@ -169,12 +169,37 @@ router.post('/rooms', (req, res) => {
   const { aiOpponent, aiVsAi, aiSide, aiPersonality, aiFaction, aiSecondaries, aiUseLlm } = req.body || {};
 
   if (aiVsAi) {
-    // Two 1000pt AI fleets battle each other; spectators watch. Uses the fallback (non-LLM)
-    // AI by leaving aiUseLlm unset, so both sides don't hit the LLM. Each side's faction,
-    // personality, and the scoring objective can be set in the request (the AI-vs-AI setup
-    // screen); anything left unset/invalid is rolled randomly.
+    // Two AI fleets battle each other; spectators watch. Uses the fallback (non-LLM) AI by
+    // leaving aiUseLlm unset, so both sides don't hit the LLM.
     const LABELS = { aggressive:'Aggressive', positional:'Positional', defensive:'Defensive', balanced:'Balanced', opportunist:'Opportunist' };
     const useOr = (v, pool) => (v && pool.includes(v)) ? v : _pick(pool);
+
+    // Configurable AI-vs-AI: land in the in-room setup screen so the human can set up BOTH AI
+    // sides (fleet source, faction, secondaries, personality) and the scenario like single
+    // player, then begin. Fleets are built later via /build-ai (slot 'f1'/'f2'); we leave the
+    // room in 'setup' phase (no auto-start) with a pre-rolled, editable scenario.
+    if (req.body.setup) {
+      const persP1 = useOr(req.body.p1Personality, _AI_PERSONALITIES);
+      const persP2 = useOr(req.body.p2Personality, _AI_PERSONALITIES);
+      room.aiSide        = 'both';
+      room.allowSpectators = true;
+      room.aiPersonality = persP1;
+      room.aiPersonalities = { player1: persP1, player2: persP2 };
+      room.state.aiSide  = 'both';
+      room.state.aiVsAi  = true;
+      room.state.aiPersonality = persP1;
+      room.state.aiPersonalities = { player1: persP1, player2: persP2 };
+      room.state.playerNames = { f1: `AI-Red (${LABELS[persP1] || 'Balanced'})`, f2: `AI-Blue (${LABELS[persP2] || 'Balanced'})` };
+      room.state.scenario = {
+        layout:     _pick(_AI_LAYOUTS),
+        approach:   _pick(_AI_APPROACHES),
+        deployment: _pick(_AI_DEPLOYMENTS),
+        objective:  _pick(_AI_OBJECTIVES),
+        variant:    'none',
+      };
+      console.log(`Room ${room.id} — AI vs AI (configurable setup)`);
+      return res.json({ roomId: room.id });
+    }
     // Per-side setup config from the AI-vs-AI setup screen (mode/faction/points/import/secondaries/
     // personality). Back-compat: also accept the older flat p1Faction/p2Personality fields.
     const cfg1 = req.body.p1 || {};
@@ -265,12 +290,24 @@ router.post('/rooms/:id/build-ai', (req, res) => {
   if (!room) return res.status(404).json({ error: 'Room not found' });
   if (!room.aiSide) return res.status(400).json({ error: 'Not a solo room' });
 
-  const slot = room.aiSide === 'player1' ? 'f1' : 'f2';
+  // AI-vs-AI rooms (aiSide 'both') build per-slot via an explicit body.slot; solo rooms use
+  // the single AI side.
+  const slot = room.aiSide === 'both'
+    ? (req.body.slot === 'f1' ? 'f1' : 'f2')
+    : (room.aiSide === 'player1' ? 'f1' : 'f2');
+  const aiSideForSlot = slot === 'f1' ? 'player1' : 'player2';
   const { mode = 'generate', faction, targetPts, useLlm, secondaries, importText, personality } = req.body || {};
 
-  room.aiPersonality           = personality || 'balanced';
-  room.aiUseLlm                = !!useLlm;
-  room.state.aiPersonality     = room.aiPersonality;
+  room.aiUseLlm = !!useLlm;
+  if (room.aiSide === 'both') {
+    room.aiPersonalities = room.aiPersonalities || {};
+    room.aiPersonalities[aiSideForSlot] = personality || 'balanced';
+    room.state.aiPersonalities = room.state.aiPersonalities || {};
+    room.state.aiPersonalities[aiSideForSlot] = personality || 'balanced';
+  } else {
+    room.aiPersonality       = personality || 'balanced';
+    room.state.aiPersonality = room.aiPersonality;
+  }
 
   let fleet = null;
   let resolvedFaction = faction;
@@ -310,9 +347,10 @@ router.post('/rooms/:id/build-ai', (req, res) => {
   }
 
   const PERSONALITY_LABELS = { aggressive:'Aggressive', positional:'Positional', defensive:'Defensive', balanced:'Balanced', opportunist:'Opportunist' };
-  room.state.playerNames[slot] = `AI (${PERSONALITY_LABELS[room.aiPersonality] || 'Balanced'})`;
+  const namePrefix = room.aiSide === 'both' ? (slot === 'f1' ? 'AI-Red' : 'AI-Blue') : 'AI';
+  room.state.playerNames[slot] = `${namePrefix} (${PERSONALITY_LABELS[personality] || 'Balanced'})`;
   broadcast(room, { type: 'full', state: room.state });
-  console.log(`Room ${room.id} — AI fleet built [${mode}]: ${resolvedFaction} ${room.aiPersonality}`);
+  console.log(`Room ${room.id} — AI fleet built [${mode}] ${slot}: ${resolvedFaction} ${personality || 'balanced'}`);
   res.json({ ok: true, faction: resolvedFaction, secondaries: room.state.secondaryChoice[slot] });
 });
 
@@ -322,16 +360,49 @@ router.post('/rooms/:id/configure-ai', (req, res) => {
   if (!room) return res.status(404).json({ error: 'Room not found' });
   if (!room.aiSide) return res.status(400).json({ error: 'Not a solo room' });
   const { personality, useLlm, secondaries } = req.body || {};
-  const slot = room.aiSide === 'player1' ? 'f1' : 'f2';
+  const slot = room.aiSide === 'both'
+    ? (req.body.slot === 'f1' ? 'f1' : 'f2')
+    : (room.aiSide === 'player1' ? 'f1' : 'f2');
   const PERSONALITY_LABELS = { aggressive:'Aggressive', positional:'Positional', defensive:'Defensive', balanced:'Balanced', opportunist:'Opportunist' };
   if (personality) {
-    room.aiPersonality = personality;
-    room.state.aiPersonality = personality;
-    room.state.playerNames[slot] = `AI (${PERSONALITY_LABELS[personality] || personality})`;
+    if (room.aiSide === 'both') {
+      const aiSideForSlot = slot === 'f1' ? 'player1' : 'player2';
+      room.aiPersonalities = room.aiPersonalities || {};
+      room.aiPersonalities[aiSideForSlot] = personality;
+      room.state.aiPersonalities = room.state.aiPersonalities || {};
+      room.state.aiPersonalities[aiSideForSlot] = personality;
+      room.state.playerNames[slot] = `${slot === 'f1' ? 'AI-Red' : 'AI-Blue'} (${PERSONALITY_LABELS[personality] || personality})`;
+    } else {
+      room.aiPersonality = personality;
+      room.state.aiPersonality = personality;
+      room.state.playerNames[slot] = `AI (${PERSONALITY_LABELS[personality] || personality})`;
+    }
   }
   if (useLlm !== undefined) room.aiUseLlm = !!useLlm;
   if (Array.isArray(secondaries) && secondaries.length) room.state.secondaryChoice[slot] = secondaries.slice(0, 2);
   broadcast(room, { type: 'full', state: room.state });
+  res.json({ ok: true });
+});
+
+// POST /api/rooms/:id/start-aivsai — both AI fleets configured; ready both sides and kick off
+// the AI-vs-AI game. Done as one authoritative server action (no WS race on the configurator
+// navigating to the spectator view).
+router.post('/rooms/:id/start-aivsai', (req, res) => {
+  const room = getRoom(req.params.id.toUpperCase());
+  if (!room) return res.status(404).json({ error: 'Room not found' });
+  if (room.aiSide !== 'both') return res.status(400).json({ error: 'Not an AI-vs-AI room' });
+  if (!room.state.importedFleets?.f1 || !room.state.importedFleets?.f2) {
+    return res.status(400).json({ error: 'Both AI fleets must be built first' });
+  }
+  if (!room.state.scenario || ['deployment', 'approach', 'layout', 'objective'].some(k => !room.state.scenario[k])) {
+    return res.status(400).json({ error: 'Select all scenario options first' });
+  }
+  apply(room.state, { type: 'readySetup', side: 'player1' }, room.rng);
+  apply(room.state, { type: 'readySetup', side: 'player2' }, room.rng);
+  saveRoom(room).catch(err => console.error(`[${room.id}] save error:`, err.message));
+  broadcast(room, { type: 'full', state: room.state });
+  console.log(`Room ${room.id} — AI vs AI started`);
+  setImmediate(() => maybeAiTurn(room).catch(err => console.error(`[${room.id}] AI vs AI error:`, err.message)));
   res.json({ ok: true });
 });
 
@@ -817,8 +888,9 @@ function onMessage(room, ws, side, msg, userId) {
       broadcast(room, { type: 'full', state: room.state });
 
       // AI solo mode: auto-ready the AI side immediately after the human readies.
+      // (Skipped for AI-vs-AI 'both' — the configurator readies both sides explicitly.)
       // apply() is called directly (no isLegal) since this is an authoritative server action.
-      if (intent.type === 'readySetup' && room.aiSide &&
+      if (intent.type === 'readySetup' && room.aiSide && room.aiSide !== 'both' &&
           room.state.phase === 'setup' &&
           room.state.setupReady?.[intent.side] &&
           !room.state.setupReady?.[room.aiSide]) {
