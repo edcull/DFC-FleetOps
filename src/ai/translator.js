@@ -78,7 +78,7 @@ function nonOverlapOK(pts, diamPx) {
 // a non-overlapping cluster around that waypoint (nearest slot, greedily). We pick the
 // largest advance whose simulated destinations stay coherent AND non-overlapping, backing
 // off toward the centroid otherwise.
-function moveGroupCoherent(state, rng, gid, movers, tx, ty, applyFn) {
+function moveGroupCoherent(state, rng, gid, movers, tx, ty, applyFn, toggle = false) {
   const def = state.groups[gid].def;
   const cohPx = coherencyInches(def) * INCH;
   const need = movers.length >= 4 ? 2 : 1;
@@ -87,7 +87,7 @@ function moveGroupCoherent(state, rng, gid, movers, tx, ty, applyFn) {
   const cones = {};
   let reach = Infinity;
   for (const { si } of movers) {
-    const mc = moveCone(state, gid, si, false);
+    const mc = moveCone(state, gid, si, toggle);
     cones[si] = mc;
     if (mc.o && mc.o.moveMax > 0) reach = Math.min(reach, mc.maxR - 1);
   }
@@ -131,7 +131,7 @@ function moveGroupCoherent(state, rng, gid, movers, tx, ty, applyFn) {
   if (!chosen) chosen = planAt(0); // converge on the centroid — least overlap available
   for (const { si } of movers) {
     const t = chosen.target[si];
-    moveShipToward(state, rng, gid, si, t.x, t.y, applyFn);
+    moveShipToward(state, rng, gid, si, t.x, t.y, applyFn, toggle);
   }
 }
 
@@ -219,15 +219,16 @@ function resolveAttackModal(state, rng, applyFn) {
   }
 }
 
-// Move a single ship toward (tx, ty), handling post-move aiming state.
-function moveShipToward(state, rng, gid, si, tx, ty, applyFn) {
+// Move a single ship toward (tx, ty), handling post-move aiming state. `toggle` requests a
+// layer change (Orbit↔Atmosphere) at the end of the move — used to descend gates onto cities.
+function moveShipToward(state, rng, gid, si, tx, ty, applyFn, toggle = false) {
   const ship = state.groups[gid]?.ships[si];
   if (!ship || ship.destroyed || ship.offTable || ship.movedThisRound) return false;
-  const mc = moveCone(state, gid, si, false);
+  const mc = moveCone(state, gid, si, toggle);
   if (!mc.o || mc.o.moveMax <= 0) return false;
 
   const dest = bestMoveToward(ship, mc, tx, ty);
-  const moved = applyFn({ type: 'moveShip', gid, si, x: Math.round(dest.x), y: Math.round(dest.y), layerToggle: false });
+  const moved = applyFn({ type: 'moveShip', gid, si, x: Math.round(dest.x), y: Math.round(dest.y), layerToggle: toggle });
   if (!moved) return false;
 
   // Handle course-change / vectored aiming state produced by commitMove
@@ -255,7 +256,7 @@ export function buildActivation(state, rng, gid, order, movePlan, aiSide, applyF
     const plan = gateRunnerPlan(state, gid, aiSide);
     if (plan && isLegal(state, { type: 'applyOrder', gid, order: plan.order }, aiSide)) {
       order = plan.order;
-      movePlan = { x: plan.x, y: plan.y, reason: 'vp' };
+      movePlan = { x: plan.x, y: plan.y, reason: 'vp', toggle: plan.toggle };
     }
   }
   // Shaltari Mothership: shadow the forward gate and channel a drop the instant a connected
@@ -284,7 +285,7 @@ export function buildActivation(state, rng, gid, order, movePlan, aiSide, applyF
     .map((s, si) => ({ s, si }))
     .filter(o => !o.s.destroyed && !o.s.offTable && !o.s.movedThisRound);
   if (tx !== null && movers.length) {
-    moveGroupCoherent(state, rng, gid, movers, tx, ty, applyFn);
+    moveGroupCoherent(state, rng, gid, movers, tx, ty, applyFn, movePlan?.toggle ?? false);
   }
 
   // Launch fighters/bombers for orders that permit launching (GQ, WF, CC, SR).

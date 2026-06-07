@@ -112,40 +112,51 @@ function defIsGateMother(def) {
 }
 function defIsVoidgate(def) { return !!def && (def.gateship || 0) > 0; }
 
-// One shared gate objective for the whole Shaltari force: the contestable dropsite
-// nearest any on-table Mothership (so Voidgates and Motherships converge on the SAME
-// dropsite and keep the 18" network intact instead of scattering to separate ones).
+// Relative VP value of a dropsite by size, so the gate network prefers the richer
+// objectives (a Large City scores more than a Medium Station).
+function dsVpValue(ds) {
+  const t = ds.type || '';
+  if (/large/.test(t)) return 3;
+  if (/small/.test(t)) return 1;
+  return 2; // medium / unknown
+}
+
+// One shared gate objective for the whole Shaltari force: the most valuable contestable
+// dropsite, tie-broken by proximity to an on-table Mothership (so Voidgates and Motherships
+// converge on the SAME dropsite and keep the 18" network intact instead of scattering).
+// Cities ARE included: a Voidgate descends to Atmosphere to channel a city drop (the
+// gate-runner plan handles the descent), so they are not skipped — they're usually the
+// highest-value objectives on the board.
 function gateObjective(state, aiSide) {
   const all = (state.scenarioData?.dropsites || []).filter(d => !d.destroyed && dropsiteController(d) !== aiSide);
   if (!all.length) return null;
-  // The AI keeps its Voidgates in Orbit (it never descends them), so a gate-drop can only
-  // be channelled through an Orbit-layer dropsite — an Atmosphere city is unreachable for
-  // the gate network however close the gate parks. Target a contestable Orbit dropsite
-  // (e.g. a Space Station) when one exists; fall back to any contestable one otherwise so
-  // the network still contests something.
-  const orbit = all.filter(d => (d.base?.layer === 'Atmosphere' ? 'atmosphere' : 'orbit') === 'orbit');
-  const dss = orbit.length ? orbit : all;
   const mothers = [];
   for (const g of Object.values(state.groups)) {
     if (g.def?.side !== aiSide || !(g.def?.launch || []).some(l => l.type === 'gate_dropship')) continue;
     for (const s of g.ships) if (!s.destroyed && !s.offTable) mothers.push(s);
   }
-  let best = null, bd = Infinity;
-  for (const ds of dss) {
-    const d = mothers.length
-      ? Math.min(...mothers.map(m => dist2d(m.x, m.y, ds.x * INCH, ds.y * INCH)))
-      : 0; // no Mothership on table yet — any contestable DS; tie-break below by index
-    if (d < bd) { bd = d; best = ds; }
+  let best = null, bestScore = -Infinity;
+  for (const ds of all) {
+    const dIn = mothers.length
+      ? Math.min(...mothers.map(m => dist2d(m.x, m.y, ds.x * INCH, ds.y * INCH))) / INCH
+      : 0; // no Mothership on table yet — value decides, ties by dropsite order
+    // Value dominates; proximity (board ≈ 48") is only a tie-breaker.
+    const score = dsVpValue(ds) - dIn / 48;
+    if (score > bestScore) { bestScore = score; best = ds; }
   }
   return best;
 }
 
-// Drive a Voidgate to PARK within 3" of its Orbit objective dropsite so a connected
-// Mothership can channel a drop through it. The crux: a fast gate on General Quarters has a
-// forced ½-Thrust *minimum* move, so it overshoots and orbits the dropsite, never settling.
-// Course Change (CC) has a minimum move of 0 and two 45° turns, so the gate can stop exactly
-// on target and then HOLD there. So: approach fast (GQ) while far, then switch to CC to park
-// the instant the dropsite is within CC reach. Returns { order, x, y } | null.
+// Drive a Voidgate to PARK within 3" of its objective dropsite so a connected Mothership
+// can channel a drop through it. Two crucial details:
+//  1. Layer: the gate must share the dropsite's orbital layer to channel. A CITY sits in
+//     Atmosphere, so the gate must DESCEND (layerToggle) — it lands in Atmosphere on the
+//     approach move that reaches the city. A Space Station is in Orbit, so no descent.
+//  2. Order discipline: a fast gate on General Quarters has a forced ½-Thrust *minimum*
+//     move, so close-in it overshoots and orbits the dropsite. Course Change (min move 0,
+//     two 45° turns) lets it stop exactly on target and HOLD. So: approach fast (GQ) while
+//     far, switch to CC to park (and hold) once within ½-Thrust reach.
+// Returns { order, x, y, toggle } | null. `toggle` requests a layer change on this move.
 export function gateRunnerPlan(state, gid, aiSide) {
   const grp = state.groups[gid];
   const def = grp?.def;
@@ -156,13 +167,23 @@ export function gateRunnerPlan(state, gid, aiSide) {
   const obj = gateObjective(state, aiSide);
   if (!obj) return null;
   const ox = obj.x * INCH, oy = obj.y * INCH;
+  const objLayer = obj.base?.layer === 'Atmosphere' ? 'atmosphere' : 'orbit';
+  const curLayer = ship.layer || 'orbit';
   const dist = dist2d(ship.x, ship.y, ox, oy);
-  const halfThrustPx = 0.5 * (def.thrust || 12) * INCH;
-  // Within Course-Change reach (½ Thrust) → park precisely on the dropsite (min move 0
-  // means it lands on target, and stays parked on later rounds while it holds the channel).
-  if (dist <= halfThrustPx + 1) return { order: 'CC', x: ox, y: oy };
-  // Still closing the gap → General Quarters covers up to full Thrust toward the dropsite.
-  return { order: 'GQ', x: ox, y: oy };
+  const thrustPx = (def.thrust || 12) * INCH;
+  const halfThrustPx = 0.5 * thrustPx;
+  const needDescend = curLayer === 'orbit' && objLayer === 'atmosphere';
+  const needAscend  = curLayer === 'atmosphere' && objLayer === 'orbit';
+
+  // On station (within Course-Change reach, ½ Thrust) → park precisely on the dropsite
+  // (min move 0 lands on target and holds on later rounds). Match the dropsite's layer on
+  // this final move if we aren't already there.
+  if (dist <= halfThrustPx + 1) return { order: 'CC', x: ox, y: oy, toggle: needDescend || needAscend };
+  // Closing the gap → General Quarters covers up to full Thrust toward the dropsite. Only
+  // descend on the move that can actually reach the city, so the gate isn't stranded in
+  // Atmosphere (capped to 2"/turn) far from its objective; stay fast in Orbit until then.
+  const descendNow = needDescend && dist <= thrustPx + 1;
+  return { order: 'GQ', x: ox, y: oy, toggle: descendNow };
 }
 
 // Drive a Mothership to keep the 18" channel to the forward gate and CHANNEL a drop the
@@ -178,13 +199,13 @@ export function gateMotherPlan(state, gid, aiSide) {
   if (si < 0) return null;
   const ship = grp.ships[si];
   const dss = (state.scenarioData?.dropsites || [])
-    .filter(d => !d.destroyed && dropsiteController(d) !== aiSide
-              && (d.base?.layer === 'Atmosphere' ? 'atmosphere' : 'orbit') === 'orbit');
+    .filter(d => !d.destroyed && dropsiteController(d) !== aiSide);
   if (!dss.length) return null;
-  // A connected gate already within 3" of a contestable dropsite → hold position and launch.
+  // A connected gate already within 3" of a contestable dropsite (on the gate's layer →
+  // cities included once a gate has descended) → hold position and launch.
   const launch = gateLaunchPlan(state, grp, ship, aiSide);
   if (launch) return { order: 'CC', x: ship.x, y: ship.y, launch };
-  // Otherwise shadow the forward gate (the Open-Network gate nearest a contestable Orbit
+  // Otherwise shadow the forward gate (the Open-Network gate nearest a contestable
   // dropsite) so the chain is intact when it parks. Stay ~12" off it (well inside 18").
   let fwd = null, fbest = Infinity;
   for (const g of Object.values(state.groups)) {
@@ -375,7 +396,13 @@ export function generateActivationOptions(state, aiSide) {
 
   const groups = Object.entries(state.groups)
     .filter(([, grp]) => grp.def?.side === aiSide && !grp.activated && grp.ships.some(s => !s.destroyed && !s.offTable))
-    .sort(([, a], [, b]) => (TONNAGE_ORDER[a.def?.tonnage] ?? 4) - (TONNAGE_ORDER[b.def?.tonnage] ?? 4));
+    .sort(([, a], [, b]) => {
+      // Voidgates (gateships) activate first each round so they can park within 3" of a
+      // dropsite before their connected Mothership channels a drop the same round.
+      const va = defIsVoidgate(a.def) ? 0 : 1, vb = defIsVoidgate(b.def) ? 0 : 1;
+      if (va !== vb) return va - vb;
+      return (TONNAGE_ORDER[a.def?.tonnage] ?? 4) - (TONNAGE_ORDER[b.def?.tonnage] ?? 4);
+    });
 
   // Reserve groups (all ships still off-table) can't receive orders — skip them here.
   // buildActivation handles them via the allOffTable fast-finish path.
@@ -395,9 +422,36 @@ export function generateActivationOptions(state, aiSide) {
     const gateMother = defIsGateMother(grp.def);
     const dropPlan = dropper ? dropLaunchPlan(state, grp, grp.ships[si], aiSide)
                    : gateMother ? gateLaunchPlan(state, grp, grp.ships[si], aiSide) : null;
-    const orderList = (dropper || gateMother)
+    let orderList = (dropper || gateMother)
       ? [...validOrders].sort((a, b) => (NO_LAUNCH_ORDERS.has(a) ? 1 : 0) - (NO_LAUNCH_ORDERS.has(b) ? 1 : 0))
       : validOrders;
+
+    // Course Change / Damage Control are HOLD/repair orders (½-Thrust max, min 0). When the
+    // group still needs to travel to its objective or an enemy, drop them so it actually
+    // advances on GQ/MT/WF/SR instead of creeping; keep them once it's on station (so CC can
+    // hold position and bring a weapon to bear). Gates/Motherships are driven by their
+    // scripted runner/channel plans, so leave their order list alone.
+    if (si >= 0 && !defIsVoidgate(grp.def) && !gateMother) {
+      const shipObj = grp.ships[si];
+      const half = 0.5 * (grp.def?.thrust || 8) * INCH;
+      const enemySide = aiSide === 'player1' ? 'player2' : 'player1';
+      let nearest = Infinity;
+      for (const ds of (state.scenarioData?.dropsites || [])) {
+        if (ds.destroyed || dropsiteController(ds) === aiSide) continue;
+        nearest = Math.min(nearest, dist2d(shipObj.x, shipObj.y, ds.x * INCH, ds.y * INCH));
+      }
+      for (const g of Object.values(state.groups)) {
+        if (g.def?.side !== enemySide) continue;
+        for (const es of g.ships) {
+          if (es.destroyed || es.offTable) continue;
+          nearest = Math.min(nearest, dist2d(shipObj.x, shipObj.y, es.x, es.y));
+        }
+      }
+      if (nearest > half) {
+        const adv = orderList.filter(o => o !== 'CC' && o !== 'DC');
+        if (adv.length) orderList = adv;
+      }
+    }
 
     for (const order of orderList.slice(0, 2)) { // cap to 2 orders per group
       if (options.length >= 8) break;

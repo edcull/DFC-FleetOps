@@ -23,7 +23,11 @@ function sideBattalions(ds, side) {
   return Object.values(b).reduce((sum, loc) => sum + (loc[side] || 0), 0);
 }
 
-export function evaluate(state, side) {
+// `weights` (optional) is a personality weight set { kill, vp, survival, objective, momentum }.
+// When supplied, the heuristic terms are re-blended around it so personalities actually play
+// differently (Defensive leans on survival, Aggressive on damage, etc.). When omitted, the
+// original fixed objective-first blend is used.
+export function evaluate(state, side, weights = null) {
   const opp = OPP[side];
 
   // ── Hull: damage dealt to the opponent + own survival ───────────────────────
@@ -100,13 +104,28 @@ export function evaluate(state, side) {
     hunt = nCombat > 0 ? close / nCombat : 0.5;
   }
 
-  // Weights: dropsite objective dominates (control + battalions + approach), then
+  // Default blend: dropsite objective dominates (control + battalions + approach), then
   // combat (damage + survival + hunting enemy droppers), then realised VP.
-  return 0.28 * ctrlScore
-       + 0.18 * bnScore
-       + 0.12 * dropApproach
-       + 0.13 * hullScore
-       + 0.10 * survScore
-       + 0.09 * hunt
-       + 0.10 * vpScore;
+  if (!weights) {
+    return 0.28 * ctrlScore
+         + 0.18 * bnScore
+         + 0.12 * dropApproach
+         + 0.13 * hullScore
+         + 0.10 * survScore
+         + 0.09 * hunt
+         + 0.10 * vpScore;
+  }
+
+  // Personality-weighted blend. Group the seven signals into the four personality levers
+  // (objective / kill / survival / vp), then weight each lever. Each term is in [0,1] and
+  // weights are positive, so the normalised result stays in [0,1].
+  const wObj  = weights.objective ?? 1.5;
+  const wKill = weights.kill ?? 1.2;
+  const wSurv = weights.survival ?? 1.2;
+  const wVp   = weights.vp ?? 1.5;
+  const objTerm  = 0.50 * ctrlScore + 0.32 * bnScore + 0.18 * dropApproach;
+  const killTerm = 0.60 * hullScore + 0.40 * hunt;
+  const num = wObj * objTerm + wKill * killTerm + wSurv * survScore + wVp * vpScore;
+  const den = wObj + wKill + wSurv + wVp || 1;
+  return num / den;
 }
