@@ -260,6 +260,27 @@ describe('AI — Mass Driver Volley usage', () => {
   });
 });
 
+describe('buildActivation — in-network Voidgate movement', () => {
+  // A Voidgate established in the open network (deployed a prior round) reads its PER-SHIP order,
+  // not the group order. The AI must set ship.order via applyShipOrder or the gate's move cone is
+  // zero and it freezes in place. Regression for "none of the Voidgates moved" after round 1.
+  it('an in-network gate actually moves toward its objective on GQ', () => {
+    const s = makeState();
+    s.round = 2;                 // deployedRound(1) < round(2) → in network
+    s.activeSide = 'player1';
+    s.scenarioData = { dropsites: [{ id: 'ds1', type: 'small_station', base: { layer: 'Orbit' }, x: 24, y: 40, destroyed: false, battalions: { ground: { player1: 0, player2: 0 } } }] };
+    const def = shipDef({ id: 'player1:vg', side: 'player1', name: 'Voidgate', tonnage: 'L',
+                          thrust: 12, openNetwork: true, gateship: 2, weapons: [] });
+    addGroup(s, def, [Object.assign(shipInstance({ x: 288, y: 144, heading: 90 }), { deployedRound: 1 })]);
+    const ap = (i) => { if (!isLegal(s, i, 'player1')) return false; apply(s, i, fixedRng(2)); return true; };
+    const y0 = s.groups['player1:vg'].ships[0].y;
+    buildActivation(s, fixedRng(2), 'player1:vg', 'GQ', null, 'player1', ap, null);
+    const sh = s.groups['player1:vg'].ships[0];
+    expect(sh.order).toBe('GQ');                 // per-ship order was set
+    expect(Math.abs(sh.y - y0)).toBeGreaterThan(5 * 12); // moved a real distance (not frozen)
+  });
+});
+
 describe('evaluate — personality weighting', () => {
   // State where we wiped half the opponent while staying at full hull.
   function killState() {
