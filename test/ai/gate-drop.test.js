@@ -146,9 +146,9 @@ describe('buildActivation — formation discipline', () => {
 describe('generateActivationOptions — order variety', () => {
   const offered = (s) => [...new Set(generateActivationOptions(s, 'player1').filter(o => o.groupId).map(o => o.order))];
 
-  it('offers Weapons Free when a target is in range', () => {
+  it('offers Weapons Free when 2+ weapons are in range (it fires more than GQ)', () => {
     const s = makeState(); s.activeSide = 'player1'; s.scenarioData = { dropsites: [] };
-    addGroup(s, shipDef({ id: 'player1:a', side: 'player1', scan: 10, weapons: [weapon({ arc: 'F', att: 4, lock: '4+' })] }),
+    addGroup(s, shipDef({ id: 'player1:a', side: 'player1', scan: 10, weapons: [weapon({ arc: 'F', att: 4, lock: '4+' }), weapon({ arc: 'F', att: 2, lock: '4+' })] }),
              [shipInstance({ x: 200, y: 200, heading: 0 })]);
     addGroup(s, shipDef({ id: 'player2:b', side: 'player2' }), [shipInstance({ x: 260, y: 200, heading: 180 })]);
     expect(offered(s)).toContain('WF');
@@ -330,13 +330,28 @@ describe('UCM tactical rules — droppers, Max Thrust, corvettes', () => {
     expect(ordersOf(open)).toContain('MT');
   });
 
-  it('uses Weapons Free when a primary target (drop carrier / important ship) is in arc and range', () => {
+  function combatVsCarrier(weapons) {
     const s = makeState(); s.activeSide = 'player1'; s.scenario = { objective: 'standard' }; s.scenarioData = { dropsites: [] };
-    addGroup(s, shipDef({ id: 'player1:a', side: 'player1', scan: 12, weapons: [weapon({ arc: 'F', att: 4, lock: '3+' })] }), [shipInstance({ x: 200, y: 200, heading: 0 })]);
+    addGroup(s, shipDef({ id: 'player1:a', side: 'player1', scan: 12, weapons }), [shipInstance({ x: 200, y: 200, heading: 0 })]);
     addGroup(s, shipDef({ id: 'player2:carrier', side: 'player2', name: 'Troopship', pts: 100, launch: [{ type: 'bulk_lander', n: 4 }] }),
       [Object.assign(shipInstance({ x: 250, y: 200 }), { maxHull: 10, hull: 10 })]);
-    const opts = generateActivationOptions(s, 'player1').filter(o => o.groupId);
-    expect(opts[0].order).toBe('WF'); // top-ranked order for a primary target in range
+    return s;
+  }
+
+  it('uses Weapons Free on a primary target when 2+ weapons are in range', () => {
+    const s = combatVsCarrier([weapon({ arc: 'F', att: 4, lock: '3+' }), weapon({ arc: 'F', att: 2, lock: '4+' })]);
+    expect(generateActivationOptions(s, 'player1').filter(o => o.groupId)[0].order).toBe('WF');
+  });
+
+  it('uses Weapons Free with a single Fusillade weapon (bonus dice only on WF)', () => {
+    const s = combatVsCarrier([weapon({ arc: 'F', att: 4, lock: '3+', special: 'Fusillade-2' })]);
+    expect(generateActivationOptions(s, 'player1').filter(o => o.groupId)[0].order).toBe('WF');
+  });
+
+  it('does NOT use Weapons Free with only one non-Fusillade weapon (no benefit, just Spike)', () => {
+    const s = combatVsCarrier([weapon({ arc: 'F', att: 4, lock: '3+' })]);
+    const orders = [...new Set(generateActivationOptions(s, 'player1').filter(o => o.groupId).map(o => o.order))];
+    expect(orders).not.toContain('WF');
   });
 
   it('a dropper with an enemy in range still drops (GQ) rather than alpha-striking', () => {

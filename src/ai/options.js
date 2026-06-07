@@ -526,12 +526,20 @@ export function generateActivationOptions(state, aiSide) {
     // right order surfaces: WF to unload all weapons when targets are in range, MT to sprint to
     // a distant objective, DC to repair a damaged ship that can't shoot. (Course Change is kept
     // low — buildActivation injects it for formation/hold/gate parking where it's actually needed.)
-    let hasTargets = false;
+    // Count weapon systems that can actually hit something, and whether any is a Fusillade weapon
+    // (which only gains its bonus Attack dice on Weapons Free). WF is only worth its +2 Spike when
+    // it fires MORE than GQ's half — i.e. 2+ systems in arc/range, or a Fusillade weapon in range.
+    let weaponsInRange = 0, fusilladeInRange = false;
     if (si >= 0 && grp.def?.weapons) {
       for (let wi = 0; wi < grp.def.weapons.length; wi++) {
-        if (findBestTarget(state, gid, si, wi, aiSide)) { hasTargets = true; break; }
+        if (findBestTarget(state, gid, si, wi, aiSide)) {
+          weaponsInRange++;
+          if (/Fusillade/i.test(grp.def.weapons[wi].special || '')) fusilladeInRange = true;
+        }
       }
     }
+    const hasTargets = weaponsInRange > 0;
+    const wfBeneficial = weaponsInRange >= 2 || fusilladeInRange;
     const damaged = grp.ships.some(s => !s.destroyed && !s.offTable && s.hull < (s.maxHull ?? s.hull));
     let nearest = Infinity, nearestEnemy = Infinity;
     if (si >= 0) {
@@ -565,7 +573,10 @@ export function generateActivationOptions(state, aiSide) {
     for (const o of validOrders) {
       let r = 0;
       if (o === 'GQ') r = 3;                                              // versatile default
-      else if (o === 'WF') r = primaryInRange ? 6 : (hasTargets && !farAdvance ? 4 : 1); // unload on a primary target
+      // Weapons Free only when it actually fires more than GQ (2+ systems in range, or Fusillade);
+      // otherwise it just adds Spike for no extra shots. When beneficial, a primary target makes it
+      // dominant.
+      else if (o === 'WF') r = !wfBeneficial ? 0.1 : (primaryInRange ? 6 : (hasTargets && !farAdvance ? 4 : 1));
       else if (o === 'MT') r = mtSafe ? 2.5 : 0.1;                        // sprint only across open space
       else if (o === 'DC') r = (damaged && !hasTargets) ? 3.5 : 0.2;      // repair when it can't fight
       else if (o === 'SR') r = 1.2;                                       // shed spikes / sneak
