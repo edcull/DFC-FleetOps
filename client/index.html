@@ -7533,6 +7533,10 @@ function renderScoringModal() {
   let hud = document.getElementById('scoring-overlay');
   if (hud) hud.remove();
 
+  // During a replay, auto-close the End-Phase scoring overlay — it interrupts playback
+  // and there's no live player to dismiss it (the score stays visible in the topbar).
+  if (_replayMode) return;
+
   // Standard scoring modal (R4/R6): use state.scoringModal.
   const M = state.scoringModal;
   // General round scoring: use _lastScoreLog if not yet seen.
