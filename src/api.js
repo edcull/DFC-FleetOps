@@ -29,6 +29,33 @@ const _AI_PERSONALITIES = ['aggressive', 'positional', 'defensive', 'balanced', 
 function _pick(arr) { return arr[Math.floor(Math.random() * arr.length)]; }
 function _pickN(arr, n) { return [...arr].sort(() => Math.random() - 0.5).slice(0, n); }
 
+// Build one AI-vs-AI side's fleet from its setup config, mirroring the single-player /build-ai
+// modes: 'fastplay' (a stock list for a faction), 'generate' (auto-build to a point total), or
+// 'import' (parse a pasted NewRecruit list). Returns { fleet, faction } — falls back to a random
+// generated fleet if a faction/list is missing or an import fails to parse.
+function _buildAiVsAiSide(cfg = {}) {
+  const mode = cfg.mode || 'generate';
+  const personality = cfg.personality;
+  if (mode === 'fastplay') {
+    const faction = (cfg.faction && cfg.faction !== 'random' && FLEET_DB[cfg.faction]) ? cfg.faction : _pick(_AI_FACTIONS);
+    const fleet = buildAiFleet(faction); // legacy string call → stock fastplay list
+    if (fleet) return { fleet, faction };
+  } else if (mode === 'import') {
+    const parsed = cfg.importText ? parseNewRecruit(cfg.importText) : null;
+    if (parsed?.valid && parsed.groups?.length) {
+      return { fleet: { faction: parsed.faction, groups: parsed.groups, admirals: parsed.admirals || [],
+                        admiralLevel: parsed.admiralLevel || 0, secondaries: parsed.secondaries || [], tactics: [] },
+               faction: parsed.faction };
+    }
+    // parse failed → fall through to a generated fleet so the game still starts
+  }
+  // generate (default / fallback)
+  const faction = (cfg.faction && cfg.faction !== 'random' && FLEET_DB[cfg.faction]) ? cfg.faction : _pick(_AI_FACTIONS);
+  const fleet = buildAiFleet({ faction, targetPts: cfg.targetPts || 1000, admiralLevel: 0, personality });
+  return { fleet, faction };
+}
+
+
 // True when all activations are done and no end-of-round state is pending.
 function _needsRoundEnd(state) {
   if (state.phase !== 'play' || state.gameOver) return false;
@@ -148,10 +175,15 @@ router.post('/rooms', (req, res) => {
     // screen); anything left unset/invalid is rolled randomly.
     const LABELS = { aggressive:'Aggressive', positional:'Positional', defensive:'Defensive', balanced:'Balanced', opportunist:'Opportunist' };
     const useOr = (v, pool) => (v && pool.includes(v)) ? v : _pick(pool);
-    const persP1 = useOr(req.body.p1Personality || aiPersonality, _AI_PERSONALITIES);
-    const persP2 = useOr(req.body.p2Personality || aiPersonality, _AI_PERSONALITIES);
-    const factionP1 = useOr(req.body.p1Faction, _AI_FACTIONS);
-    const factionP2 = useOr(req.body.p2Faction, _AI_FACTIONS);
+    // Per-side setup config from the AI-vs-AI setup screen (mode/faction/points/import/secondaries/
+    // personality). Back-compat: also accept the older flat p1Faction/p2Personality fields.
+    const cfg1 = req.body.p1 || {};
+    const cfg2 = req.body.p2 || {};
+    const persP1 = useOr(cfg1.personality || req.body.p1Personality || aiPersonality, _AI_PERSONALITIES);
+    const persP2 = useOr(cfg2.personality || req.body.p2Personality || aiPersonality, _AI_PERSONALITIES);
+    const r1 = _buildAiVsAiSide({ ...cfg1, faction: cfg1.faction ?? req.body.p1Faction, personality: persP1 });
+    const r2 = _buildAiVsAiSide({ ...cfg2, faction: cfg2.faction ?? req.body.p2Faction, personality: persP2 });
+    const factionP1 = r1.faction, factionP2 = r2.faction;
     room.aiSide        = 'both';
     room.aiPersonality = persP1; // legacy single-value field (player1's)
     room.aiPersonalities = { player1: persP1, player2: persP2 };
@@ -162,8 +194,12 @@ router.post('/rooms', (req, res) => {
     room.state.aiPersonalities = { player1: persP1, player2: persP2 };
     room.state.fleetChoices.f1 = factionP1;
     room.state.fleetChoices.f2 = factionP2;
-    room.state.secondaryChoice.f1 = _pickN(_AI_SECONDARIES, 2);
-    room.state.secondaryChoice.f2 = _pickN(_AI_SECONDARIES, 2);
+    // Secondaries: explicit picks > the fleet's own (e.g. from an imported list) > random.
+    const sideSecs = (cfg, fleet) => (Array.isArray(cfg.secondaries) && cfg.secondaries.length)
+      ? cfg.secondaries.slice(0, 2)
+      : (fleet?.secondaries?.length ? fleet.secondaries.slice(0, 2) : _pickN(_AI_SECONDARIES, 2));
+    room.state.secondaryChoice.f1 = sideSecs(cfg1, r1.fleet);
+    room.state.secondaryChoice.f2 = sideSecs(cfg2, r2.fleet);
     room.state.playerNames = { f1: `AI-Red (${LABELS[persP1] || 'Balanced'})`, f2: `AI-Blue (${LABELS[persP2] || 'Balanced'})` };
     room.state.scenario = {
       layout:     _pick(_AI_LAYOUTS),
@@ -172,10 +208,8 @@ router.post('/rooms', (req, res) => {
       objective:  useOr(req.body.objective, _AI_OBJECTIVES),
       variant:    'none',
     };
-    for (const [slot, faction, persona] of [['f1', factionP1, persP1], ['f2', factionP2, persP2]]) {
-      const fleet = buildAiFleet({ faction, targetPts: 1000, admiralLevel: 0, personality: persona });
-      if (fleet) room.state.importedFleets[slot] = fleet;
-    }
+    if (r1.fleet) room.state.importedFleets.f1 = r1.fleet;
+    if (r2.fleet) room.state.importedFleets.f2 = r2.fleet;
     apply(room.state, { type: 'readySetup', side: 'player1' }, room.rng);
     apply(room.state, { type: 'readySetup', side: 'player2' }, room.rng);
     console.log(`Room ${room.id} — AI vs AI (${factionP1}/${persP1} vs ${factionP2}/${persP2}, ${room.state.scenario.layout})`);
