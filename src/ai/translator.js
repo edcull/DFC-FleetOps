@@ -268,6 +268,9 @@ export function buildActivation(state, rng, gid, order, movePlan, aiSide, applyF
       if (plan.launch) launchPlan = plan.launch;
     }
   }
+  // (Normal bulk-lander/dropship droppers are intentionally NOT forced onto Course Change:
+  // their 6" launch range reaches dropsites from Orbit without the gate's tight 3"/same-layer
+  // constraint, so they already drop reliably; forcing CC's ½-Thrust cap only slows them.)
 
 // By the time buildActivation is called, the ship should be on-table (arrived).
   if (!applyFn({ type: 'applyOrder', gid, order })) return;

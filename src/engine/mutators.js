@@ -3058,6 +3058,7 @@ export function passActivation(state) {
   if (!P || !state.activeSide || !(P.passTokens[state.activeSide] > 0)) return state;
   const passer = state.activeSide;
   P.passTokens[passer]--;
+  logEvent(state, `${factionName(state, passer)} passed (token spent)`, 'misc');
   const other = passer === 'player1' ? 'player2' : 'player1';
   if (sideHasPendingActivation(state, other)) state.activeSide = other;
   else if (!sideHasPendingActivation(state, passer)) state.activeSide = null;
@@ -3471,7 +3472,7 @@ export function commitMove(state, rng, gid, si, tx, ty, layerToggle) {
     });
     if (destroyedByObj) {
       ship.destroyed = true;
-      logEvent(state, `${def.name} destroyed — flew into a Large Object`);
+      logEvent(state, `${def.name} destroyed — flew into a Large Object`, 'attack');
       if (isCapital(def)) { const ex = makeExplosionRoll(gid, si, def, ship); applyExplosionEffect(state, rng, ex, { explodeQueue: [] }); }
       return state;
     }
