@@ -415,27 +415,30 @@ export function generateActivationOptions(state, aiSide) {
     const moveCandidates = candidateTargets(state, gid, aiSide);
     const si = grp.ships.findIndex(s => !s.destroyed && !s.offTable);
 
-    // Drop-capable groups: plan to land battalions at the nearest reachable dropsite,
-    // and try launch-permitting orders first so that option actually gets generated.
+    // Drop-capable groups: plan to land battalions at the nearest reachable dropsite.
     // Shaltari Motherships drop via the Voidgate network instead of approaching a dropsite.
     const dropper  = defIsDropper(grp.def);
     const gateMother = defIsGateMother(grp.def);
     const dropPlan = dropper ? dropLaunchPlan(state, grp, grp.ships[si], aiSide)
                    : gateMother ? gateLaunchPlan(state, grp, grp.ships[si], aiSide) : null;
-    let orderList = (dropper || gateMother)
-      ? [...validOrders].sort((a, b) => (NO_LAUNCH_ORDERS.has(a) ? 1 : 0) - (NO_LAUNCH_ORDERS.has(b) ? 1 : 0))
-      : validOrders;
 
-    // Course Change / Damage Control are HOLD/repair orders (½-Thrust max, min 0). When the
-    // group still needs to travel to its objective or an enemy, drop them so it actually
-    // advances on GQ/MT/WF/SR instead of creeping; keep them once it's on station (so CC can
-    // hold position and bring a weapon to bear). Gates/Motherships are driven by their
-    // scripted runner/channel plans, so leave their order list alone.
-    if (si >= 0 && !defIsVoidgate(grp.def) && !gateMother) {
+    // ── Context-aware order ranking ──────────────────────────────────────────
+    // The old code took the first two legal ORDERS keys, which is always [GQ, SR] — so the AI
+    // never used Weapons Free, Max Thrust or Damage Control. Rank by situation instead so the
+    // right order surfaces: WF to unload all weapons when targets are in range, MT to sprint to
+    // a distant objective, DC to repair a damaged ship that can't shoot. (Course Change is kept
+    // low — buildActivation injects it for formation/hold/gate parking where it's actually needed.)
+    let hasTargets = false;
+    if (si >= 0 && grp.def?.weapons) {
+      for (let wi = 0; wi < grp.def.weapons.length; wi++) {
+        if (findBestTarget(state, gid, si, wi, aiSide)) { hasTargets = true; break; }
+      }
+    }
+    const damaged = grp.ships.some(s => !s.destroyed && !s.offTable && s.hull < (s.maxHull ?? s.hull));
+    let nearest = Infinity;
+    if (si >= 0) {
       const shipObj = grp.ships[si];
-      const half = 0.5 * (grp.def?.thrust || 8) * INCH;
       const enemySide = aiSide === 'player1' ? 'player2' : 'player1';
-      let nearest = Infinity;
       for (const ds of (state.scenarioData?.dropsites || [])) {
         if (ds.destroyed || dropsiteController(ds) === aiSide) continue;
         nearest = Math.min(nearest, dist2d(shipObj.x, shipObj.y, ds.x * INCH, ds.y * INCH));
@@ -447,11 +450,24 @@ export function generateActivationOptions(state, aiSide) {
           nearest = Math.min(nearest, dist2d(shipObj.x, shipObj.y, es.x, es.y));
         }
       }
-      if (nearest > half) {
-        const adv = orderList.filter(o => o !== 'CC' && o !== 'DC');
-        if (adv.length) orderList = adv;
-      }
     }
+    const fullThrustPx = (grp.def?.thrust || 8) * INCH;
+    const farAdvance = nearest > fullThrustPx; // more than one full move from anything worth reaching
+
+    const rank = {};
+    for (const o of validOrders) {
+      let r = 0;
+      if (o === 'GQ') r = 3;                                              // versatile default
+      else if (o === 'WF') r = hasTargets && !farAdvance ? 4 : 1;         // alpha strike when in range
+      else if (o === 'MT') r = (farAdvance && !hasTargets) ? 3.5 : 0.3;   // sprint when nothing to shoot
+      else if (o === 'DC') r = (damaged && !hasTargets) ? 3.5 : 0.2;      // repair when it can't fight
+      else if (o === 'SR') r = 1.2;                                       // shed spikes / sneak
+      else if (o === 'CC') r = 0.5;                                       // hold/aim (mostly via override)
+      // Droppers must keep an order that can launch (MT/DC can't), so demote those for them.
+      if ((dropper || gateMother) && NO_LAUNCH_ORDERS.has(o)) r -= 5;
+      rank[o] = r;
+    }
+    const orderList = [...validOrders].sort((a, b) => rank[b] - rank[a]);
 
     for (const order of orderList.slice(0, 2)) { // cap to 2 orders per group
       if (options.length >= 8) break;

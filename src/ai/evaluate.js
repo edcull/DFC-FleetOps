@@ -104,6 +104,11 @@ export function evaluate(state, side, weights = null) {
     hunt = nCombat > 0 ? close / nCombat : 0.5;
   }
 
+  // ── Secondary objectives: a small nudge so the AI actually steers toward the ones it
+  //    nominated (control/destroy a dropsite, kill the admiral, survey). Kept light (additive,
+  //    ≤0.06) so it breaks ties toward secondary progress without overriding the primary game. ──
+  const secScore = secondaryProgress(state, side, opp, dropsites);
+
   // Default blend: dropsite objective dominates (control + battalions + approach), then
   // combat (damage + survival + hunting enemy droppers), then realised VP.
   if (!weights) {
@@ -113,7 +118,8 @@ export function evaluate(state, side, weights = null) {
          + 0.13 * hullScore
          + 0.10 * survScore
          + 0.09 * hunt
-         + 0.10 * vpScore;
+         + 0.10 * vpScore
+         + 0.06 * secScore;
   }
 
   // Personality-weighted blend. Group the seven signals into the four personality levers
@@ -127,5 +133,49 @@ export function evaluate(state, side, weights = null) {
   const killTerm = 0.60 * hullScore + 0.40 * hunt;
   const num = wObj * objTerm + wKill * killTerm + wSurv * survScore + wVp * vpScore;
   const den = wObj + wKill + wSurv + wVp || 1;
-  return num / den;
+  return num / den + 0.06 * secScore;
+}
+
+// Progress [0,1] toward `side`'s nominated Secondary Objectives (averaged over them):
+//  key_site → control the nominated dropsite (partial credit for closing on it);
+//  priority_target → damage/level the nominated dropsite;
+//  decapitate → enemy admiral killed; gather_intel → dropsites surveyed (max 2).
+function secondaryProgress(state, side, opp, liveDropsites) {
+  const secs = state.secondaries?.[side] || [];
+  if (!secs.length) return 0;
+  const noms = state.secondaryNominations?.[side] || {};
+  const allDs = state.scenarioData?.dropsites || [];
+  let sum = 0, n = 0;
+  for (const key of secs) {
+    if (key === 'key_site') {
+      n++;
+      const ds = allDs.find(d => d.id === noms.key_site?.dsId);
+      if (!ds) continue;
+      if (dropsiteController(ds) === side) { sum += 1; continue; }
+      // partial: nearest friendly ship closing on it
+      let best = Infinity;
+      for (const grp of Object.values(state.groups || {})) {
+        if (grp.def?.side !== side) continue;
+        for (const sh of grp.ships) {
+          if (sh.destroyed || sh.offTable) continue;
+          best = Math.min(best, Math.hypot(sh.x - ds.x * INCH, sh.y - ds.y * INCH));
+        }
+      }
+      if (best !== Infinity) sum += 0.4 * Math.max(0, 1 - best / BOARD_PX);
+    } else if (key === 'priority_target') {
+      n++;
+      const ds = allDs.find(d => d.id === noms.priority_target?.dsId);
+      if (!ds) continue;
+      sum += ds.destroyed ? 1 : Math.min(1, (ds.damage || 0) / (ds.maxHull || 1));
+    } else if (key === 'decapitate') {
+      n++;
+      if (state.admiralKilled?.[opp]) sum += 1;
+    } else if (key === 'gather_intel') {
+      n++;
+      let surveyed = 0;
+      for (const ds of liveDropsites) if (ds.surveyed?.[side]) surveyed++;
+      sum += Math.min(1, surveyed / 2);
+    }
+  }
+  return n ? sum / n : 0;
 }

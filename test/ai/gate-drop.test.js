@@ -1,9 +1,10 @@
 import { describe, it, expect } from 'vitest';
-import { gateRunnerPlan, gateMotherPlan } from '../../src/ai/options.js';
+import { gateRunnerPlan, gateMotherPlan, generateActivationOptions } from '../../src/ai/options.js';
+import { handlePreGame } from '../../src/ai/handlers/pregame.js';
 import { buildActivation } from '../../src/ai/translator.js';
 import { evaluate } from '../../src/ai/evaluate.js';
 import { PERSONALITIES } from '../../src/ai/personalities.js';
-import { makeState, shipDef, shipInstance, addGroup, fixedRng } from '../engine/helpers.js';
+import { makeState, shipDef, shipInstance, addGroup, fixedRng, weapon } from '../engine/helpers.js';
 import { isLegal } from '../../src/engine/gating.js';
 import { apply } from '../../src/engine/mutators.js';
 import { INCH } from '../../src/engine/constants.js';
@@ -139,6 +140,89 @@ describe('buildActivation — formation discipline', () => {
     buildActivation(s, fixedRng(3), 'player1:fr', 'GQ', { x: 212, y: 100, reason: 'vp' }, 'player1', applier(s, fixedRng(3)));
     expect(grp.order).toBe('GQ');                       // not overridden — advancing
     expect(grp.ships[0].y).toBeLessThan(y0 - 5 * INCH); // actually moved a long way
+  });
+});
+
+describe('generateActivationOptions — order variety', () => {
+  const offered = (s) => [...new Set(generateActivationOptions(s, 'player1').filter(o => o.groupId).map(o => o.order))];
+
+  it('offers Weapons Free when a target is in range', () => {
+    const s = makeState(); s.activeSide = 'player1'; s.scenarioData = { dropsites: [] };
+    addGroup(s, shipDef({ id: 'player1:a', side: 'player1', scan: 10, weapons: [weapon({ arc: 'F', att: 4, lock: '4+' })] }),
+             [shipInstance({ x: 200, y: 200, heading: 0 })]);
+    addGroup(s, shipDef({ id: 'player2:b', side: 'player2' }), [shipInstance({ x: 260, y: 200, heading: 180 })]);
+    expect(offered(s)).toContain('WF');
+  });
+
+  it('offers Damage Control for a damaged group with nothing to shoot', () => {
+    const s = makeState(); s.activeSide = 'player1'; s.scenarioData = { dropsites: [] };
+    addGroup(s, shipDef({ id: 'player1:a', side: 'player1', hull: 6, weapons: [weapon({ arc: 'F' })] }),
+             [Object.assign(shipInstance({ x: 200, y: 200, heading: 0 }), { maxHull: 6, hull: 2 })]);
+    addGroup(s, shipDef({ id: 'player2:b', side: 'player2' }), [shipInstance({ x: 500, y: 500 })]);
+    expect(offered(s)).toContain('DC');
+  });
+
+  it('offers Max Thrust to sprint toward a distant objective with no targets', () => {
+    const s = makeState(); s.activeSide = 'player1';
+    s.scenarioData = { dropsites: [{ id: 'ds1', base: {}, x: 46, y: 46, destroyed: false, battalions: {} }] };
+    addGroup(s, shipDef({ id: 'player1:a', side: 'player1', thrust: 8, weapons: [weapon({ arc: 'F' })] }),
+             [shipInstance({ x: 50, y: 50, heading: 0 })]);
+    addGroup(s, shipDef({ id: 'player2:b', side: 'player2' }), [shipInstance({ x: 560, y: 560 })]);
+    expect(offered(s)).toContain('MT');
+  });
+});
+
+describe('handlePreGame — secondary nomination', () => {
+  function nomState() {
+    const s = makeState();
+    s.phase = 'nominations';
+    s.deployZone = { player1: 'south', player2: 'north' };
+    s.secondaries = { player1: ['key_site', 'priority_target'], player2: [] };
+    s.secondaryNominations = { player1: {}, player2: {} };
+    s.nominationsReady = { player1: false, player2: false };
+    s.scenarioData = { dropsites: [
+      { id: 'dsA', type: 'large_station', base: { name: 'Alpha', size: 'large' }, x: 24, y: 6,  destroyed: false, battalions: {} },
+      { id: 'dsB', type: 'large_station', base: { name: 'Bravo', size: 'large' }, x: 24, y: 22, destroyed: false, battalions: {} },
+    ] };
+    return s;
+  }
+  const ap = (s) => (i) => {
+    if (i.type === 'setNomination') (s.secondaryNominations[i.side] ||= {})[i.key] = i.nom;
+    if (i.type === 'confirmNominations') s.nominationsReady[i.side] = true;
+    return true;
+  };
+
+  it('nominates DIFFERENT dropsites for key_site and priority_target (no double-booking)', () => {
+    const s = nomState();
+    handlePreGame(s, () => 0.5, 'player1', ap(s));
+    const noms = s.secondaryNominations.player1;
+    expect(noms.key_site.dsId).not.toBe(noms.priority_target.dsId);
+    expect(s.nominationsReady.player1).toBe(true);
+  });
+
+  it('picks the more holdable site (nearer our own zone) for key_site', () => {
+    const s = nomState();
+    handlePreGame(s, () => 0.5, 'player1', ap(s));
+    // player1 deploys south; dsB (y=22) is nearer our zone than dsA (y=6) → better to hold.
+    expect(s.secondaryNominations.player1.key_site.dsId).toBe('dsB');
+  });
+});
+
+describe('evaluate — secondary objective nudge', () => {
+  it('scores higher when the nominated key_site is controlled', () => {
+    function base() {
+      const s = makeState();
+      s.secondaries = { player1: ['key_site'], player2: [] };
+      s.secondaryNominations = { player1: { key_site: { dsId: 'ds1' } }, player2: {} };
+      s.scenarioData = { dropsites: [{ id: 'ds1', x: 24, y: 24, base: {}, destroyed: false, battalions: { ground: { player1: 0, player2: 0 } } }] };
+      addGroup(s, shipDef({ id: 'player1:a', side: 'player1' }), [Object.assign(shipInstance({ x: 100, y: 100 }), { maxHull: 6, hull: 6 })]);
+      addGroup(s, shipDef({ id: 'player2:b', side: 'player2' }), [Object.assign(shipInstance({ x: 500, y: 500 }), { maxHull: 6, hull: 6 })]);
+      return s;
+    }
+    const uncontrolled = base();
+    const controlled = base();
+    controlled.scenarioData.dropsites[0].battalions.ground.player1 = 4; // player1 now controls ds1
+    expect(evaluate(controlled, 'player1')).toBeGreaterThan(evaluate(uncontrolled, 'player1'));
   });
 });
 
