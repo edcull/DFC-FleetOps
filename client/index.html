@@ -17688,12 +17688,16 @@ async function showModeSelector() {
       if (aiTestBtn) aiTestBtn.onclick = async () => {
         aiTestBtn.disabled = true;
         aiTestBtn.innerHTML = '🤖 AI vs AI<div style="font-size:10px;font-weight:400;color:var(--text-mute);margin-top:3px;">Generating fleets…</div>';
+        // Show the full-screen loading spinner immediately so the user gets instant feedback
+        // while the room is created (and bridges the page reload into the spectator view).
+        _showSpectatorLoading(true);
         try {
           const r = await fetch('/api/rooms', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ aiVsAi: true }) });
           const d = await r.json();
           if (d.roomId) { location.href = `${location.pathname}?room=${d.roomId}&side=spectator&ai=1`; return; }
           throw new Error('no room');
         } catch {
+          _hideSpectatorLoading();
           aiTestBtn.disabled = false;
           aiTestBtn.innerHTML = '🤖 AI vs AI<div style="font-size:10px;font-weight:400;color:var(--hull-crit);margin-top:3px;">Failed — try again</div>';
         }
