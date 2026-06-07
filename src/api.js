@@ -142,15 +142,16 @@ router.post('/rooms', (req, res) => {
   const { aiOpponent, aiVsAi, aiSide, aiPersonality, aiFaction, aiSecondaries, aiUseLlm } = req.body || {};
 
   if (aiVsAi) {
-    // Two random 1000pt AI fleets battle each other; spectators watch. Uses the
-    // fallback (non-LLM) AI by leaving aiUseLlm unset, so both sides don't hit the LLM.
+    // Two 1000pt AI fleets battle each other; spectators watch. Uses the fallback (non-LLM)
+    // AI by leaving aiUseLlm unset, so both sides don't hit the LLM. Each side's faction,
+    // personality, and the scoring objective can be set in the request (the AI-vs-AI setup
+    // screen); anything left unset/invalid is rolled randomly.
     const LABELS = { aggressive:'Aggressive', positional:'Positional', defensive:'Defensive', balanced:'Balanced', opportunist:'Opportunist' };
-    // Each side gets its own random personality (an explicit aiPersonality in the request,
-    // if given, pins both sides; otherwise each is rolled independently).
-    const persP1 = aiPersonality || _pick(_AI_PERSONALITIES);
-    const persP2 = aiPersonality || _pick(_AI_PERSONALITIES);
-    const factionP1 = _pick(_AI_FACTIONS);
-    const factionP2 = _pick(_AI_FACTIONS);
+    const useOr = (v, pool) => (v && pool.includes(v)) ? v : _pick(pool);
+    const persP1 = useOr(req.body.p1Personality || aiPersonality, _AI_PERSONALITIES);
+    const persP2 = useOr(req.body.p2Personality || aiPersonality, _AI_PERSONALITIES);
+    const factionP1 = useOr(req.body.p1Faction, _AI_FACTIONS);
+    const factionP2 = useOr(req.body.p2Faction, _AI_FACTIONS);
     room.aiSide        = 'both';
     room.aiPersonality = persP1; // legacy single-value field (player1's)
     room.aiPersonalities = { player1: persP1, player2: persP2 };
@@ -168,7 +169,7 @@ router.post('/rooms', (req, res) => {
       layout:     _pick(_AI_LAYOUTS),
       approach:   _pick(_AI_APPROACHES),
       deployment: _pick(_AI_DEPLOYMENTS), // give the game a real deployment zone
-      objective:  _pick(_AI_OBJECTIVES),
+      objective:  useOr(req.body.objective, _AI_OBJECTIVES),
       variant:    'none',
     };
     for (const [slot, faction, persona] of [['f1', factionP1, persP1], ['f2', factionP2, persP2]]) {

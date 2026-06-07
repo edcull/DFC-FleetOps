@@ -17493,7 +17493,7 @@ async function showModeSelector() {
           ${(currentUser?.aiAccess || currentUser?.role === 'admin') ? `
           <button class="btn" id="ms-ai-test" style="padding:14px 10px;font-size:13px;">
             🤖 AI vs AI
-            <div style="font-size:10px;font-weight:400;color:var(--text-mute);margin-top:3px;">Watch two random 1000pt AI fleets battle</div>
+            <div style="font-size:10px;font-weight:400;color:var(--text-mute);margin-top:3px;">Pick each AI's fleet & the objective, then watch</div>
           </button>` : ''}
           ${savesBtn}
         </div>
@@ -17639,6 +17639,43 @@ async function showModeSelector() {
           <button class="btn-primary" id="solo-start" style="padding:10px 20px;font-size:12px;">▶ SETUP GAME</button>
         </div>
       </div>`;
+    } else if (view === 'aivs') {
+      const _persOpts = (sel) => [
+        ['random','Random'], ['balanced','Balanced'], ['aggressive','Aggressive'],
+        ['positional','Positional'], ['defensive','Defensive'], ['opportunist','Opportunist'],
+      ].map(([k, n]) => `<option value="${k}" ${sel === k ? 'selected' : ''}>${n}</option>`).join('');
+      const _factionOpts = () => `<option value="random">Random</option>` +
+        Object.entries(FACTIONS).map(([k, v]) => `<option value="${k}">${v.name}</option>`).join('');
+      // Only the objectives the AI actually scores (match the server's AI pool).
+      const _objOpts = () => `<option value="random">Random</option>` +
+        ['standard', 'attrition', 'survey'].map(k => `<option value="${k}">${OBJECTIVES[k]?.name || k}</option>`).join('');
+      const aiCol = (n, color) => `
+        <div style="flex:1;min-width:0;background:var(--bg-card);border:1px solid var(--border);border-radius:4px;padding:12px;">
+          <div style="font-size:11px;font-weight:700;color:${color};font-family:var(--mono);margin-bottom:10px;">AI-${n === '1' ? 'RED' : 'BLUE'}</div>
+          <div style="font-size:9px;letter-spacing:0.1em;color:var(--text-mute);font-family:var(--mono);margin-bottom:4px;">FACTION</div>
+          <select id="aivs-faction-${n}" class="fleet-dropdown">${_factionOpts()}</select>
+          <div style="font-size:9px;letter-spacing:0.1em;color:var(--text-mute);font-family:var(--mono);margin:10px 0 4px;">PERSONALITY</div>
+          <select id="aivs-pers-${n}" class="fleet-dropdown">${_persOpts('random')}</select>
+        </div>`;
+      html = `<div class="setup-card" style="max-width:480px;">
+        <div class="setup-header"><h2 class="setup-title">AI vs AI</h2></div>
+        <div class="setup-body" style="padding:24px;display:flex;flex-direction:column;gap:16px;">
+          <div style="display:flex;gap:12px;">
+            ${aiCol('1', 'var(--hull-crit)')}
+            ${aiCol('2', 'var(--shal)')}
+          </div>
+          <div>
+            <div style="font-size:9px;letter-spacing:0.1em;color:var(--text-mute);font-family:var(--mono);margin-bottom:5px;">SCORING OBJECTIVE</div>
+            <select id="aivs-objective" class="fleet-dropdown">${_objOpts()}</select>
+          </div>
+          <div style="font-size:9px;color:var(--text-mute);">Both fleets are 1000pts. Anything left on "Random" is rolled by the server. Layout, approach and deployment are always random.</div>
+          <div id="aivs-msg" style="font-size:10px;color:var(--hull-warn);min-height:14px;"></div>
+        </div>
+        <div class="setup-footer">
+          <button class="btn" id="ms-back">← Back</button>
+          <button class="btn-primary" id="aivs-start" style="padding:10px 20px;font-size:12px;">▶ START BATTLE</button>
+        </div>
+      </div>`;
     } else if (view === 'hosting') {
       html = `<div class="setup-card" style="max-width:360px;">
         <div class="setup-header"><h2 class="setup-title">CREATING ROOM…</h2></div>
@@ -17685,23 +17722,7 @@ async function showModeSelector() {
       overlay.querySelector('#ms-join').onclick    = () => render('join');
       overlay.querySelector('#ms-spectate').onclick = () => render('spectate');
       const aiTestBtn = overlay.querySelector('#ms-ai-test');
-      if (aiTestBtn) aiTestBtn.onclick = async () => {
-        aiTestBtn.disabled = true;
-        aiTestBtn.innerHTML = '🤖 AI vs AI<div style="font-size:10px;font-weight:400;color:var(--text-mute);margin-top:3px;">Generating fleets…</div>';
-        // Show the full-screen loading spinner immediately so the user gets instant feedback
-        // while the room is created (and bridges the page reload into the spectator view).
-        _showSpectatorLoading(true);
-        try {
-          const r = await fetch('/api/rooms', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ aiVsAi: true }) });
-          const d = await r.json();
-          if (d.roomId) { location.href = `${location.pathname}?room=${d.roomId}&side=spectator&ai=1`; return; }
-          throw new Error('no room');
-        } catch {
-          _hideSpectatorLoading();
-          aiTestBtn.disabled = false;
-          aiTestBtn.innerHTML = '🤖 AI vs AI<div style="font-size:10px;font-weight:400;color:var(--hull-crit);margin-top:3px;">Failed — try again</div>';
-        }
-      };
+      if (aiTestBtn) aiTestBtn.onclick = () => render('aivs');
       const soloBtn = overlay.querySelector('#ms-solo');
       if (soloBtn) soloBtn.onclick = async () => {
         soloBtn.disabled = true;
@@ -17854,6 +17875,23 @@ async function showModeSelector() {
       });
       overlay.querySelector('#ms-back').onclick = () => render('main');
     }
+    if (view === 'aivs') {
+      overlay.querySelector('#aivs-start').addEventListener('click', async () => {
+        const val = (id) => { const v = overlay.querySelector(id)?.value; return (!v || v === 'random') ? null : v; };
+        const cfg = {
+          p1Faction:     val('#aivs-faction-1'),
+          p2Faction:     val('#aivs-faction-2'),
+          p1Personality: val('#aivs-pers-1'),
+          p2Personality: val('#aivs-pers-2'),
+          objective:     val('#aivs-objective'),
+        };
+        overlay.querySelector('#aivs-start').disabled = true;
+        await doAiVsAi(cfg);
+        const b = overlay.querySelector('#aivs-start');
+        if (b) b.disabled = false;
+      });
+      overlay.querySelector('#ms-back').onclick = () => render('main');
+    }
     if (view === 'join') {
       const codeEl = overlay.querySelector('#ms-code');
       const goBtn  = overlay.querySelector('#ms-join-go');
@@ -17970,6 +18008,25 @@ async function showModeSelector() {
       location.href = `${location.pathname}?room=${data.roomId}&side=player1`;
     } catch {
       if (msgEl()) msgEl().textContent = 'Could not reach server. Is it running on port 3000?';
+    }
+  }
+
+  async function doAiVsAi(cfg = {}) {
+    const msgEl = () => overlay.querySelector('#aivs-msg');
+    // Show the full-screen spinner immediately (bridges the page reload into the spectator view).
+    _showSpectatorLoading(true);
+    try {
+      const res = await fetch('/api/rooms', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ aiVsAi: true, ...cfg }),
+      });
+      const data = await res.json();
+      if (data.roomId) { location.href = `${location.pathname}?room=${data.roomId}&side=spectator&ai=1`; return; }
+      throw new Error(data.error || 'no room');
+    } catch (err) {
+      _hideSpectatorLoading();
+      if (msgEl()) msgEl().textContent = 'Could not start: ' + (err.message || 'server error');
     }
   }
 
