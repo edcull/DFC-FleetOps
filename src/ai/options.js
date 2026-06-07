@@ -116,8 +116,15 @@ function defIsVoidgate(def) { return !!def && (def.gateship || 0) > 0; }
 // nearest any on-table Mothership (so Voidgates and Motherships converge on the SAME
 // dropsite and keep the 18" network intact instead of scattering to separate ones).
 function gateObjective(state, aiSide) {
-  const dss = (state.scenarioData?.dropsites || []).filter(d => !d.destroyed && dropsiteController(d) !== aiSide);
-  if (!dss.length) return null;
+  const all = (state.scenarioData?.dropsites || []).filter(d => !d.destroyed && dropsiteController(d) !== aiSide);
+  if (!all.length) return null;
+  // The AI keeps its Voidgates in Orbit (it never descends them), so a gate-drop can only
+  // be channelled through an Orbit-layer dropsite — an Atmosphere city is unreachable for
+  // the gate network however close the gate parks. Target a contestable Orbit dropsite
+  // (e.g. a Space Station) when one exists; fall back to any contestable one otherwise so
+  // the network still contests something.
+  const orbit = all.filter(d => (d.base?.layer === 'Atmosphere' ? 'atmosphere' : 'orbit') === 'orbit');
+  const dss = orbit.length ? orbit : all;
   const mothers = [];
   for (const g of Object.values(state.groups)) {
     if (g.def?.side !== aiSide || !(g.def?.launch || []).some(l => l.type === 'gate_dropship')) continue;
