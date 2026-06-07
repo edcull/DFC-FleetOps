@@ -33,7 +33,7 @@ function _pickN(arr, n) { return [...arr].sort(() => Math.random() - 0.5).slice(
 function _needsRoundEnd(state) {
   if (state.phase !== 'play' || state.gameOver) return false;
   if (state.attackModal || state.dropsiteActivation || state.assetPhase ||
-      state.battalionCombat || state.repairPhase || state.atmoDamage) return false;
+      state.battalionCombat || state.repairPhase || state.atmoDamage || state.detonationModal) return false;
   if (state.activeSide || state.initiative) return false;
   return true;
 }
@@ -632,6 +632,7 @@ async function maybeAiTurn(room) {
       if (both) {
         // Resolve the interrupt states a human/client normally drives.
         if (room.state.attackModal)      { _resolveAttackModalBoth(room); }
+        else if (room.state.detonationModal) { _applyAnySide(room, { type: 'dismissDetonation' }); }
         else if (room.state.assetPhase?._pendingBomberResolve) { if (!_resolvePendingBomberBoth(room)) break; }
         else if (room.state.atmoDamage)  { if (!_applyAnySide(room, { type: 'confirmEndActivation' })) break; }
         else if (room.state.repairPhase) { if (!_applyAnySide(room, { type: 'advanceRound' })) break; } // finishes repair → advances

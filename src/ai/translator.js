@@ -282,7 +282,38 @@ export function buildActivation(state, rng, gid, order, movePlan, aiSide, applyF
 
   // Firing: only orders that permit it. MT and SR are move-only / no-fire.
   const NO_FIRE_ORDERS = new Set(['MT', 'SR']);
-  if (!NO_FIRE_ORDERS.has(order) && def?.weapons) {
+
+  // Guy Fawkes Fire Ship: its only weapon is Explosive Detonation — an AoE that hits every
+  // ship (friendly AND enemy) on its layer within 6", then removes the ship. Detonate once
+  // the (post-move) blast catches a worthwhile cluster: at least one enemy and enemy hull
+  // in radius ≥ friendly hull (don't fry our own fleet). Never fire it as a normal weapon.
+  const isFawkes = /Explosive Detonation/i.test(def?.special || '');
+  if (isFawkes && !NO_FIRE_ORDERS.has(order)) {
+    const dsi = grp.ships.findIndex(s => !s.destroyed && !s.offTable);
+    const sh = dsi >= 0 ? grp.ships[dsi] : null;
+    if (sh) {
+      const layer = sh.layer || 'orbit', R = 6 * INCH + 1;
+      let enemyHull = 0, friendHull = 0, enemyCount = 0;
+      for (const g of Object.values(state.groups)) {
+        for (let i = 0; i < g.ships.length; i++) {
+          const t = g.ships[i];
+          if (t.destroyed || t.offTable) continue;
+          if (g === grp && i === dsi) continue;
+          if ((t.layer || 'orbit') !== layer) continue;
+          if (Math.hypot(t.x - sh.x, t.y - sh.y) > R) continue;
+          if (g.def?.side === aiSide) friendHull += t.hull || 0;
+          else { enemyHull += t.hull || 0; enemyCount++; }
+        }
+      }
+      if (enemyCount > 0 && enemyHull >= friendHull && applyFn({ type: 'explosiveDetonation', gid, si: dsi })) {
+        applyFn({ type: 'dismissDetonation' });
+        applyFn({ type: 'finishActivation', gid });
+        return;
+      }
+    }
+  }
+
+  if (!isFawkes && !NO_FIRE_ORDERS.has(order) && def?.weapons) {
     const fireSi = grp.ships.findIndex(s => !s.destroyed && !s.offTable);
     if (fireSi >= 0) {
       const fireShip = grp.ships[fireSi];

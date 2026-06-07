@@ -3560,7 +3560,16 @@ function renderDetail() {
     }
     weaponsHTML += `</div>`;
     // Status / FIRE button.
-    if (!isOpponent && state.phase === 'play' && onTable) {
+    const _isFawkes = /Explosive Detonation/i.test(def.special || '');
+    if (!isOpponent && state.phase === 'play' && onTable && _isFawkes) {
+      // Guy Fawkes: detonate instead of normal firing (AoE friendly + enemy within 6").
+      if (selShipOOF || grp.activated) {}
+      else if (fired) weaponsHTML += `<div class="weapon-special" style="color:var(--text-mute)">Already detonated this activation.</div>`;
+      else if (limit === 0) weaponsHTML += `<div class="weapon-special" style="color:var(--text-mute)">This Order cannot fire.</div>`;
+      else weaponsHTML += `<button class="btn-finish-act" data-detonate="${state.selectedGroupId}|${si}" style="background:linear-gradient(180deg,#ff7a18 0%,#a32020 100%);border-color:var(--hull-crit);color:#fff;">💥 EXPLOSIVE DETONATION</button>
+        <div class="weapon-special" style="color:var(--hull-warn);font-size:9px;">Spreads its hits to every Ship — friendly &amp; enemy — within 6&quot; on this layer, then is removed from the game.</div>`;
+    }
+    else if (!isOpponent && state.phase === 'play' && onTable) {
       if (selShipOOF) {}
       else if (grp.activated) {}
       else if (weaponsOffline) weaponsHTML += `<div class="weapon-special" style="color:var(--hull-crit)">Weapons Offline (crippling effect).</div>`;
@@ -7953,6 +7962,40 @@ function renderGameOver() {
   });
 }
 
+/* Explosive Detonation result — the Guy Fawkes Fire Ship's AoE outcome. Read-only:
+   shows the dice, every ship caught in the 6" blast (friendly in orange, enemy in red)
+   and the Set-Timers-And-Run crew note. Dismissable by either side. */
+function renderDetonationModal() {
+  let overlay = document.getElementById('detonation-overlay');
+  if (overlay) overlay.remove();
+  const D = state.detonationModal;
+  if (!D) return;
+  const col = D.side === 'player1' ? 'var(--ucm)' : 'var(--shal)';
+  const rows = (D.targets || []).map(t => {
+    const friendly = t.side === D.side;
+    const c = friendly ? 'var(--hull-warn,#ffb547)' : 'var(--hull-crit,#ff5252)';
+    return `<div style="display:flex;justify-content:space-between;gap:10px;font-size:11px;padding:2px 0;">
+      <span style="color:${c};">${t.name}${friendly ? ' <span style="opacity:0.6;font-size:9px;">(friendly)</span>' : ''}</span>
+      <span style="font-family:var(--mono);color:${c};">${t.dmg} Core${t.destroyed ? ' · destroyed' : ''}</span></div>`;
+  }).join('') || `<div style="font-size:11px;color:var(--text-mute);text-align:center;padding:8px 0;">No ships caught in the blast.</div>`;
+  overlay = document.createElement('div');
+  overlay.id = 'detonation-overlay';
+  overlay.style.cssText = 'position:fixed;inset:0;z-index:100002;display:flex;align-items:center;justify-content:center;padding:16px;background:rgba(2,6,10,0.7);backdrop-filter:blur(3px);';
+  overlay.innerHTML = `
+    <div style="width:100%;max-width:380px;background:var(--bg-elev,#0d1722);border:1px solid var(--hull-crit,#ff5252);border-radius:6px;overflow:hidden;box-shadow:0 14px 50px rgba(0,0,0,0.6);">
+      <div style="padding:10px 14px;border-bottom:1px solid var(--border);">
+        <div style="font-family:var(--display);font-weight:700;letter-spacing:0.08em;font-size:14px;color:${col};">💥 EXPLOSIVE DETONATION</div>
+        <div style="font-size:10px;color:var(--text-mute);margin-top:2px;">${D.attacker} — ${D.hits} hit${D.hits !== 1 ? 's' : ''}${D.crits ? ` · ${D.crits} crit` : ''} (${(D.dice || []).length} dice) spread within 6&quot;</div>
+      </div>
+      <div style="padding:10px 14px;max-height:50vh;overflow-y:auto;">${rows}
+        ${D.crew ? `<div style="font-size:10px;color:var(--text-dim);margin-top:8px;border-top:1px solid var(--border);padding-top:6px;">Set Timers And Run — Fawkes' Crew Battalion placed on <b>${D.crew}</b>.</div>` : ''}
+      </div>
+      <div style="padding:10px 14px;"><button class="btn-primary" id="detonation-ok" style="width:100%;">CONTINUE →</button></div>
+    </div>`;
+  document.body.appendChild(overlay);
+  overlay.querySelector('#detonation-ok').addEventListener('click', () => dispatch({ type: 'dismissDetonation' }));
+}
+
 /* ── End-game report ──────────────────────────────────────────────────────────
    A turn-by-turn (tab per round) breakdown of a game, built purely from the
    categorised state.eventLog. Works for the live game (pass `state`) and for a
@@ -10199,6 +10242,7 @@ function renderAll(localOnly = false) {
     renderApEditModal();
     renderScoringModal();
     renderVPBreakdown();
+    renderDetonationModal();
     renderGameOver();
     renderSceneryPlacement();
     renderAssetPhase();
@@ -14484,6 +14528,12 @@ document.addEventListener('click', (e) => {
     const btn = e.target.matches('[data-fire]') ? e.target : e.target.closest('[data-fire]');
     const [gid, si] = btn.dataset.fire.split('|');
     dispatch({ type: 'fireWeapons', gid, si: parseInt(si) });
+    return;
+  }
+  if (e.target.closest && e.target.closest('[data-detonate]')) {
+    const btn = e.target.closest('[data-detonate]');
+    const [gid, si] = btn.dataset.detonate.split('|');
+    dispatch({ type: 'explosiveDetonation', gid, si: parseInt(si) });
     return;
   }
   if (e.target.matches('[data-survey]') || (e.target.closest && e.target.closest('[data-survey]'))) {

@@ -9,7 +9,7 @@
  */
 import { describe, it, expect, beforeEach } from 'vitest';
 import { rollHits, rollSaves, attackReroll, attackFighterReroll,
-         parseWeaponSpecials } from '../../src/engine/mutators.js';
+         parseWeaponSpecials, explosiveDetonation } from '../../src/engine/mutators.js';
 import { makeState, seqRng, fixedRng, addGroup,
          shipDef, shipInstance, weapon, shot, makeModal } from './helpers.js';
 
@@ -126,6 +126,36 @@ describe('rollHits', () => {
     attackReroll(state, seqRng(4, 4, 4, 6), M, 'hit');
     expect(M.hitResult.hits).toBe(1);                 // only the 6 hits
     expect(M.hitResult.crits).toBe(0);                // forceSix scores no crits
+  });
+});
+
+describe('explosiveDetonation (Guy Fawkes)', () => {
+  it('spreads hits to friendly AND enemy ships within 6", self-destructs, no friendly KP', () => {
+    const state = makeState();
+    state.round = 2;
+    state.score = { player1: { vp: 0, kp: 0 }, player2: { vp: 0, kp: 0 } };
+    const I = 12;
+    const fawkes = shipDef({ id: 'player2:gf', side: 'player2', hull: 6,
+      weapons: [weapon({ name: 'Explosive Detonation', att: 8, lock: '3+', dmg: 1, type: 'C', special: 'Critical-1' })],
+      special: 'Explosive Detonation, Set Timers And Run' });
+    addGroup(state, fawkes, [shipInstance({ hull: 6, x: 300, y: 300 })]);
+    const mk = (id, side, x, hull) => addGroup(state,
+      shipDef({ id: `${side}:${id}`, side, hull, weapons: [] }),
+      [shipInstance({ hull, x, y: 300 })]);
+    mk('e1', 'player1', 330, 4);            // enemy within 6"
+    mk('f1', 'player2', 270, 10);           // friendly within 6" (survives)
+    mk('far', 'player1', 300 + 30 * I, 5); // enemy 30" away — untouched
+    state.activeSide = 'player2';
+    explosiveDetonation(state, seqRng(6, 6, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3), 'player2:gf', 0);
+    const enemyHit  = state.groups['player1:e1'].ships[0];
+    const friendHit = state.groups['player2:f1'].ships[0];
+    const far       = state.groups['player1:far'].ships[0];
+    expect(enemyHit.hull).toBeLessThan(4);   // enemy took damage (and likely destroyed)
+    expect(friendHit.hull).toBeLessThan(10); // FRIENDLY also took damage (AoE friendly fire)
+    expect(far.hull).toBe(5);                // out of range, untouched
+    expect(state.groups['player2:gf'].ships[0].destroyed).toBe(true); // self-removed
+    expect(state.score.player1.kp).toBe(0);  // the self-destruct earns the OPPONENT nothing
+    expect(state.score.player2.kp).toBeGreaterThan(0); // but Fawkes' side scores its enemy kill
   });
 });
 

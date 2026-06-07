@@ -500,6 +500,24 @@ export function isLegal(state, intent, side) {
       if (Math.hypot(dsX - origin.x, dsY - origin.y) > scanRangePx) return false;
       return true;
     }
+    case 'explosiveDetonation': {
+      // Guy Fawkes Fire Ship: detonate as this activation's attack (no target select).
+      const { gid, si } = intent;
+      if (state.phase !== 'play') return false;
+      if (state.attackModal || state.detonationModal) return false;
+      const grp = state.groups[gid];
+      if (!grp || grp.activated) return false;
+      if (grp.order && ORDERS[grp.order]?.fireRule === 'none') return false;
+      const def = getDef(state, gid);
+      if (!def || def.side !== side) return false;
+      if (!/Explosive Detonation/i.test(def.special || '')) return false;
+      if (!playTurnOk(state, side)) return false;
+      const ship = grp.ships[si];
+      if (!ship || ship.destroyed || ship.offTable || ship.firedThisActivation) return false;
+      return true;
+    }
+    case 'dismissDetonation':
+      return !!state.detonationModal;
     case 'resolveBombardCollateral': {
       const M = state.attackModal;
       if (!M || M.step !== 'bombardCollateral') return false;

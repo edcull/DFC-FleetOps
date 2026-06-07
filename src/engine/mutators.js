@@ -331,6 +331,7 @@ export function recordDice(state, side, faces) {
 /* Award a destroyed ship's points to the killer's Kill Points (2× if captured). */
 export function recordKill(state, def, killerSide, captured, killedShipKey) {
   if (!killerSide || !state.score || !state.score[killerSide]) return;
+  if (def.side === killerSide) return; // friendly fire / self-destruct never scores Kill Points
   state.score[killerSide].kp += shipPoints(def) * (captured ? 2 : 1);
   logEvent(state, `${factionName(state, killerSide)} ${captured ? 'captured' : 'destroyed'} ${def.name} (+${shipPoints(def) * (captured ? 2 : 1)} KP)`, 'attack');
   if (captured && state.captured) state.captured[killerSide] += shipPoints(def);
@@ -2846,6 +2847,107 @@ export function finishAttack(state, M) {
   return hint;
 }
 
+/* ── EXPLOSIVE DETONATION (Resistance "Guy Fawkes" Fire Ship) ──
+   Skip weapon assignment: roll the weapon's dice (each natural 6 explodes into an extra
+   die), then spread the hits EQUALLY across every Ship — friendly AND enemy — on the same
+   layer within 6". Core damage (no Energy/Kinetic save). The ship is then removed from the
+   game ("Set Timers And Run": a Fawkes' Crew Battalion rides a friendly Ship within 8";
+   the Ship only scores Kill Points when that Battalion is later removed — modelled here as
+   a no-KP self-destruct plus a crew marker). Resolves in one shot: any capital caught in
+   the blast has its crippling / explosion auto-rolled. */
+export function explosiveDetonation(state, rng, gid, si) {
+  const grp = state.groups[gid];
+  if (!grp) return state;
+  const def = getDef(state, gid);
+  const ship = grp.ships[si];
+  if (!ship || ship.destroyed || ship.offTable) return state;
+  const w = (def.weapons || []).find(x => /Explosive Detonation/i.test(x.name)) || { att: 8, lock: '3+', dmg: 1, special: 'Critical-1' };
+  const lock = lockVal(w) || 3;
+  const critMargin = (/Reinforced Armour/i.test('')) ? 3 : 2;
+  const critBonus = parseWeaponSpecials(w).critical || 0; // Critical-1 → +1 dmg per crit
+
+  // Roll att dice; each natural 6 yields one extra die (exploding). Guard against runaways.
+  const dice = []; let pool = w.att || 8, hits = 0, crits = 0, guard = 400;
+  while (pool > 0 && guard-- > 0) {
+    pool--;
+    const r = rollDie(rng);
+    const isHit = r >= lock, isCrit = r >= lock + critMargin;
+    if (isHit) hits++;
+    if (isCrit) crits++;
+    if (r === 6) pool++;
+    dice.push({ r, isHit, isCrit });
+  }
+  recordDice(state, def.side, dice.map(d => d.r));
+
+  // Affected ships: every living, on-table ship (either side) on the SAME layer within 6",
+  // excluding the detonating ship itself.
+  const layer = ship.layer || 'orbit';
+  const Rpx = 6 * INCH + 1;
+  const targets = [];
+  Object.keys(state.groups).forEach(tgid => {
+    state.groups[tgid].ships.forEach((ts, tsi) => {
+      if (ts.destroyed || ts.offTable) return;
+      if (tgid === gid && tsi === si) return;
+      if ((ts.layer || 'orbit') !== layer) return;
+      if (Math.hypot(ts.x - ship.x, ts.y - ship.y) <= Rpx) targets.push({ gid: tgid, si: tsi });
+    });
+  });
+
+  const M = { attackerGid: gid, attackerSi: si, bomber: false,
+              pendingDamage: {}, spillEligible: {}, log: [], crippleQueue: [], explodeQueue: [] };
+  const perTarget = [];
+  if (targets.length && hits > 0) {
+    const base = Math.floor(hits / targets.length);
+    let rem = hits % targets.length;
+    let critRem = crits;
+    targets.forEach((t, i) => {
+      const h = base + (i < rem ? 1 : 0);
+      const give = Math.min(critRem, h); critRem -= give;   // Critical-1 bonus follows the hits
+      const dmg = h + give * critBonus;
+      const td = getDef(state, t.gid);
+      if (dmg > 0) { const k = targetKey(t.gid, t.si); M.pendingDamage[k] = dmg; M.spillEligible[k] = true; }
+      perTarget.push({ gid: t.gid, si: t.si, name: td?.name, side: td?.side, dmg });
+    });
+    resolveAttackDamage(state, M);
+    // Auto-resolve any crippling / explosion the blast queued (capitals only), incl. chains.
+    let g2 = 300;
+    while (g2-- > 0) {
+      if (M.crippleQueue.length)      advanceAttack(state, rng, M, M.crippleQueue[0].rolled ? 'crippling-next' : 'crippling-roll');
+      else if (M.explodeQueue.length) advanceAttack(state, rng, M, M.explodeQueue[0].rolled ? 'explosion-next'  : 'explosion-roll');
+      else break;
+    }
+  }
+
+  // Mark which targets ended up destroyed (after spillover / explosion chains).
+  perTarget.forEach(t => { const ts = state.groups[t.gid]?.ships[t.si]; t.destroyed = !!(ts && ts.destroyed); });
+
+  // Log under the report's bomber/asset category.
+  logEvent(state, `${def.name}: EXPLOSIVE DETONATION — ${hits} hit${hits !== 1 ? 's' : ''} spread to ${targets.length} ship${targets.length !== 1 ? 's' : ''} within 6"`, 'bomber');
+  perTarget.forEach(t => { if (t.dmg > 0) logEvent(state, `· ${t.name}: ${t.dmg} Core${t.destroyed ? ' · destroyed' : ''}`, 'bomber'); });
+
+  // Set Timers And Run: remove the ship (no immediate KP), leave a Fawkes' Crew Battalion
+  // on the nearest friendly ship within 8".
+  ship.destroyed = true; ship.firedThisActivation = true; ship._selfDestruct = true;
+  let crewShip = null, crewName = null, crewD = 8 * INCH + 1;
+  Object.keys(state.groups).forEach(fgid => {
+    const fdef = getDef(state, fgid);
+    if (fdef?.side !== def.side) return;
+    state.groups[fgid].ships.forEach((fs, fsi) => {
+      if (fs.destroyed || fs.offTable) return;
+      if (fgid === gid && fsi === si) return;
+      const d = Math.hypot(fs.x - ship.x, fs.y - ship.y);
+      if (d <= crewD) { crewD = d; crewShip = fs; crewName = fdef.name; }
+    });
+  });
+  if (crewShip) { crewShip.fawkesCrew = (crewShip.fawkesCrew || 0) + 1; logEvent(state, `Set Timers And Run: Fawkes' Crew Battalion placed on ${crewName}`, 'ground'); }
+
+  state.detonationModal = {
+    attacker: def.name, side: def.side, dice, hits, crits,
+    targets: perTarget, crew: crewName, log: M.log,
+  };
+  return state;
+}
+
 /* Deterministic attack-modal declarations (no dice): raise/lower Shields,
    Overcharge a weapon, declare an Escort redirect, Brace for Impact / Contain
    Reactor (spend 2 AP), or resolve an Impel forced turn/move. */
@@ -4425,6 +4527,8 @@ export function apply(state, intent, rng) {
     case 'attackReroll':       return attackReroll(state, rng, state.attackModal, intent.which);
     case 'attackFighterReroll':return attackFighterReroll(state, rng, state.attackModal);
     case 'finishAttack':       finishAttack(state, state.attackModal); return state;
+    case 'explosiveDetonation': return explosiveDetonation(state, rng, intent.gid, intent.si);
+    case 'dismissDetonation':  state.detonationModal = null; return state;
     case 'attackDeclare':      return attackDeclare(state, state.attackModal, intent);
     case 'attackSetReroll': {
       const M = state.attackModal; if (!M) return state;
