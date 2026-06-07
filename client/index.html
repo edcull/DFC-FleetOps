@@ -17664,35 +17664,48 @@ async function showModeSelector() {
         </div>
       </div>`;
     } else if (view === 'aivs') {
-      const _persOpts = (sel) => [
+      const lbl = 'font-size:9px;letter-spacing:0.1em;color:var(--text-mute);font-family:var(--mono);margin:8px 0 4px;';
+      const _persOpts = [
         ['random','Random'], ['balanced','Balanced'], ['aggressive','Aggressive'],
         ['positional','Positional'], ['defensive','Defensive'], ['opportunist','Opportunist'],
-      ].map(([k, n]) => `<option value="${k}" ${sel === k ? 'selected' : ''}>${n}</option>`).join('');
-      const _factionOpts = () => `<option value="random">Random</option>` +
+      ].map(([k, n]) => `<option value="${k}">${n}</option>`).join('');
+      const _factionOpts = `<option value="random">Random</option>` +
         Object.entries(FACTIONS).map(([k, v]) => `<option value="${k}">${v.name}</option>`).join('');
+      const _secOpts = `<option value="random">— Random —</option>` +
+        Object.entries(SECONDARY_OBJECTIVES).filter(([, v]) => !v.nominate).map(([k, v]) => `<option value="${k}">${v.name}</option>`).join('');
       // Only the objectives the AI actually scores (match the server's AI pool).
-      const _objOpts = () => `<option value="random">Random</option>` +
+      const _objOpts = `<option value="random">Random</option>` +
         ['standard', 'attrition', 'survey'].map(k => `<option value="${k}">${OBJECTIVES[k]?.name || k}</option>`).join('');
+      // Full per-AI fleet setup (mirrors single-player): fleet source = Fastplay / Generate / Import.
       const aiCol = (n, color) => `
-        <div style="flex:1;min-width:0;background:var(--bg-card);border:1px solid var(--border);border-radius:4px;padding:12px;">
-          <div style="font-size:11px;font-weight:700;color:${color};font-family:var(--mono);margin-bottom:10px;">AI-${n === '1' ? 'RED' : 'BLUE'}</div>
-          <div style="font-size:9px;letter-spacing:0.1em;color:var(--text-mute);font-family:var(--mono);margin-bottom:4px;">FACTION</div>
-          <select id="aivs-faction-${n}" class="fleet-dropdown">${_factionOpts()}</select>
-          <div style="font-size:9px;letter-spacing:0.1em;color:var(--text-mute);font-family:var(--mono);margin:10px 0 4px;">PERSONALITY</div>
-          <select id="aivs-pers-${n}" class="fleet-dropdown">${_persOpts('random')}</select>
+        <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:4px;padding:12px;">
+          <div style="font-size:11px;font-weight:700;color:${color};font-family:var(--mono);margin-bottom:6px;">🤖 AI-${n === '1' ? 'RED' : 'BLUE'}</div>
+          <div style="${lbl}">FLEET SOURCE</div>
+          <select id="aivs-mode-${n}" class="fleet-dropdown">
+            <option value="fastplay">Fastplay</option>
+            <option value="generate">Generate</option>
+            <option value="import">Import</option>
+          </select>
+          <div id="aivs-faction-row-${n}"><div style="${lbl}">FACTION</div>
+            <select id="aivs-faction-${n}" class="fleet-dropdown">${_factionOpts}</select></div>
+          <div id="aivs-pts-row-${n}" style="display:none;"><div style="${lbl}">FLEET POINTS</div>
+            <input id="aivs-pts-${n}" type="number" min="500" max="5000" step="50" value="1000" class="fleet-dropdown" style="font-family:var(--mono);font-size:12px;"/></div>
+          <div id="aivs-import-row-${n}" style="display:none;"><div style="${lbl}">FLEET LIST (NewRecruit)</div>
+            <textarea id="aivs-import-${n}" class="fleet-dropdown" rows="4" placeholder="Paste a fleet list…" style="font-family:var(--mono);font-size:10px;resize:vertical;"></textarea></div>
+          <div style="${lbl}">SECONDARY 1</div><select id="aivs-sec1-${n}" class="fleet-dropdown">${_secOpts}</select>
+          <div style="${lbl}">SECONDARY 2</div><select id="aivs-sec2-${n}" class="fleet-dropdown">${_secOpts}</select>
+          <div style="${lbl}">PERSONALITY</div><select id="aivs-pers-${n}" class="fleet-dropdown">${_persOpts}</select>
         </div>`;
-      html = `<div class="setup-card" style="max-width:480px;">
+      html = `<div class="setup-card" style="max-width:420px;">
         <div class="setup-header"><h2 class="setup-title">AI vs AI</h2></div>
-        <div class="setup-body" style="padding:24px;display:flex;flex-direction:column;gap:16px;">
-          <div style="display:flex;gap:12px;">
-            ${aiCol('1', 'var(--hull-crit)')}
-            ${aiCol('2', 'var(--shal)')}
-          </div>
+        <div class="setup-body" style="padding:20px;display:flex;flex-direction:column;gap:14px;">
+          ${aiCol('1', 'var(--hull-crit)')}
+          ${aiCol('2', 'var(--shal)')}
           <div>
-            <div style="font-size:9px;letter-spacing:0.1em;color:var(--text-mute);font-family:var(--mono);margin-bottom:5px;">SCORING OBJECTIVE</div>
-            <select id="aivs-objective" class="fleet-dropdown">${_objOpts()}</select>
+            <div style="${lbl}">SCORING OBJECTIVE</div>
+            <select id="aivs-objective" class="fleet-dropdown">${_objOpts}</select>
           </div>
-          <div style="font-size:9px;color:var(--text-mute);">Both fleets are 1000pts. Anything left on "Random" is rolled by the server. Layout, approach and deployment are always random.</div>
+          <div style="font-size:9px;color:var(--text-mute);">Generate defaults to 1000pts. Anything on "Random" is rolled by the server. Layout, approach and deployment are always random.</div>
           <div id="aivs-msg" style="font-size:10px;color:var(--hull-warn);min-height:14px;"></div>
         </div>
         <div class="setup-footer">
@@ -17900,17 +17913,38 @@ async function showModeSelector() {
       overlay.querySelector('#ms-back').onclick = () => render('main');
     }
     if (view === 'aivs') {
-      overlay.querySelector('#aivs-start').addEventListener('click', async () => {
+      // Show only the controls relevant to each AI's chosen fleet source.
+      const syncMode = (n) => {
+        const mode = overlay.querySelector(`#aivs-mode-${n}`)?.value || 'fastplay';
+        const show = (id, on) => { const el = overlay.querySelector(id); if (el) el.style.display = on ? '' : 'none'; };
+        show(`#aivs-faction-row-${n}`, mode === 'fastplay' || mode === 'generate');
+        show(`#aivs-pts-row-${n}`,     mode === 'generate');
+        show(`#aivs-import-row-${n}`,  mode === 'import');
+      };
+      ['1', '2'].forEach(n => {
+        syncMode(n);
+        overlay.querySelector(`#aivs-mode-${n}`)?.addEventListener('change', () => syncMode(n));
+      });
+      const aiCfg = (n) => {
         const val = (id) => { const v = overlay.querySelector(id)?.value; return (!v || v === 'random') ? null : v; };
-        const cfg = {
-          p1Faction:     val('#aivs-faction-1'),
-          p2Faction:     val('#aivs-faction-2'),
-          p1Personality: val('#aivs-pers-1'),
-          p2Personality: val('#aivs-pers-2'),
-          objective:     val('#aivs-objective'),
-        };
+        const mode = overlay.querySelector(`#aivs-mode-${n}`)?.value || 'fastplay';
+        const secs = [val(`#aivs-sec1-${n}`), val(`#aivs-sec2-${n}`)].filter(Boolean);
+        const c = { mode, personality: val(`#aivs-pers-${n}`), secondaries: secs };
+        // Pass faction as the raw value (incl. 'random') so the server can roll it.
+        if (mode === 'fastplay' || mode === 'generate') c.faction = overlay.querySelector(`#aivs-faction-${n}`)?.value || 'random';
+        if (mode === 'generate') c.targetPts = parseInt(overlay.querySelector(`#aivs-pts-${n}`)?.value || '1000', 10) || 1000;
+        if (mode === 'import') c.importText = overlay.querySelector(`#aivs-import-${n}`)?.value || '';
+        return c;
+      };
+      overlay.querySelector('#aivs-start').addEventListener('click', async () => {
+        const p1 = aiCfg('1'), p2 = aiCfg('2');
+        const msg = overlay.querySelector('#aivs-msg');
+        for (const [c, label] of [[p1, 'AI-Red'], [p2, 'AI-Blue']]) {
+          if (c.mode === 'import' && !c.importText.trim()) { if (msg) msg.textContent = `${label}: paste a fleet list or pick another source.`; return; }
+        }
+        if (msg) msg.textContent = '';
         overlay.querySelector('#aivs-start').disabled = true;
-        await doAiVsAi(cfg);
+        await doAiVsAi({ p1, p2, objective: (overlay.querySelector('#aivs-objective')?.value || 'random') });
         const b = overlay.querySelector('#aivs-start');
         if (b) b.disabled = false;
       });
