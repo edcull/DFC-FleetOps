@@ -17513,22 +17513,27 @@ async function showModeSelector() {
       const hotseatSaves = saves.filter(s => s.isHotseat);
       const soloSaves    = saves.filter(s => s.isAi && !s.isHotseat);
       const onlineSaves  = saves.filter(s => !s.isHotseat && !s.isAi);
+      // Always show the three categories so the tabbed structure is visible; the selected
+      // tab defaults to the first NON-empty one. (AI-vs-AI games count as Single Player.)
       const tabDefs = [
         { key: 'solo',    label: 'Single Player', saves: soloSaves },
         { key: 'hotseat', label: 'Hotseat',        saves: hotseatSaves },
         { key: 'online',  label: 'Online',          saves: onlineSaves },
-      ].filter(t => t.saves.length > 0);
-      if (!tabDefs.some(t => t.key === savesTab)) savesTab = tabDefs.length ? tabDefs[0].key : 'none';
+      ];
+      const firstNonEmpty = (tabDefs.find(t => t.saves.length > 0) || tabDefs[0]).key;
+      // Default the selection to the first non-empty category (on first open or if the
+      // remembered tab is no longer valid); otherwise honour the user's chosen tab.
+      if (savesTab === 'all' || !tabDefs.some(t => t.key === savesTab)) savesTab = firstNonEmpty;
       const visibleSaves = tabDefs.find(t => t.key === savesTab)?.saves ?? [];
-      const tabBar = tabDefs.length > 1 ? `<div style="display:flex;border-bottom:1px solid var(--border);">
+      const tabBar = `<div style="display:flex;border-bottom:1px solid var(--border);">
         ${tabDefs.map(t => `<button data-saves-tab="${t.key}" style="
           flex:1;padding:8px 4px;font-size:10px;font-family:var(--mono);letter-spacing:0.08em;
           background:none;border:none;border-bottom:2px solid ${savesTab===t.key?'var(--accent,#4ad6ff)':'transparent'};
-          color:${savesTab===t.key?'var(--text)':'var(--text-mute)'};cursor:pointer;text-align:center;
+          color:${savesTab===t.key?'var(--text)':(t.saves.length?'var(--text-mute)':'rgba(255,255,255,0.25)')};cursor:pointer;text-align:center;
           transition:color 0.15s,border-color 0.15s;">
           ${t.label}<span style="margin-left:5px;opacity:0.6;font-size:9px;">${t.saves.length}</span>
         </button>`).join('')}
-      </div>` : '';
+      </div>`;
       const listHtml = visibleSaves.length
         ? visibleSaves.map(makeRow).join('')
         : `<div style="color:var(--text-mute);font-size:11px;text-align:center;padding:24px 0;">No saved games</div>`;
@@ -18231,6 +18236,7 @@ function _wireSpectatorChipBtn() {
 }
 
 function _spectatorBtnHtml() {
+  if (_replayMode) return ''; // a replay has no live spectators to show
   if (!_netRoom || _spectators.length === 0) return '';
   return `<button id="btn-spectator-chip" style="
     display:flex;align-items:center;gap:5px;
@@ -18247,9 +18253,9 @@ function renderUserChip() {
     chip.style.cssText = 'display:flex;align-items:center;gap:6px;padding:0 10px 0 4px;font-family:var(--mono);font-size:9px;color:var(--text-mute);white-space:nowrap;position:relative;';
     chip.innerHTML = `
       ${_spectatorBtnHtml()}
-      <span style="background:rgba(0,188,212,0.12);border:1px solid rgba(0,188,212,0.35);border-radius:3px;padding:3px 8px;color:var(--ucm);letter-spacing:0.1em;font-size:9px;">
+      ${!_replayMode ? `<span style="background:rgba(0,188,212,0.12);border:1px solid rgba(0,188,212,0.35);border-radius:3px;padding:3px 8px;color:var(--ucm);letter-spacing:0.1em;font-size:9px;">
         👁 SPECTATING
-      </span>
+      </span>` : ''}
       ${currentUser?.loggedIn ? `
         <button id="btn-user-chip" style="
           display:flex;align-items:center;gap:5px;
