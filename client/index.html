@@ -7943,10 +7943,10 @@ const _REPORT_SECTIONS = [
   { cat: 'repair',    title: 'Repairs',               color: _REP_ORANGE },
 ];
 // Per-line colour: launches/bomber runs are blue, a ship destroyed/captured is red,
-// a crippling result is orange. Everything else inherits the section's dim text colour.
+// crippling and battalion-combat results are orange. Else inherit the section's dim colour.
 function _repLineColor(e) {
   if (e.cat === 'launch' || e.cat === 'bomber') return _REP_BLUE;
-  if (/crippled/i.test(e.text)) return _REP_ORANGE;
+  if (e.cat === 'battalion' || /crippled/i.test(e.text)) return _REP_ORANGE;
   if (/\b(destroyed|captured)\b/i.test(e.text)) return _REP_RED;
   return '';
 }
