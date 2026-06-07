@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { gateRunnerPlan, gateMotherPlan, generateActivationOptions, corvettePlan } from '../../src/ai/options.js';
+import { handleActivation } from '../../src/ai/handlers/activation.js';
+import { getPersonality } from '../../src/ai/personalities.js';
 import { handlePreGame } from '../../src/ai/handlers/pregame.js';
 import { buildActivation } from '../../src/ai/translator.js';
 import { evaluate } from '../../src/ai/evaluate.js';
@@ -376,6 +378,24 @@ describe('UCM tactical rules — droppers, Max Thrust, corvettes', () => {
     expect(plan).toBeTruthy();
     expect(plan.toggle).toBe(true);          // descends to Atmosphere
     expect(plan.y).toBeCloseTo(288, -1);     // toward the enemy Descent ship
+  });
+});
+
+describe('handleActivation — no re-firing (finish a group that already acted)', () => {
+  it('finishes a group that fired but was left un-activated, instead of re-firing it', async () => {
+    const s = makeState(); s.activeSide = 'player2'; s.scenario = { objective: 'standard' }; s.scenarioData = { dropsites: [] };
+    addGroup(s, shipDef({ id: 'player2:tz', side: 'player2', name: 'Topaz Frigate', role: 'Frigate', scan: 10, thrust: 12,
+      weapons: [weapon({ name: 'Disintegrator Bank', arc: 'F', att: 3, lock: '3+', dmg: 1, type: 'E' })] }),
+      [shipInstance({ x: 288, y: 200, heading: 90 }), shipInstance({ x: 300, y: 200, heading: 90 })]);
+    // Simulate mid-attack leftover: it already moved+fired this round but isn't activated (the
+    // defender drove the save step, so finishActivation was blocked); the modal is now closed.
+    const g = s.groups['player2:tz']; g.order = 'GQ'; g.ships.forEach(sh => { sh.movedThisRound = true; sh.firedThisActivation = true; });
+    addGroup(s, shipDef({ id: 'player1:bc', side: 'player1', name: 'BC', pts: 165, tonnage: 'H', hull: 14 }),
+      [Object.assign(shipInstance({ x: 294, y: 240 }), { maxHull: 14, hull: 14 })]);
+    const ap = (i) => { if (!isLegal(s, i, 'player2')) return false; apply(s, i, fixedRng(5)); return true; };
+    await handleActivation(s, fixedRng(5), 'player2', getPersonality('balanced'), ap, false);
+    expect(g.activated).toBe(true);                                  // finished, not re-activated
+    expect(s.groups['player1:bc'].ships[0].hull).toBe(14);          // NOT re-fired
   });
 });
 

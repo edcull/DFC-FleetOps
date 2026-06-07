@@ -62,10 +62,11 @@ export function placeNonOverlap(anchorX, anchorY, placed, diamPx, zone) {
   const cY = v => Math.max(m, Math.min(BOARD_PX - m, v));
   // In-zone exactly as the game judges it: the ship's centre must satisfy isInZone.
   const inZone = (x, y) => !zone || isInZone(x / INCH, y / INCH, zone);
-  // Need centre-distance ≥ rNew + neighbour radius + a ~0.5" breathing gap (not just base
-  // contact, which leaves ships packed in a line). Fall back to rNew for legacy callers that
-  // pass bare {x,y} (same-size assumption).
-  const clear = (x, y) => placed.every(p => Math.hypot(x - p.x, y - p.y) >= rNew + (p.r ?? rNew) + 0.5 * INCH) && inZone(x, y);
+  // Need centre-distance ≥ rNew + neighbour radius + a ~0.8" breathing gap (not just base
+  // contact). Spreading ships out at deployment/arrival means that when they later advance their
+  // destinations aren't blocked by group-mates, so the engine doesn't shove them back into a
+  // "conga line". Fall back to rNew for legacy callers that pass bare {x,y} (same-size assumption).
+  const clear = (x, y) => placed.every(p => Math.hypot(x - p.x, y - p.y) >= rNew + (p.r ?? rNew) + 0.8 * INCH) && inZone(x, y);
   const ax = cX(anchorX), ay = cY(anchorY);
   if (clear(ax, ay)) return { x: ax, y: ay };
   // Grid-search the NEAREST clear, in-zone spot to the anchor. A dense grid (rather than
