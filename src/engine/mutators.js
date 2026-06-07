@@ -317,6 +317,17 @@ export function logEvent(state, text, cat = 'misc') {
   if (state.eventLog.length > 4000) state.eventLog.shift();
 }
 
+/* Tally D6 faces rolled "for" a side (to-hit dice for the attacker, save dice for the
+   defender, plus any re-rolls — every physical re-roll counts as another die). Powers the
+   per-side dice-distribution panel in the end-game report. faces is an array of 1–6. */
+export function recordDice(state, side, faces) {
+  if (!side || !faces || !faces.length) return;
+  state.diceStats = state.diceStats || { player1: [0, 0, 0, 0, 0, 0], player2: [0, 0, 0, 0, 0, 0] };
+  const arr = state.diceStats[side];
+  if (!arr) return;
+  for (const f of faces) if (f >= 1 && f <= 6) arr[f - 1]++;
+}
+
 /* Award a destroyed ship's points to the killer's Kill Points (2× if captured). */
 export function recordKill(state, def, killerSide, captured, killedShipKey) {
   if (!killerSide || !state.score || !state.score[killerSide]) return;
@@ -2064,6 +2075,8 @@ export function groupInFormation(state, def) { return outOfFormationSet(state, d
    the rolls are explicit and can run server-side with the room's seeded rng. */
 export function rollHits(state, rng, M) {
   const s = M.shots[M.shotIdx];
+  // To-hit dice are tallied for the attacking side's dice distribution.
+  const atkSide = M.bomber ? M.bomberSide : (M.attackerGid ? (getDef(state, M.attackerGid) || {}).side : null);
   // Bombardment vs dropsite: no ship target, simplified roll path.
   if (s.dsId) {
     const ds = state.scenarioData && state.scenarioData.dropsites && state.scenarioData.dropsites.find(d => d.id === s.dsId);
@@ -2079,6 +2092,7 @@ export function rollHits(state, rng, M) {
       dice.push({ r, isHit, isCrit });
     }
     M.hitResult = { dice, hits, crits, lock, forceSix: false };
+    recordDice(state, atkSide, dice.map(d => d.r));
     return;
   }
   const td = getDef(state, s.targetGid);
@@ -2130,6 +2144,7 @@ export function rollHits(state, rng, M) {
     dice.push({ r, isHit, isCrit });
   }
   M.hitResult = { dice, hits, crits, lock, forceSix, critMargin };
+  recordDice(state, atkSide, dice.map(d => d.r));
   if (hits > 0 && !M.bomber && M.attackerGid) {
     const tg = state.groups[s.targetGid];
     if (tg) { tg.hitByThisRound = tg.hitByThisRound || []; if (!tg.hitByThisRound.includes(M.attackerGid)) tg.hitByThisRound.push(M.attackerGid); }
@@ -2268,6 +2283,7 @@ export function rollSaves(state, rng, M) {
     primDice.push({ r, ok, sv: h.sv, crit: h.isCrit });
     if (ok) { h.saved = true; h.savedBy = 'primary'; }
   });
+  recordDice(state, td.side, primDice.map(d => d.r)); // defender's save dice
   // Shield-X: the Group gains 1 Spike when it uses Shield Saves (once per attack).
   if (shieldUp && !M.shieldSpiked) {
     M.shieldSpiked = M.shieldSpiked || {};
@@ -2552,6 +2568,8 @@ export function rollDeferredBackupSaves(state, rng, M) {
   sr.unsaved = sr.hitsList.filter(h => !h.saved).length;
   sr.critDamaged = sr.hitsList.some(h => h.isCrit && !h.saved);
   sr.backupRolled = true;
+  const defSide = sr.targetGid ? (getDef(state, sr.targetGid) || {}).side : null;
+  recordDice(state, defSide, [...sr.backDice, ...sr.aegisDice].map(d => d.r));
 }
 
 /* ── ATTACK STEP MACHINE ──
@@ -2695,11 +2713,13 @@ export function attackReroll(state, rng, M, which) {
       // margin (Reinforced Armour = lock+3). Ignoring forceSix here let a re-rolled 4
       // count as a hit against a Descent ship in atmosphere.
       const _cm = hr.critMargin || 2;
+      const _rr = [];
       missIdx.slice(0, n).forEach(i => {
-        const d = hr.dice[i]; d.r = rollDie(rng);
+        const d = hr.dice[i]; d.r = rollDie(rng); _rr.push(d.r);
         d.isHit  = hr.forceSix ? (d.r === 6) : (d.r >= hr.lock);
         d.isCrit = hr.forceSix ? false : (d.r >= hr.lock + _cm);
       });
+      recordDice(state, atkSide, _rr);
       hr.hits = hr.dice.filter(d => d.isHit).length;
       hr.crits = hr.dice.filter(d => d.isCrit).length;
       hr.rerolled = true; M.rerollN = null;
@@ -2715,7 +2735,9 @@ export function attackReroll(state, rng, M, which) {
     const n = Math.min(M.rerollN || maxRR, maxRR);
     if (defSide && n > 0) {
       state.planning.ap[defSide] -= n;
-      failedIdx.slice(0, n).forEach(i => { const d = sr.primDice[i]; d.r = rollDie(rng); d.ok = d.r >= d.sv; });
+      const _rr = [];
+      failedIdx.slice(0, n).forEach(i => { const d = sr.primDice[i]; d.r = rollDie(rng); d.ok = d.r >= d.sv; _rr.push(d.r); });
+      recordDice(state, defSide, _rr);
       recomputeSaves(sr);
       sr.rerolled = true; M.rerollN = null;
       M.log.push(`${factionName(state, defSide)} AP Re-roll ${n} saves (${n} AP)`);
@@ -2740,7 +2762,9 @@ export function attackFighterReroll(state, rng, M) {
   });
   state.launchedAssets = (state.launchedAssets || []).filter(a => a.count > 0);
   const failedIdx = sr.primDice.map((d, i) => (!d.ok ? i : -1)).filter(i => i >= 0);
-  failedIdx.slice(0, nSpend).forEach(i => { const d = sr.primDice[i]; d.r = rollDie(rng); d.ok = d.r >= d.sv; });
+  const _rr = [];
+  failedIdx.slice(0, nSpend).forEach(i => { const d = sr.primDice[i]; d.r = rollDie(rng); d.ok = d.r >= d.sv; _rr.push(d.r); });
+  recordDice(state, td.side, _rr);
   recomputeSaves(sr);
   sr.fighterRerolled = true; M.fighterSpend = {};
   M.log.push(`${factionName(state, td.side)} Close Protection: re-rolled ${nSpend} save${nSpend !== 1 ? 's' : ''} (−${nSpend} fighters)`);

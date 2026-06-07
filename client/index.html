@@ -7950,6 +7950,38 @@ function _repLineColor(e) {
   if (/\b(destroyed|captured)\b/i.test(e.text)) return _REP_RED;
   return '';
 }
+// Per-side D6 distribution panel: every to-hit die (attacker) and save die (defender),
+// re-rolls included, tallied as state.diceStats[side] = [#1,#2,#3,#4,#5,#6].
+function _repDiceHtml(R, p1, p2) {
+  const ds = R.diceStats || {};
+  const a1 = ds.player1 || [0, 0, 0, 0, 0, 0], a2 = ds.player2 || [0, 0, 0, 0, 0, 0];
+  if (!a1.some(Boolean) && !a2.some(Boolean)) return `<div class="rep-empty">No dice were rolled.</div>`;
+  const sideBlock = (arr, name, color) => {
+    const total = arr.reduce((a, b) => a + b, 0);
+    const max = Math.max(1, ...arr);
+    const avg = total ? arr.reduce((a, b, i) => a + b * (i + 1), 0) / total : 0;
+    const rows = arr.map((c, i) => {
+      const pct = total ? Math.round(c / total * 100) : 0;
+      const w = Math.round(c / max * 100);
+      return `<div style="display:flex;align-items:center;gap:8px;margin:3px 0;">
+        <span style="width:12px;text-align:right;font-family:var(--mono);font-size:11px;color:var(--text-dim);">${i + 1}</span>
+        <div style="flex:1;height:14px;background:rgba(255,255,255,0.06);border-radius:2px;overflow:hidden;">
+          <div style="width:${w}%;height:100%;background:${color};opacity:0.75;"></div></div>
+        <span style="width:74px;text-align:right;font-family:var(--mono);font-size:10px;color:var(--text-mute);">${c} · ${pct}%</span>
+      </div>`;
+    }).join('');
+    return `<div style="flex:1;min-width:180px;">
+      <div style="font-size:12px;font-weight:700;color:${color};">${name}</div>
+      <div style="font-size:9px;color:var(--text-mute);margin:2px 0 8px;">${total} dice · average ${avg.toFixed(2)}</div>
+      ${rows}
+    </div>`;
+  };
+  return `<div style="font-size:10px;color:var(--text-mute);margin-bottom:12px;">All to-hit dice (attacker) and save dice (defender) rolled this game, re-rolls included.</div>
+    <div style="display:flex;gap:22px;flex-wrap:wrap;">
+      ${sideBlock(a1, p1, 'var(--ucm)')}
+      ${sideBlock(a2, p2, 'var(--shal)')}
+    </div>`;
+}
 function _repEsc(t) {
   return String(t).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 }
@@ -7979,6 +8011,7 @@ function openGameReport(R) {
   const resultCol = (G && G.winner !== 'draw') ? `var(--${sideCssKey(G.winner)})` : 'var(--text)';
 
   const renderBody = () => {
+    if (_reportRound === 'dice') return _repDiceHtml(R, p1, p2);
     const roundLog = log.filter(e => (e.round || 1) === _reportRound);
     const secs = _REPORT_SECTIONS.map(s => {
       const lines = roundLog.filter(e => e.cat === s.cat);
@@ -8015,6 +8048,7 @@ function openGameReport(R) {
       </div>
       <div class="rep-tabs" id="rep-tabs">
         ${rounds.map(r => `<button class="rep-tab${r === _reportRound ? ' active' : ''}" data-rep-round="${r}">ROUND ${r}</button>`).join('')}
+        ${(R.diceStats ? `<button class="rep-tab${_reportRound === 'dice' ? ' active' : ''}" data-rep-round="dice">🎲 DICE</button>` : '')}
       </div>
       <div class="rep-body" id="rep-body">${renderBody()}</div>
     </div>`;
@@ -8025,7 +8059,7 @@ function openGameReport(R) {
   overlay.addEventListener('click', e => { if (e.target === overlay) close(); });
   overlay.querySelectorAll('[data-rep-round]').forEach(btn => {
     btn.addEventListener('click', () => {
-      _reportRound = parseInt(btn.dataset.repRound, 10);
+      _reportRound = btn.dataset.repRound === 'dice' ? 'dice' : parseInt(btn.dataset.repRound, 10);
       overlay.querySelectorAll('.rep-tab').forEach(t => t.classList.toggle('active', t === btn));
       overlay.querySelector('#rep-body').innerHTML = renderBody();
     });

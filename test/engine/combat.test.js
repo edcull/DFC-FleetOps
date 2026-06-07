@@ -94,6 +94,21 @@ describe('rollHits', () => {
     expect(M.hitResult.hits).toBe(2);
   });
 
+  it('tallies to-hit dice for the attacker and save dice for the defender', () => {
+    const { state, M } = setup({ weaponSpec: { att: 3, lock: '3+', type: 'K', special: '' },
+                                 defenderSpec: { ks: '4+' } });
+    rollHits(state, seqRng(2, 4, 6), M);              // attacker rolls 2,4,6
+    rollSaves(state, seqRng(3, 5), M);                // defender saves the two hits (4,6)
+    // Attacker tally: faces 2,4,6 each once.
+    expect(state.diceStats.player1[1]).toBe(1); // a 2
+    expect(state.diceStats.player1[3]).toBe(1); // a 4
+    expect(state.diceStats.player1[5]).toBe(1); // a 6
+    // Defender tally: two save dice (3,5).
+    expect(state.diceStats.player2[2]).toBe(1); // a 3
+    expect(state.diceStats.player2[4]).toBe(1); // a 5
+    expect(state.diceStats.player2.reduce((a, b) => a + b, 0)).toBe(2);
+  });
+
   it('AP re-roll honours forceSix (orbit → atmosphere Descent target): a re-rolled 4 is NOT a hit', () => {
     // Orbit attacker vs a Descent ship in atmosphere → forceSix (hits 6+ only, no crit).
     // A re-rolled die must obey the same rule; previously the re-roll used lock+ and let a 4 count.
