@@ -3,7 +3,8 @@
 
 import { INCH } from '../engine/constants.js';
 import { moveCone, dsEnemyBattalions, dsBattalions, connectedGateships, coherencyInches } from '../engine/mutators.js';
-import { bestMoveToward, findBestTarget, baseDiameterPx } from './options.js';
+import { isLegal } from '../engine/gating.js';
+import { bestMoveToward, findBestTarget, baseDiameterPx, gateRunnerPlan, gateMotherPlan } from './options.js';
 
 // Ground-launch aura ranges + target constraints (mirrors the client's LAUNCH_TYPES /
 // tryGroundLaunch). Launch range isn't gated, so the AI must check it itself or it
@@ -244,6 +245,29 @@ export function buildActivation(state, rng, gid, order, movePlan, aiSide, applyF
   const grp = state.groups[gid];
   if (!grp) return;
   const def = grp.def;
+
+  // Shaltari Voidgate: a weaponless positioning ship whose whole job is to park within 3"
+  // of an Orbit dropsite for the Mothership to channel through. MCTS can't value that
+  // multi-turn setup, so script it: General Quarters to close, Course Change to park (its
+  // 0" minimum move lets a fast gate stop on target instead of overshooting). Overrides the
+  // MCTS-chosen order/move for gates only.
+  if (def?.openNetwork && (def.gateship || 0) > 0) {
+    const plan = gateRunnerPlan(state, gid, aiSide);
+    if (plan && isLegal(state, { type: 'applyOrder', gid, order: plan.order }, aiSide)) {
+      order = plan.order;
+      movePlan = { x: plan.x, y: plan.y, reason: 'vp' };
+    }
+  }
+  // Shaltari Mothership: shadow the forward gate and channel a drop the instant a connected
+  // gate is parked within 3". Scripted because MCTS lets it drift out of the 18" network.
+  else if ((def?.launch || []).some(l => l.type === 'gate_dropship')) {
+    const plan = gateMotherPlan(state, gid, aiSide);
+    if (plan && isLegal(state, { type: 'applyOrder', gid, order: plan.order }, aiSide)) {
+      order = plan.order;
+      movePlan = { x: plan.x, y: plan.y, reason: 'vp' };
+      if (plan.launch) launchPlan = plan.launch;
+    }
+  }
 
 // By the time buildActivation is called, the ship should be on-table (arrived).
   if (!applyFn({ type: 'applyOrder', gid, order })) return;

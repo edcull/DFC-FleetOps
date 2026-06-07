@@ -140,8 +140,67 @@ function gateObjective(state, aiSide) {
   return best;
 }
 
-// Gate-drop plan for a Mothership: if a connected Voidgate is already parked within 3"
-// (same layer) of a contestable dropsite, channel a drop there this activation. Returns
+// Drive a Voidgate to PARK within 3" of its Orbit objective dropsite so a connected
+// Mothership can channel a drop through it. The crux: a fast gate on General Quarters has a
+// forced ½-Thrust *minimum* move, so it overshoots and orbits the dropsite, never settling.
+// Course Change (CC) has a minimum move of 0 and two 45° turns, so the gate can stop exactly
+// on target and then HOLD there. So: approach fast (GQ) while far, then switch to CC to park
+// the instant the dropsite is within CC reach. Returns { order, x, y } | null.
+export function gateRunnerPlan(state, gid, aiSide) {
+  const grp = state.groups[gid];
+  const def = grp?.def;
+  if (!def || !def.openNetwork || !(def.gateship > 0)) return null;
+  const si = grp.ships.findIndex(s => !s.destroyed && !s.offTable);
+  if (si < 0) return null;
+  const ship = grp.ships[si];
+  const obj = gateObjective(state, aiSide);
+  if (!obj) return null;
+  const ox = obj.x * INCH, oy = obj.y * INCH;
+  const dist = dist2d(ship.x, ship.y, ox, oy);
+  const halfThrustPx = 0.5 * (def.thrust || 12) * INCH;
+  // Within Course-Change reach (½ Thrust) → park precisely on the dropsite (min move 0
+  // means it lands on target, and stays parked on later rounds while it holds the channel).
+  if (dist <= halfThrustPx + 1) return { order: 'CC', x: ox, y: oy };
+  // Still closing the gap → General Quarters covers up to full Thrust toward the dropsite.
+  return { order: 'GQ', x: ox, y: oy };
+}
+
+// Drive a Mothership to keep the 18" channel to the forward gate and CHANNEL a drop the
+// moment a connected gate is parked within 3" of a contestable Orbit dropsite. MCTS treats
+// the Mothership as a combat ship and lets it wander out of the network, so script it:
+// hold-and-launch when the drop is live, otherwise shadow the forward gate (Course Change to
+// hold the chain once close). Returns { order, x, y, launch? } | null.
+export function gateMotherPlan(state, gid, aiSide) {
+  const grp = state.groups[gid];
+  const def = grp?.def;
+  if (!def || !(def.launch || []).some(l => l.type === 'gate_dropship')) return null;
+  const si = grp.ships.findIndex(s => !s.destroyed && !s.offTable);
+  if (si < 0) return null;
+  const ship = grp.ships[si];
+  const dss = (state.scenarioData?.dropsites || [])
+    .filter(d => !d.destroyed && dropsiteController(d) !== aiSide
+              && (d.base?.layer === 'Atmosphere' ? 'atmosphere' : 'orbit') === 'orbit');
+  if (!dss.length) return null;
+  // A connected gate already within 3" of a contestable dropsite → hold position and launch.
+  const launch = gateLaunchPlan(state, grp, ship, aiSide);
+  if (launch) return { order: 'CC', x: ship.x, y: ship.y, launch };
+  // Otherwise shadow the forward gate (the Open-Network gate nearest a contestable Orbit
+  // dropsite) so the chain is intact when it parks. Stay ~12" off it (well inside 18").
+  let fwd = null, fbest = Infinity;
+  for (const g of Object.values(state.groups)) {
+    if (g.def?.side !== aiSide || !g.def?.openNetwork) continue;
+    for (const s of g.ships) {
+      if (s.destroyed || s.offTable) continue;
+      const nd = Math.min(...dss.map(d => dist2d(s.x, s.y, d.x * INCH, d.y * INCH)));
+      if (nd < fbest) { fbest = nd; fwd = s; }
+    }
+  }
+  if (!fwd) return null;
+  const d = dist2d(ship.x, ship.y, fwd.x, fwd.y) || 1;
+  const keep = Math.max(0, d - 12 * INCH); // move only enough to sit ~12" off the gate
+  const order = keep <= 0.5 * (def.thrust || 10) * INCH + 1 ? 'CC' : 'GQ';
+  return { order, x: ship.x + (fwd.x - ship.x) / d * keep, y: ship.y + (fwd.y - ship.y) / d * keep };
+}
 // { li, dsId, count, type:'gate_dropship' } | null. The Mothership needn't move — it just
 // needs to stay in the 18" Voidgate network.
 function gateLaunchPlan(state, grp, ship, aiSide) {
