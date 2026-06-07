@@ -25,6 +25,7 @@ const _AI_DEPLOYMENTS = ['line', 'table_corners', 'midboard', 'from_corners',
 const _AI_OBJECTIVES = ['standard', 'attrition', 'survey'];
 const _AI_SECONDARIES = ['annihilate', 'take_prizes', 'gather_intel', 'decapitate',
                          'key_site', 'priority_target', 'long_shot', 'objectives_beyond'];
+const _AI_PERSONALITIES = ['aggressive', 'positional', 'defensive', 'balanced', 'opportunist'];
 function _pick(arr) { return arr[Math.floor(Math.random() * arr.length)]; }
 function _pickN(arr, n) { return [...arr].sort(() => Math.random() - 0.5).slice(0, n); }
 
@@ -143,22 +144,26 @@ router.post('/rooms', (req, res) => {
   if (aiVsAi) {
     // Two random 1000pt AI fleets battle each other; spectators watch. Uses the
     // fallback (non-LLM) AI by leaving aiUseLlm unset, so both sides don't hit the LLM.
-    const personality = aiPersonality || 'balanced';
     const LABELS = { aggressive:'Aggressive', positional:'Positional', defensive:'Defensive', balanced:'Balanced', opportunist:'Opportunist' };
-    const label = LABELS[personality] || 'Balanced';
+    // Each side gets its own random personality (an explicit aiPersonality in the request,
+    // if given, pins both sides; otherwise each is rolled independently).
+    const persP1 = aiPersonality || _pick(_AI_PERSONALITIES);
+    const persP2 = aiPersonality || _pick(_AI_PERSONALITIES);
     const factionP1 = _pick(_AI_FACTIONS);
     const factionP2 = _pick(_AI_FACTIONS);
     room.aiSide        = 'both';
-    room.aiPersonality = personality;
+    room.aiPersonality = persP1; // legacy single-value field (player1's)
+    room.aiPersonalities = { player1: persP1, player2: persP2 };
     room.allowSpectators = true; // AI vs AI games are always public
     room.state.aiSide  = 'both';
     room.state.aiVsAi  = true;
-    room.state.aiPersonality = personality;
+    room.state.aiPersonality = persP1;
+    room.state.aiPersonalities = { player1: persP1, player2: persP2 };
     room.state.fleetChoices.f1 = factionP1;
     room.state.fleetChoices.f2 = factionP2;
     room.state.secondaryChoice.f1 = _pickN(_AI_SECONDARIES, 2);
     room.state.secondaryChoice.f2 = _pickN(_AI_SECONDARIES, 2);
-    room.state.playerNames = { f1: `AI-Red (${label})`, f2: `AI-Blue (${label})` };
+    room.state.playerNames = { f1: `AI-Red (${LABELS[persP1] || 'Balanced'})`, f2: `AI-Blue (${LABELS[persP2] || 'Balanced'})` };
     room.state.scenario = {
       layout:     _pick(_AI_LAYOUTS),
       approach:   _pick(_AI_APPROACHES),
@@ -166,13 +171,13 @@ router.post('/rooms', (req, res) => {
       objective:  _pick(_AI_OBJECTIVES),
       variant:    'none',
     };
-    for (const [slot, faction] of [['f1', factionP1], ['f2', factionP2]]) {
-      const fleet = buildAiFleet({ faction, targetPts: 1000, admiralLevel: 0, personality });
+    for (const [slot, faction, persona] of [['f1', factionP1, persP1], ['f2', factionP2, persP2]]) {
+      const fleet = buildAiFleet({ faction, targetPts: 1000, admiralLevel: 0, personality: persona });
       if (fleet) room.state.importedFleets[slot] = fleet;
     }
     apply(room.state, { type: 'readySetup', side: 'player1' }, room.rng);
     apply(room.state, { type: 'readySetup', side: 'player2' }, room.rng);
-    console.log(`Room ${room.id} — AI vs AI (${factionP1} vs ${factionP2}, ${personality}, ${room.state.scenario.layout})`);
+    console.log(`Room ${room.id} — AI vs AI (${factionP1}/${persP1} vs ${factionP2}/${persP2}, ${room.state.scenario.layout})`);
     setImmediate(() => maybeAiTurn(room).catch(err => console.error(`[${room.id}] AI vs AI error:`, err.message)));
     return res.json({ roomId: room.id });
   }
@@ -442,6 +447,7 @@ router.post('/rooms/resume', async (req, res) => {
     room.createdAt         = save.createdAt         || room.createdAt;
     room.aiSide        = save.currentState?.aiSide        || null;
     room.aiPersonality = save.currentState?.aiPersonality || null;
+    room.aiPersonalities = save.currentState?.aiPersonalities || null;
   }
 
   // Restore slot ownership from the save's stored user IDs.
@@ -640,7 +646,9 @@ async function maybeAiTurn(room) {
         else {
           const side = effectiveAiSide();
           if (shouldAiAct(room.state, side)) {
-            await triggerAi({ ...room, aiSide: side }, (intent) => {
+            // Each side plays with its own (randomised) personality in AI-vs-AI.
+            const sidePers = room.aiPersonalities?.[side] || room.aiPersonality;
+            await triggerAi({ ...room, aiSide: side, aiPersonality: sidePers }, (intent) => {
               if (room.playStartState) recordIntent(room, side, intent);
             });
           } else if (_needsRoundEnd(room.state)) {
