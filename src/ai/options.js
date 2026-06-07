@@ -2,7 +2,7 @@
 // Does NOT call legalActions() (which only covers pass/endRound/commitScenario).
 // Instead generates candidates and validates each with isLegal().
 
-import { ORDERS, INCH, DEPLOYMENTS } from '../engine/constants.js';
+import { ORDERS, INCH, DEPLOYMENTS, OBJECTIVES } from '../engine/constants.js';
 import { isLegal } from '../engine/gating.js';
 import { moveCone, weaponCanTarget, dropsiteController, canDeployNow, isInZone, connectedGateships } from '../engine/mutators.js';
 
@@ -104,6 +104,35 @@ const NO_LAUNCH_ORDERS = new Set(['MT', 'DC']);
 function defIsDropper(def) {
   return !!def && (def.launch || []).some(l => LAUNCH_RANGE[l.type] != null);
 }
+// Descent ships can sit safely in Atmosphere (others take burn damage there) and are very hard
+// to hit while in it — so it's both protection and where ground drops happen.
+function defIsDescent(def) { return !!def && /Descent/i.test(def.special || ''); }
+function defIsCorvette(def) { return !!def && /corvette/i.test(def.role || ''); }
+// A "primary" target worth firing everything at: an enemy drop carrier, or an important combat
+// ship (capital/heavy hull, or high points).
+function defIsPrimaryTarget(def) {
+  return !!def && (defIsDropper(def) || (def.launch || []).some(l => l.type === 'gate_dropship')
+    || def.tonnage === 'C' || def.tonnage === 'H' || (def.pts || 0) >= 90);
+}
+// Missions where landing Battalions scores (so drop-capable ships should prioritise dropping).
+function isDropMission(state) {
+  const obj = state?.scenario?.objective;
+  return !obj || obj === 'extract' || OBJECTIVES[obj]?.scoring === 'control_contest';
+}
+// Nearest enemy Descent ship currently in Atmosphere (px point) | null — corvettes hunt these.
+function nearestEnemyDescentInAtmo(state, aiSide, fromX, fromY) {
+  const enemySide = aiSide === 'player1' ? 'player2' : 'player1';
+  let best = null, bd = Infinity;
+  for (const g of Object.values(state.groups)) {
+    if (g.def?.side !== enemySide || !defIsDescent(g.def)) continue;
+    for (const s of g.ships) {
+      if (s.destroyed || s.offTable || (s.layer || 'orbit') !== 'atmosphere') continue;
+      const d = dist2d(fromX, fromY, s.x, s.y);
+      if (d < bd) { bd = d; best = { x: s.x, y: s.y }; }
+    }
+  }
+  return best;
+}
 // Shaltari Mothership: drops battalions by channelling through a connected Voidgate
 // (Gateship) parked within 3" of the target dropsite — it doesn't approach the dropsite
 // itself. defIsGateMother flags the launcher; defIsVoidgate flags the gates.
@@ -187,10 +216,11 @@ export function gateRunnerPlan(state, gid, aiSide) {
 }
 
 // Drive a Mothership to keep the 18" channel to the forward gate and CHANNEL a drop the
-// moment a connected gate is parked within 3" of a contestable Orbit dropsite. MCTS treats
-// the Mothership as a combat ship and lets it wander out of the network, so script it:
-// hold-and-launch when the drop is live, otherwise shadow the forward gate (Course Change to
-// hold the chain once close). Returns { order, x, y, launch? } | null.
+// moment a connected gate is parked within 3" of a contestable dropsite. MCTS treats the
+// Mothership as a combat ship and lets it wander into enemy guns, so script it: hold-and-launch
+// when the drop is live; otherwise hang BACK toward our own edge — the carrier channels from up
+// to 18" away, so it never needs to approach the front, and keeping it safe denies the enemy an
+// easy ~115pt kill (which historically lost Shaltari the game). Returns { order, x, y, launch? } | null.
 export function gateMotherPlan(state, gid, aiSide) {
   const grp = state.groups[gid];
   const def = grp?.def;
@@ -205,8 +235,9 @@ export function gateMotherPlan(state, gid, aiSide) {
   // cities included once a gate has descended) → hold position and launch.
   const launch = gateLaunchPlan(state, grp, ship, aiSide);
   if (launch) return { order: 'CC', x: ship.x, y: ship.y, launch };
-  // Otherwise shadow the forward gate (the Open-Network gate nearest a contestable
-  // dropsite) so the chain is intact when it parks. Stay ~12" off it (well inside 18").
+  // Otherwise: stay safe. Anchor on the forward gate (nearest connected gate to a contestable
+  // dropsite) but sit ~15" BEHIND it toward our own deployment edge — far enough back to keep
+  // the carrier out of the firefight while still holding the 18" chain so it can channel.
   let fwd = null, fbest = Infinity;
   for (const g of Object.values(state.groups)) {
     if (g.def?.side !== aiSide || !g.def?.openNetwork) continue;
@@ -217,11 +248,46 @@ export function gateMotherPlan(state, gid, aiSide) {
     }
   }
   if (!fwd) return null;
-  const d = dist2d(ship.x, ship.y, fwd.x, fwd.y) || 1;
-  const keep = Math.max(0, d - 12 * INCH); // move only enough to sit ~12" off the gate
-  const order = keep <= 0.5 * (def.thrust || 10) * INCH + 1 ? 'CC' : 'GQ';
-  return { order, x: ship.x + (fwd.x - ship.x) / d * keep, y: ship.y + (fwd.y - ship.y) / d * keep };
+  // Direction toward our own board edge (away from the enemy line).
+  const zone = state.deployZone?.[aiSide];
+  const edgeY = zone === 'north' ? 0 : zone === 'south' ? BOARD_PX : (aiSide === 'player1' ? BOARD_PX : 0);
+  const backDir = edgeY < fwd.y ? -1 : 1;
+  const KEEP_PX = 15 * INCH; // 15" behind the forward gate — inside the 18" chain with margin
+  const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+  const tx = clamp(fwd.x, INCH * 2, BOARD_PX - INCH * 2);
+  const ty = clamp(fwd.y + backDir * KEEP_PX, INCH * 2, BOARD_PX - INCH * 2);
+  const d = dist2d(ship.x, ship.y, tx, ty);
+  const order = d <= 0.5 * (def.thrust || 10) * INCH + 1 ? 'CC' : 'GQ';
+  return { order, x: tx, y: ty };
 }
+// Corvettes are fast, fragile Descent ships (Air-to-Air weapons) — too vulnerable to loiter in
+// Orbit. Script them to use their speed to dive into Atmosphere: onto the nearest enemy Descent
+// ship landing there (to deny it) or onto a contestable city (to protect/contest). Max Thrust to
+// close the gap, then descend on General Quarters to engage. Returns { order, x, y, toggle } | null.
+export function corvettePlan(state, gid, aiSide) {
+  const grp = state.groups[gid];
+  const def = grp?.def;
+  if (!defIsCorvette(def) || !defIsDescent(def)) return null;
+  const si = grp.ships.findIndex(s => !s.destroyed && !s.offTable);
+  if (si < 0) return null;
+  const ship = grp.ships[si];
+  let tgt = nearestEnemyDescentInAtmo(state, aiSide, ship.x, ship.y);
+  if (!tgt) {
+    const city = (state.scenarioData?.dropsites || [])
+      .filter(d => !d.destroyed && dropsiteController(d) !== aiSide && d.base?.layer === 'Atmosphere')
+      .sort((a, b) => dist2d(ship.x, ship.y, a.x * INCH, a.y * INCH) - dist2d(ship.x, ship.y, b.x * INCH, b.y * INCH))[0];
+    if (city) tgt = { x: city.x * INCH, y: city.y * INCH };
+  }
+  if (!tgt) return null;
+  const inAtmo = (ship.layer || 'orbit') === 'atmosphere';
+  const dist = dist2d(ship.x, ship.y, tgt.x, tgt.y);
+  const thrustPx = (def.thrust || 14) * INCH;
+  if (inAtmo) return { order: 'GQ', x: tgt.x, y: tgt.y, toggle: false };              // already down — engage
+  if (dist <= thrustPx + 1) return { order: 'GQ', x: tgt.x, y: tgt.y, toggle: true }; // reach + descend + fire
+  if (dist <= 2 * thrustPx + 1) return { order: 'MT', x: tgt.x, y: tgt.y, toggle: true }; // sprint-dive for cover
+  return { order: 'GQ', x: tgt.x, y: tgt.y, toggle: false };                          // close the gap in Orbit
+}
+
 // { li, dsId, count, type:'gate_dropship' } | null. The Mothership needn't move — it just
 // needs to stay in the 18" Voidgate network.
 function gateLaunchPlan(state, grp, ship, aiSide) {
@@ -338,6 +404,14 @@ function candidateTargets(state, gid, aiSide) {
     }
   }
 
+  // Drop-capable ships on a scoring/extract mission ALWAYS head for a dropsite to land
+  // battalions — shooting is opportunistic (buildActivation still fires after the move). Chasing
+  // enemy groups instead is what loses the objective game (UCM left every city to the enemy).
+  if (defIsDropper(grp.def) && isDropMission(state)) {
+    if (contestable.length) return [{ x: contestable[0].x * INCH, y: contestable[0].y * INCH, reason: 'vp' }];
+    return [{ x: ship.x, y: ship.y, reason: 'hold' }];
+  }
+
   const targets = [];
 
   // 1. Nearest uncontrolled or enemy-controlled dropsite
@@ -382,13 +456,37 @@ function findBestTarget(state, gid, si, wi, aiSide) {
       const tship = tgrp.ships[tsi];
       if (tship.destroyed || tship.offTable || tship.attachedTo) continue;
       if (!weaponCanTarget(state, def, ship, w, tgrp.def, tship, tgrp)) continue;
+      const tAtmoDescent = defIsDescent(tgrp.def) && (tship.layer || 'orbit') === 'atmosphere';
       const score = (tgrp.def.pts || 0)
         + (tship.hull < (tship.maxHull || 1) / 2 ? 50 : 0)   // prefer crippled
-        + (defIsDropper(tgrp.def) ? 150 : 0);                // prioritise enemy drop ships to stop landings
+        + (defIsDropper(tgrp.def) ? 150 : 0)                 // prioritise enemy drop ships to stop landings
+        // Corvettes (Air-to-Air, ignore the atmosphere penalty) exist to hunt enemy Descent ships
+        // landing in Atmosphere — make that their overriding target.
+        + (defIsCorvette(def) && tAtmoDescent ? 400 : 0);
       if (score > bestScore) { bestScore = score; best = { gid: targetGid, si: tsi }; }
     }
   }
   return best;
+}
+
+// True if any of this ship's weapons can hit a PRIMARY enemy target (drop carrier or important
+// combat ship) from the current position — i.e. we should fire everything (Weapons Free) at it.
+function hasPrimaryTargetInRange(state, gid, si, aiSide) {
+  const grp = state.groups[gid];
+  const def = grp?.def;
+  const ship = grp?.ships[si];
+  if (!def?.weapons?.length || !ship || ship.destroyed || ship.offTable) return false;
+  const enemySide = aiSide === 'player1' ? 'player2' : 'player1';
+  for (const [, tgrp] of Object.entries(state.groups)) {
+    if (tgrp.def?.side !== enemySide || !defIsPrimaryTarget(tgrp.def)) continue;
+    for (const ts of tgrp.ships) {
+      if (ts.destroyed || ts.offTable || ts.attachedTo) continue;
+      for (const w of def.weapons) {
+        if (weaponCanTarget(state, def, ship, w, tgrp.def, ts, tgrp)) return true;
+      }
+    }
+  }
+  return false;
 }
 
 export function generateActivationOptions(state, aiSide) {
@@ -428,14 +526,22 @@ export function generateActivationOptions(state, aiSide) {
     // right order surfaces: WF to unload all weapons when targets are in range, MT to sprint to
     // a distant objective, DC to repair a damaged ship that can't shoot. (Course Change is kept
     // low — buildActivation injects it for formation/hold/gate parking where it's actually needed.)
-    let hasTargets = false;
+    // Count weapon systems that can actually hit something, and whether any is a Fusillade weapon
+    // (which only gains its bonus Attack dice on Weapons Free). WF is only worth its +2 Spike when
+    // it fires MORE than GQ's half — i.e. 2+ systems in arc/range, or a Fusillade weapon in range.
+    let weaponsInRange = 0, fusilladeInRange = false;
     if (si >= 0 && grp.def?.weapons) {
       for (let wi = 0; wi < grp.def.weapons.length; wi++) {
-        if (findBestTarget(state, gid, si, wi, aiSide)) { hasTargets = true; break; }
+        if (findBestTarget(state, gid, si, wi, aiSide)) {
+          weaponsInRange++;
+          if (/Fusillade/i.test(grp.def.weapons[wi].special || '')) fusilladeInRange = true;
+        }
       }
     }
+    const hasTargets = weaponsInRange > 0;
+    const wfBeneficial = weaponsInRange >= 2 || fusilladeInRange;
     const damaged = grp.ships.some(s => !s.destroyed && !s.offTable && s.hull < (s.maxHull ?? s.hull));
-    let nearest = Infinity;
+    let nearest = Infinity, nearestEnemy = Infinity;
     if (si >= 0) {
       const shipObj = grp.ships[si];
       const enemySide = aiSide === 'player1' ? 'player2' : 'player1';
@@ -447,24 +553,41 @@ export function generateActivationOptions(state, aiSide) {
         if (g.def?.side !== enemySide) continue;
         for (const es of g.ships) {
           if (es.destroyed || es.offTable) continue;
-          nearest = Math.min(nearest, dist2d(shipObj.x, shipObj.y, es.x, es.y));
+          const d = dist2d(shipObj.x, shipObj.y, es.x, es.y);
+          nearest = Math.min(nearest, d);
+          nearestEnemy = Math.min(nearestEnemy, d);
         }
       }
     }
+    // Weapons Free fires ALL weapons (vs GQ's half): always favour it when a PRIMARY target — an
+    // enemy drop carrier or important combat ship — is already in arc and range.
+    const primaryInRange = si >= 0 && hasPrimaryTargetInRange(state, gid, si, aiSide);
     const fullThrustPx = (grp.def?.thrust || 8) * INCH;
     const farAdvance = nearest > fullThrustPx; // more than one full move from anything worth reaching
+    // Max Thrust is risky: no firing, no launching, and it can fling a ship deep into enemy guns.
+    // Only allow it to cross genuinely open space — when even a full 2× Thrust sprint can't put the
+    // ship inside an enemy's likely threat reach next turn (their move + ~18" of weapon range).
+    const mtSafe = farAdvance && nearestEnemy > 2 * fullThrustPx + 18 * INCH;
 
     const rank = {};
     for (const o of validOrders) {
       let r = 0;
       if (o === 'GQ') r = 3;                                              // versatile default
-      else if (o === 'WF') r = hasTargets && !farAdvance ? 4 : 1;         // alpha strike when in range
-      else if (o === 'MT') r = (farAdvance && !hasTargets) ? 3.5 : 0.3;   // sprint when nothing to shoot
+      // Weapons Free only when it actually fires more than GQ (2+ systems in range, or Fusillade);
+      // otherwise it just adds Spike for no extra shots. When beneficial, a primary target makes it
+      // dominant.
+      else if (o === 'WF') r = !wfBeneficial ? 0.1 : (primaryInRange ? 6 : (hasTargets && !farAdvance ? 4 : 1));
+      else if (o === 'MT') r = mtSafe ? 2.5 : 0.1;                        // sprint only across open space
       else if (o === 'DC') r = (damaged && !hasTargets) ? 3.5 : 0.2;      // repair when it can't fight
       else if (o === 'SR') r = 1.2;                                       // shed spikes / sneak
       else if (o === 'CC') r = 0.5;                                       // hold/aim (mostly via override)
-      // Droppers must keep an order that can launch (MT/DC can't), so demote those for them.
-      if ((dropper || gateMother) && NO_LAUNCH_ORDERS.has(o)) r -= 5;
+      // Drop-capable groups prioritise the move+launch order so they actually land battalions;
+      // never let them alpha-strike (WF) or sit on no-launch orders instead of dropping.
+      if (dropper || gateMother) {
+        if (o === 'GQ') r += 4;
+        if (o === 'WF') r -= 3;
+        if (NO_LAUNCH_ORDERS.has(o)) r -= 5;
+      }
       rank[o] = r;
     }
     const orderList = [...validOrders].sort((a, b) => rank[b] - rank[a]);

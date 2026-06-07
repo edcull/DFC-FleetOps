@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { gateRunnerPlan, gateMotherPlan, generateActivationOptions } from '../../src/ai/options.js';
+import { gateRunnerPlan, gateMotherPlan, generateActivationOptions, corvettePlan } from '../../src/ai/options.js';
 import { handlePreGame } from '../../src/ai/handlers/pregame.js';
 import { buildActivation } from '../../src/ai/translator.js';
 import { evaluate } from '../../src/ai/evaluate.js';
@@ -146,9 +146,9 @@ describe('buildActivation — formation discipline', () => {
 describe('generateActivationOptions — order variety', () => {
   const offered = (s) => [...new Set(generateActivationOptions(s, 'player1').filter(o => o.groupId).map(o => o.order))];
 
-  it('offers Weapons Free when a target is in range', () => {
+  it('offers Weapons Free when 2+ weapons are in range (it fires more than GQ)', () => {
     const s = makeState(); s.activeSide = 'player1'; s.scenarioData = { dropsites: [] };
-    addGroup(s, shipDef({ id: 'player1:a', side: 'player1', scan: 10, weapons: [weapon({ arc: 'F', att: 4, lock: '4+' })] }),
+    addGroup(s, shipDef({ id: 'player1:a', side: 'player1', scan: 10, weapons: [weapon({ arc: 'F', att: 4, lock: '4+' }), weapon({ arc: 'F', att: 2, lock: '4+' })] }),
              [shipInstance({ x: 200, y: 200, heading: 0 })]);
     addGroup(s, shipDef({ id: 'player2:b', side: 'player2' }), [shipInstance({ x: 260, y: 200, heading: 180 })]);
     expect(offered(s)).toContain('WF');
@@ -278,6 +278,104 @@ describe('buildActivation — in-network Voidgate movement', () => {
     const sh = s.groups['player1:vg'].ships[0];
     expect(sh.order).toBe('GQ');                 // per-ship order was set
     expect(Math.abs(sh.y - y0)).toBeGreaterThan(5 * 12); // moved a real distance (not frozen)
+  });
+});
+
+describe('gateMotherPlan — Mothership hangs back (survivability)', () => {
+  it('positions the carrier behind the forward gate toward our own edge, not into the front', () => {
+    const s = makeState();
+    s.deployZone = { player1: 'south', player2: 'north' }; // player2 edge at y=0
+    s.scenarioData = { dropsites: [{ id: 'ds1', type: 'small_station', base: { layer: 'Orbit' }, x: 24, y: 30, destroyed: false, battalions: { ground: { player1: 0, player2: 0 } } }] };
+    // Forward gate advanced south (toward the enemy dropsite at y=360px), connected to the carrier.
+    const gate = shipDef({ id: 'player2:vg', side: 'player2', name: 'Voidgate', openNetwork: true, gateship: 2, thrust: 12, weapons: [] });
+    addGroup(s, gate, [Object.assign(shipInstance({ x: 288, y: 300, layer: 'orbit' }), { deployedRound: 1 })]);
+    const mother = shipDef({ id: 'player2:em', side: 'player2', name: 'Emerald Mothership', thrust: 10, launch: [{ name: 'Dropships', n: 4, type: 'gate_dropship' }] });
+    addGroup(s, mother, [shipInstance({ x: 288, y: 280, layer: 'orbit' })]);
+
+    const plan = gateMotherPlan(s, 'player2:em', 'player2');
+    expect(plan).toBeTruthy();
+    expect(plan.launch).toBeUndefined();        // no drop live yet → reposition
+    expect(plan.y).toBeLessThan(300);           // BACK toward our edge (north), not into the front
+    expect(plan.y).toBeCloseTo(300 - 15 * 12, -1); // ~15" behind the forward gate
+  });
+});
+
+describe('UCM tactical rules — droppers, Max Thrust, corvettes', () => {
+  const ordersOf = (s) => [...new Set(generateActivationOptions(s, 'player1').filter(o => o.groupId).map(o => o.order))];
+
+  it('drop-capable ships only target dropsites (never chase enemies) on a scoring mission', () => {
+    const s = makeState(); s.activeSide = 'player1'; s.scenario = { objective: 'standard' };
+    s.scenarioData = { dropsites: [{ id: 'ds1', type: 'small_station', base: { layer: 'Orbit' }, x: 24, y: 18, destroyed: false, battalions: { ground: { player1: 0, player2: 0 } } }] };
+    addGroup(s, shipDef({ id: 'player1:tp', side: 'player1', name: 'Troopship', role: 'Troopship', thrust: 8,
+      launch: [{ name: 'Bulk Landers', n: 4, type: 'bulk_lander' }], weapons: [weapon({ arc: 'F/S', att: 4, lock: '4+' })] }),
+      [shipInstance({ x: 288, y: 240, heading: -90 })]);
+    addGroup(s, shipDef({ id: 'player2:e', side: 'player2' }), [shipInstance({ x: 300, y: 250 })]); // enemy right next to it
+    const opts = generateActivationOptions(s, 'player1').filter(o => o.groupId);
+    expect(opts.every(o => o.movePlan?.reason === 'vp')).toBe(true);   // dropsite only, no 'kill'
+    expect(ordersOf(s)).toContain('GQ');                               // move+launch order
+    expect(ordersOf(s)).not.toContain('WF');                          // not alpha-striking instead of dropping
+    expect(opts.some(o => o.launchPlan)).toBe(true);                  // a drop plan is attached
+  });
+
+  it('avoids Max Thrust near the enemy but allows it across open space', () => {
+    const near = makeState(); near.activeSide = 'player1'; near.scenario = { objective: 'standard' }; near.scenarioData = { dropsites: [] };
+    addGroup(near, shipDef({ id: 'player1:a', side: 'player1', thrust: 10, weapons: [weapon({ arc: 'F' })] }), [shipInstance({ x: 200, y: 200, heading: 0 })]);
+    addGroup(near, shipDef({ id: 'player2:b', side: 'player2' }), [shipInstance({ x: 340, y: 200 })]); // ~12" away
+    expect(ordersOf(near)).not.toContain('MT');
+
+    const open = makeState(); open.activeSide = 'player1'; open.scenario = { objective: 'standard' };
+    open.scenarioData = { dropsites: [{ id: 'ds1', base: {}, x: 46, y: 46, destroyed: false, battalions: {} }] };
+    addGroup(open, shipDef({ id: 'player1:a', side: 'player1', thrust: 8, weapons: [weapon({ arc: 'F' })] }), [shipInstance({ x: 30, y: 30, heading: 45 })]);
+    addGroup(open, shipDef({ id: 'player2:b', side: 'player2' }), [shipInstance({ x: 560, y: 560 })]); // far away
+    expect(ordersOf(open)).toContain('MT');
+  });
+
+  function combatVsCarrier(weapons) {
+    const s = makeState(); s.activeSide = 'player1'; s.scenario = { objective: 'standard' }; s.scenarioData = { dropsites: [] };
+    addGroup(s, shipDef({ id: 'player1:a', side: 'player1', scan: 12, weapons }), [shipInstance({ x: 200, y: 200, heading: 0 })]);
+    addGroup(s, shipDef({ id: 'player2:carrier', side: 'player2', name: 'Troopship', pts: 100, launch: [{ type: 'bulk_lander', n: 4 }] }),
+      [Object.assign(shipInstance({ x: 250, y: 200 }), { maxHull: 10, hull: 10 })]);
+    return s;
+  }
+
+  it('uses Weapons Free on a primary target when 2+ weapons are in range', () => {
+    const s = combatVsCarrier([weapon({ arc: 'F', att: 4, lock: '3+' }), weapon({ arc: 'F', att: 2, lock: '4+' })]);
+    expect(generateActivationOptions(s, 'player1').filter(o => o.groupId)[0].order).toBe('WF');
+  });
+
+  it('uses Weapons Free with a single Fusillade weapon (bonus dice only on WF)', () => {
+    const s = combatVsCarrier([weapon({ arc: 'F', att: 4, lock: '3+', special: 'Fusillade-2' })]);
+    expect(generateActivationOptions(s, 'player1').filter(o => o.groupId)[0].order).toBe('WF');
+  });
+
+  it('does NOT use Weapons Free with only one non-Fusillade weapon (no benefit, just Spike)', () => {
+    const s = combatVsCarrier([weapon({ arc: 'F', att: 4, lock: '3+' })]);
+    const orders = [...new Set(generateActivationOptions(s, 'player1').filter(o => o.groupId).map(o => o.order))];
+    expect(orders).not.toContain('WF');
+  });
+
+  it('a dropper with an enemy in range still drops (GQ) rather than alpha-striking', () => {
+    const s = makeState(); s.activeSide = 'player1'; s.scenario = { objective: 'standard' };
+    s.scenarioData = { dropsites: [{ id: 'ds1', type: 'small_station', base: { layer: 'Orbit' }, x: 24, y: 18, destroyed: false, battalions: { ground: { player1: 0, player2: 0 } } }] };
+    addGroup(s, shipDef({ id: 'player1:tp', side: 'player1', name: 'Troopship', role: 'Troopship', scan: 12, thrust: 8,
+      launch: [{ type: 'bulk_lander', n: 4 }], weapons: [weapon({ arc: 'F/S', att: 4, lock: '4+' })] }), [shipInstance({ x: 288, y: 240, heading: -90 })]);
+    addGroup(s, shipDef({ id: 'player2:carrier', side: 'player2', pts: 100, launch: [{ type: 'bulk_lander', n: 4 }] }), [shipInstance({ x: 288, y: 250 })]);
+    const orders = [...new Set(generateActivationOptions(s, 'player1').filter(o => o.groupId).map(o => o.order))];
+    expect(orders).toContain('GQ');
+    expect(orders).not.toContain('WF'); // dropping takes priority over firing for our own carriers
+  });
+
+  it('corvettes dive into Atmosphere onto the nearest enemy Descent ship', () => {
+    const s = makeState(); s.activeSide = 'player1'; s.scenario = { objective: 'standard' };
+    s.scenarioData = { dropsites: [{ id: 'ds1', type: 'large_city', base: { layer: 'Atmosphere' }, x: 24, y: 24, destroyed: false, battalions: {} }] };
+    addGroup(s, shipDef({ id: 'player1:cv', side: 'player1', name: 'Corvette', role: 'Corvette', special: 'Descent', thrust: 14, weapons: [weapon({ arc: 'F/S/R', special: 'Air to Air' })] }),
+      [shipInstance({ x: 288, y: 200, heading: 90, layer: 'orbit' })]);
+    addGroup(s, shipDef({ id: 'player2:sc', side: 'player2', name: 'Strike Carrier', role: 'Strike Carrier', special: 'Descent' }),
+      [Object.assign(shipInstance({ x: 288, y: 288 }), { layer: 'atmosphere' })]);
+    const plan = corvettePlan(s, 'player1:cv', 'player1');
+    expect(plan).toBeTruthy();
+    expect(plan.toggle).toBe(true);          // descends to Atmosphere
+    expect(plan.y).toBeCloseTo(288, -1);     // toward the enemy Descent ship
   });
 });
 
