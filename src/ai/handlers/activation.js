@@ -121,6 +121,21 @@ export async function handleActivation(state, rng, aiSide, personality, applyFn,
     // Eligible reserve groups with live ships: leave them — LLM or heuristic chooses which to arrive.
   }
 
+  // Finish any group that already ACTED this round (moved/fired/launched) but couldn't finish its
+  // activation because its attack was still mid-resolution. In AI-vs-AI the defender drives the
+  // save step, so the attacker's buildActivation hits an open attackModal and finishActivation
+  // fails — leaving the group un-activated. Without this it gets re-picked and RE-FIRES every cycle
+  // (one Topaz Frigate fired its weapon 12 times in a single round). Now the modal is closed (the
+  // defender resolved the save), so finish it instead of activating it again.
+  if (!state.attackModal) {
+    for (const [gid, grp] of Object.entries(state.groups)) {
+      if (grp.def?.side !== aiSide || grp.activated) continue;
+      const acted = grp.ships.some(s => !s.destroyed &&
+        (s.movedThisRound || s.firedThisActivation || (s.launchedThisRound > 0)));
+      if (acted && applyFn({ type: 'finishActivation', gid })) return;
+    }
+  }
+
   // Drop sequencing: position Voidgates FIRST so a connected Mothership can channel a drop the
   // same round; then activate any Mothership whose gate is already parked to drop NOW. Gates are
   // weaponless positioning ships, so front-loading them costs no combat tempo, and it's the only

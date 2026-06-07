@@ -43,13 +43,14 @@ function formationOK(pts, cohPx, need) {
   return true;
 }
 
-// N distinct target slots packed around (cx,cy), each ~one base diameter apart, so the
-// group's ships aim at *different* points. Aiming them all at one spot makes them pile up,
-// and the engine resolves the overlap by shoving ships back along their shared path — the
-// "conga line". Concentric rings keep every slot at least a base diameter from the others.
+// N distinct target slots packed around (cx,cy) so the group's ships aim at *different* points.
+// Aiming them all at one spot makes them pile up, and the engine resolves the overlap by shoving
+// ships back along their shared path — the "conga line". Slots are spaced a full base diameter
+// PLUS ~0.6" apart so that even after each ship's move is clamped short of its slot they still
+// don't overlap (a base-contact gap alone left them packed into a line).
 function packSlots(cx, cy, n, diamPx) {
   const slots = [{ x: cx, y: cy }];
-  const spacing = diamPx + 2;
+  const spacing = diamPx + 0.6 * INCH;
   for (let ring = 1; slots.length < n; ring++) {
     const rad = spacing * ring;
     const count = Math.max(1, Math.floor((2 * Math.PI * rad) / spacing));

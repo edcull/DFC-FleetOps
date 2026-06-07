@@ -62,9 +62,11 @@ export function placeNonOverlap(anchorX, anchorY, placed, diamPx, zone) {
   const cY = v => Math.max(m, Math.min(BOARD_PX - m, v));
   // In-zone exactly as the game judges it: the ship's centre must satisfy isInZone.
   const inZone = (x, y) => !zone || isInZone(x / INCH, y / INCH, zone);
-  // Need centre-distance ≥ rNew + neighbour radius (+1px slack past the engine's overlap
-  // test). Fall back to rNew for legacy callers that pass bare {x,y} (same-size assumption).
-  const clear = (x, y) => placed.every(p => Math.hypot(x - p.x, y - p.y) >= rNew + (p.r ?? rNew) + 1) && inZone(x, y);
+  // Need centre-distance ≥ rNew + neighbour radius + a ~0.8" breathing gap (not just base
+  // contact). Spreading ships out at deployment/arrival means that when they later advance their
+  // destinations aren't blocked by group-mates, so the engine doesn't shove them back into a
+  // "conga line". Fall back to rNew for legacy callers that pass bare {x,y} (same-size assumption).
+  const clear = (x, y) => placed.every(p => Math.hypot(x - p.x, y - p.y) >= rNew + (p.r ?? rNew) + 0.8 * INCH) && inZone(x, y);
   const ax = cX(anchorX), ay = cY(anchorY);
   if (clear(ax, ay)) return { x: ax, y: ay };
   // Grid-search the NEAREST clear, in-zone spot to the anchor. A dense grid (rather than
@@ -565,9 +567,10 @@ export function generateActivationOptions(state, aiSide) {
     const fullThrustPx = (grp.def?.thrust || 8) * INCH;
     const farAdvance = nearest > fullThrustPx; // more than one full move from anything worth reaching
     // Max Thrust is risky: no firing, no launching, and it can fling a ship deep into enemy guns.
-    // Only allow it to cross genuinely open space — when even a full 2× Thrust sprint can't put the
-    // ship inside an enemy's likely threat reach next turn (their move + ~18" of weapon range).
-    const mtSafe = farAdvance && nearestEnemy > 2 * fullThrustPx + 18 * INCH;
+    // Only allow it across genuinely open space — when even a full 2× Thrust sprint leaves the ship
+    // beyond an enemy's reach next turn (their move ~16" + ~14" weapon range ≈ 30"). The Johannesburg
+    // MT'd 16" straight into frigate range on round 1 and was destroyed; this prevents that.
+    const mtSafe = farAdvance && (nearestEnemy - 2 * fullThrustPx) > 30 * INCH;
 
     const rank = {};
     for (const o of validOrders) {
