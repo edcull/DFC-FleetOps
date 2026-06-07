@@ -560,6 +560,18 @@ export function isLegal(state, intent, side) {
         return Object.keys(ship.weaponTargets).length > 0;
       });
     }
+    case 'setMassDriverVolley': {
+      // UCM Mass Driver Volley (2 AP): only with an open group attack you own, before any hits
+      // are rolled, when the firing Group mounts a Mass Driver and you have ≥2 AP, once per attack.
+      const M = state.attackModal;
+      if (!M || !M.attackerGid || M.massDriverVolley) return false;
+      if ((M.resolvedShots && M.resolvedShots.length) || M.hitResult) return false;
+      const def = getDef(state, M.attackerGid);
+      if (!def || def.side !== side) return false;
+      if (state.phase !== 'play') return false;
+      if (!(def.weapons || []).some(w => /Mass Driver/i.test(w.name || ''))) return false;
+      return !!state.planning && (state.planning.ap[def.side] || 0) >= 2;
+    }
     case 'advanceRound':
       return state.phase === 'play';
 

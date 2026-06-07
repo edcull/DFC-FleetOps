@@ -135,6 +135,42 @@ function moveGroupCoherent(state, rng, gid, movers, tx, ty, applyFn, toggle = fa
   }
 }
 
+// Mass-Driver "shot" score for a Group: total Attack dice from Mass Driver weapons on its live
+// on-table ships, ranked so 6400-series outweighs 4200-series outweighs any other Mass Driver
+// (2200/9000 etc.) — a lexicographic score (6400, 4200, other).
+function massDriverScore(state, gid) {
+  const grp = state.groups[gid];
+  const def = grp?.def;
+  if (!def?.weapons) return 0;
+  let s6400 = 0, s4200 = 0, sOther = 0;
+  for (const sh of grp.ships) {
+    if (sh.destroyed || sh.offTable) continue;
+    for (const w of def.weapons) {
+      if (!/Mass Driver/i.test(w.name || '')) continue;
+      const att = w.att || 0;
+      if (/6400/.test(w.name)) s6400 += att;
+      else if (/4200/.test(w.name)) s4200 += att;
+      else sOther += att;
+    }
+  }
+  return s6400 * 1e6 + s4200 * 1e3 + sOther;
+}
+
+// Use Mass Driver Volley on `gid` only when the side can afford it (≥2 AP) and no other
+// still-unactivated friendly Group has a higher Mass Driver score — so the AI saves its AP for
+// its strongest volley instead of spending it on the first Mass Driver group that fires.
+function shouldUseMassDriverVolley(state, gid, aiSide) {
+  if (!state.planning || (state.planning.ap?.[aiSide] || 0) < 2) return false;
+  const myScore = massDriverScore(state, gid);
+  if (myScore <= 0) return false;
+  for (const [ogid, g] of Object.entries(state.groups)) {
+    if (ogid === gid || g.def?.side !== aiSide || g.activated) continue;
+    if (!g.ships.some(s => !s.destroyed && !s.offTable)) continue;
+    if (massDriverScore(state, ogid) > myScore) return false; // a better volley is still to come
+  }
+  return true;
+}
+
 // Find the best dropsite to bombard: enemy/contested DS with most battalions,
 // within scan range of the firing ship (arc checked by gating).
 function findBestBombardmentTarget(state, aiSide, ship, scan) {
@@ -393,6 +429,14 @@ export function buildActivation(state, rng, gid, order, movePlan, aiSide, applyF
       }
     }
     if (applyFn({ type: 'fireWeapons', gid })) {
+      // UCM Mass Driver Volley: spend 2 AP for Lock +1 on this Group's Mass Drivers, but only on
+      // the Group with the most Mass Driver shots (6400s prioritised over 4200s) so the AI reserves
+      // its AP for its best volley rather than burning it on the first Mass Driver group it fires.
+      const M = state.attackModal;
+      if (M && M.shots?.some(sh => /Mass Driver/i.test(sh.w?.name || ''))
+          && shouldUseMassDriverVolley(state, gid, aiSide)) {
+        applyFn({ type: 'setMassDriverVolley' });
+      }
       resolveAttackModal(state, rng, applyFn);
     }
   }

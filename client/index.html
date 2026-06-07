@@ -5085,6 +5085,21 @@ function renderAttackModal() {
   const isAttacker = !_netSide || _netSide === aDef.side;
   const isDefender = !_netSide || _netSide !== aDef.side;
 
+  // UCM Mass Driver Volley (2 AP): Lock +1 for the firing Group's Mass Drivers. Offered before any
+  // hits are rolled, when the attacker owns a ship Group that mounts a Mass Driver weapon.
+  let mdvHtml = '';
+  if (!M.bomber && M.attackerGid && (aDef.weapons || []).some(w => /Mass Driver/i.test(w.name || ''))) {
+    if (M.massDriverVolley) {
+      mdvHtml = `<div class="am-line" style="margin-top:8px;color:var(--ucm);font-size:10px;">⚡ Mass Driver Volley active — Mass Drivers fire at Lock +1.</div>`;
+    } else if ((M.resolvedShots?.length || 0) === 0 && !M.hitResult) {
+      const ap = (state.planning?.ap?.[aDef.side]) || 0;
+      const can = isAttacker && ap >= 2;
+      const dis = can ? '' : ' disabled';
+      const op  = can ? '' : ' style="opacity:0.5;"';
+      mdvHtml = `<label class="am-toggle" style="margin-top:8px;color:var(--ucm)"${op}><input type="checkbox" data-am-mdv="1"${dis}/> Mass Driver Volley — Lock +1 for Mass Drivers this attack (2 AP${ap < 2 ? ' — need 2' : ''})</label>`;
+    }
+  }
+
   let body = '';
   let footer = '';
 
@@ -5116,6 +5131,7 @@ function renderAttackModal() {
         </button>`;
       }
     });
+    body += mdvHtml;
     footer = isAttacker ? `<button class="btn" data-am-cancel="1">Abort</button>` : '';
   }
 
@@ -5229,6 +5245,7 @@ function renderAttackModal() {
         });
       }
     }
+    body += mdvHtml;
     if (fromSelect) {
       footer = isAttacker ? `<button class="btn" data-am-back="1">◁ Back</button>
         <button class="btn-primary ${sideClass==='shal'?'shal':''}" data-am-next="hit">Roll to Hit ▸</button>` : '';
@@ -5546,6 +5563,8 @@ function renderAttackModal() {
   overlay.querySelectorAll('[data-overcharge]').forEach(cb => {
     cb.addEventListener('change', () => dispatch({ type: 'attackDeclare', what: 'overcharge', wi: cb.dataset.overcharge, value: cb.checked }));
   });
+  const mdvCb = overlay.querySelector('[data-am-mdv]');
+  if (mdvCb) mdvCb.addEventListener('change', () => dispatch({ type: 'setMassDriverVolley' }));
   overlay.querySelectorAll('[data-escort]').forEach(btn => {
     btn.addEventListener('click', () => dispatch({ type: 'attackDeclare', what: 'escort', idx: parseInt(btn.dataset.escort) }));
   });

@@ -226,6 +226,40 @@ describe('evaluate — secondary objective nudge', () => {
   });
 });
 
+describe('AI — Mass Driver Volley usage', () => {
+  // Two UCM Mass Driver groups + an enemy in range; player1 has exactly 2 AP for one volley.
+  function mdState() {
+    const s = makeState();
+    s.activeSide = 'player1';
+    s.scenarioData = { dropsites: [] };
+    s.planning = { ap: { player1: 2, player2: 0 } };
+    const md = (name, lock, special) => weapon({ name, arc: 'F/S', att: 4, lock, dmg: 1, type: 'K', special });
+    addGroup(s, shipDef({ id: 'player1:big', side: 'player1', faction: 'ucm', scan: 12,
+                          weapons: [md('UF-6400 Mass Driver Turrets', '3+', 'Critical-1')] }),
+             [shipInstance({ x: 200, y: 200, heading: 0 })]);
+    addGroup(s, shipDef({ id: 'player1:small', side: 'player1', faction: 'ucm', scan: 12,
+                          weapons: [md('UF-4200 Mass Driver Turrets', '4+', 'Fusillade-2')] }),
+             [shipInstance({ x: 200, y: 300, heading: 0 })]);
+    addGroup(s, shipDef({ id: 'player2:tgt', side: 'player2', hull: 30 }),
+             [Object.assign(shipInstance({ x: 260, y: 200 }), { maxHull: 30, hull: 30 }),
+              Object.assign(shipInstance({ x: 260, y: 300 }), { maxHull: 30, hull: 30 })]);
+    return s;
+  }
+  const ap = (s) => (i) => { if (!isLegal(s, i, 'player1')) return false; apply(s, i, fixedRng(2)); return true; };
+
+  it('spends 2 AP on the strongest Mass Driver group (6400 over 4200)', () => {
+    const s = mdState();
+    buildActivation(s, fixedRng(2), 'player1:big', 'WF', null, 'player1', ap(s));
+    expect(s.planning.ap.player1).toBe(0); // volley used on the 6400 group
+  });
+
+  it('reserves AP rather than spending it on the weaker 4200 group while the 6400 group can still fire', () => {
+    const s = mdState();
+    buildActivation(s, fixedRng(2), 'player1:small', 'WF', null, 'player1', ap(s));
+    expect(s.planning.ap.player1).toBe(2); // held for the better volley
+  });
+});
+
 describe('evaluate — personality weighting', () => {
   // State where we wiped half the opponent while staying at full hull.
   function killState() {
