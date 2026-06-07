@@ -8589,6 +8589,86 @@ function _setSetupMtab(t) {
     .forEach(b => b.classList.toggle('active', b.dataset.mtab === t));
 }
 
+// AI-vs-AI in-room setup: render one side's AI fleet column (mirrors the single-player AI
+// controls). Returns the pane's inner HTML for `slot` ('f1'/'f2'); wired by wireAiVsColumn.
+function aiVsColumnHtml(slot) {
+  const C = _aiVsCfg[slot];
+  const side = slot === 'f1' ? 'player1' : 'player2';
+  const ready = !!(state.setupReady && state.setupReady[side]);
+  const color = slot === 'f1' ? 'var(--hull-crit)' : 'var(--shal)';
+  const title = slot === 'f1' ? '🤖 AI-RED' : '🤖 AI-BLUE';
+  const lbl = 'font-size:9px;letter-spacing:0.08em;color:var(--text-mute);font-family:var(--mono);margin:6px 0 3px;';
+  const secOpts = (val) => `<option value="random" ${val === 'random' || !val ? 'selected' : ''}>— Random —</option>` +
+    Object.entries(SECONDARY_OBJECTIVES).filter(([, v]) => !v.nominate).map(([k, v]) => `<option value="${k}" ${val === k ? 'selected' : ''}>${v.name}</option>`).join('');
+  const persOpts = ['random', 'balanced', 'aggressive', 'positional', 'defensive', 'opportunist']
+    .map(k => `<option value="${k}" ${C.personality === k ? 'selected' : ''}>${k === 'random' ? 'Random' : k[0].toUpperCase() + k.slice(1)}</option>`).join('');
+  const factionOpts = (sel, withRandom) => (withRandom
+        ? `<option value="random" ${sel === 'random' || !sel ? 'selected' : ''}>🎲 Random</option>`
+        : `<option value="" ${!sel ? 'selected' : ''}>— select faction —</option>`) +
+    Object.keys(FACTIONS).map(fk => `<option value="${fk}" ${sel === fk ? 'selected' : ''}>${FACTIONS[fk].name}</option>`).join('');
+  const llmToggle = (currentUser?.aiAccess || currentUser?.role === 'admin')
+    ? `<label style="display:flex;align-items:center;gap:6px;margin-top:6px;cursor:pointer;"><input type="checkbox" id="aivs-llm-${slot}" ${C.useLlm ? 'checked' : ''} style="accent-color:var(--accent,#4ad6ff);"><span style="font-size:9px;color:var(--text-mute);">LLM AI</span></label>`
+    : '';
+  const secPickers = `<div style="${lbl}">SECONDARY 1</div><select class="fleet-dropdown" id="aivs-sec0-${slot}" style="font-size:10px;">${secOpts(C.sec1)}</select>
+    <div style="${lbl}">SECONDARY 2</div><select class="fleet-dropdown" id="aivs-sec1-${slot}" style="font-size:10px;">${secOpts(C.sec2)}</select>`;
+  const persSelect = `<div style="${lbl}">PERSONALITY</div><select class="fleet-dropdown" id="aivs-personality-${slot}" style="font-size:10px;">${persOpts}</select>`;
+  const viewBtn = state.importedFleets?.[slot]
+    ? `<button class="btn" data-view-fleet="${slot}" style="width:100%;margin-top:5px;font-size:10px;">👁 VIEW FLEET (${_fleetTotalPts(state.importedFleets[slot])} pts)</button>` : '';
+  const modeDropdown = `<div style="${lbl}">FLEET SOURCE</div><select class="fleet-dropdown" id="aivs-mode-${slot}" style="font-size:10px;margin-bottom:4px;">
+    <option value="fastplay" ${C.mode === 'fastplay' ? 'selected' : ''}>Fastplay</option>
+    <option value="generate" ${C.mode === 'generate' ? 'selected' : ''}>Generate</option>
+    <option value="import" ${C.mode === 'import' ? 'selected' : ''}>Import</option></select>`;
+  let modeControls;
+  if (C.mode === 'fastplay') {
+    modeControls = `<div style="${lbl}">AI FACTION</div><select class="fleet-dropdown" data-fleet-choice="${slot}" style="font-size:10px;">${factionOpts(state.fleetChoices[slot], false)}</select>${secPickers}${persSelect}${llmToggle}${viewBtn}`;
+  } else if (C.mode === 'generate') {
+    modeControls = `<div style="${lbl}">AI FACTION</div><select class="fleet-dropdown" id="aivs-gen-faction-${slot}" style="font-size:10px;">${factionOpts(C.genFaction, true)}</select>${secPickers}
+      <div style="${lbl}">FLEET POINTS</div><input id="aivs-pts-${slot}" type="number" min="500" max="5000" step="50" value="${C.targetPts}" class="fleet-dropdown" style="font-family:var(--mono);font-size:10px;"/>${persSelect}${llmToggle}
+      <button class="btn${C.fleetBuilt ? '' : '-primary'}" id="aivs-generate-${slot}" style="width:100%;margin-top:8px;font-size:10px;">${C.fleetBuilt ? '✓ Fleet Generated' : '⚙ Generate Fleet'}</button>${C.fleetBuilt ? viewBtn : ''}`;
+  } else {
+    modeControls = `<div style="${lbl}">AI FACTION</div><select class="fleet-dropdown" disabled style="font-size:10px;"><option>${C.importFaction ? (FACTIONS[C.importFaction]?.name || C.importFaction) : '— import list first —'}</option></select>${secPickers}${persSelect}${llmToggle}
+      <button class="btn" id="aivs-import-${slot}" style="width:100%;margin-top:8px;font-size:10px;">${C.importFaction ? '✏ Edit Import' : '≡ Import List'}</button>${C.importFaction ? viewBtn : ''}`;
+  }
+  return `<div class="faction-lbl" style="color:${color}">${title}${ready ? ' <span style="color:var(--hull-good);font-size:9px;">✓ READY</span>' : ''}</div>${modeDropdown}${modeControls}`;
+}
+
+// Build both AI fleets from their setup configs, then start the AI-vs-AI game and switch to the
+// spectator view. All over REST so there's no WebSocket race when the page navigates.
+async function beginAiVsAi(btn) {
+  const scen = state.scenario || {};
+  if (['deployment', 'approach', 'layout', 'objective'].some(k => !scen[k])) { flashLaunchMsg('Select all scenario options first'); return; }
+  btn.disabled = true;
+  const pickPers = () => ['balanced', 'aggressive', 'positional', 'defensive', 'opportunist'][Math.floor(Math.random() * 5)];
+  const post = (path, body) => fetch(`/api/rooms/${_netRoom}/${path}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(r => r.json());
+  try {
+    for (const slot of ['f1', 'f2']) {
+      const C = _aiVsCfg[slot];
+      const label = slot === 'f1' ? 'AI-Red' : 'AI-Blue';
+      const pers = C.personality === 'random' ? pickPers() : C.personality;
+      const secVals = [C.sec1, C.sec2].filter(s => s && s !== 'random');
+      if (C.mode === 'import') {
+        if (!C.importFaction) throw new Error(`${label}: import a fleet list first`);
+        await post('configure-ai', { slot, personality: pers, useLlm: C.useLlm, secondaries: secVals });
+      } else if (C.mode === 'generate' && C.fleetBuilt) {
+        await post('configure-ai', { slot, personality: pers, useLlm: C.useLlm, secondaries: secVals });
+      } else {
+        if (C.mode === 'fastplay' && !state.fleetChoices[slot]) throw new Error(`${label}: select a faction first`);
+        const body = { slot, mode: C.mode, personality: pers, useLlm: C.useLlm, secondaries: secVals };
+        if (C.mode === 'fastplay') body.faction = state.fleetChoices[slot];
+        else { body.faction = C.genFaction || 'random'; body.targetPts = C.targetPts; }
+        const data = await post('build-ai', body);
+        if (!data.ok) throw new Error(data.error || `${label}: build failed`);
+      }
+    }
+    const started = await post('start-aivsai', {});
+    if (!started.ok) throw new Error(started.error || 'Could not start the game');
+    _showSpectatorLoading(true);
+    location.href = `${location.pathname}?room=${_netRoom}&side=spectator&ai=1`;
+  } catch (e) {
+    flashLaunchMsg(e.message || 'Error'); btn.disabled = false;
+  }
+}
+
 function renderSetupOverlay() {
   const board = document.querySelector('.board-wrap');
   let overlay = document.getElementById('setup-overlay');
@@ -8837,7 +8917,7 @@ function renderSetupOverlay() {
           <button data-mtab="scen" class="${_setupMtab==='scen'?'active':''}">Scenario</button>
         </div>
         <div class="faction-select">
-          <div class="faction-slot setup-pane" data-pane="p1">
+          <div class="faction-slot setup-pane" data-pane="p1">${state.aiVsAi ? aiVsColumnHtml('f1') : `
             <div class="faction-lbl" style="color:var(--ucm)">${_netSide === 'player1' ? '▶ YOUR NAME' : _netSide === 'player2' ? 'Opponent' : 'Player 1'}${p1Ready ? ' <span style="color:var(--hull-good);font-size:9px;">✓ READY</span>' : ''}</div>
             <input class="fleet-dropdown" type="text" data-player-name="f1" value="${state.playerNames ? state.playerNames.f1 : 'Player 1'}" placeholder="Player 1 name" style="margin-bottom:8px;font-size:10px;" ${f1Lock ? 'disabled' : ''}>
             <div style="font-size:9px;letter-spacing:0.08em;color:var(--text-mute);font-family:var(--mono);margin:6px 0 3px;">FLEET</div>
@@ -8859,8 +8939,8 @@ function renderSetupOverlay() {
               </select>` : ''}
             <button class="btn" data-import-fleet="f1" style="width:100%;margin-top:5px;font-size:10px;" ${f1Lock ? 'disabled' : ''}>${state.importedFleets&&state.importedFleets.f1 ? '✏ EDIT IMPORT' : '≡ IMPORT LIST'}</button>
             ${state.fleetChoices?.f1 ? `<button class="btn${fleetAssignmentsReady('f1')?'':' btn-primary'}" data-view-fleet="f1" style="width:100%;margin-top:3px;font-size:10px;" ${f1ViewLock ? 'disabled' : ''}>${fleetAssignmentsReady('f1')?'👁':'⚠'} ${state.importedFleets?.f1||(fleetHasPayloads(state.fleetChoices.f1)&&!state.importedFleets?.f1)?'SETUP / ':''}VIEW FLEET${state.importedFleets&&state.importedFleets.f1?' ('+_fleetTotalPts(state.importedFleets.f1)+' pts)':''}</button>` : ''}
-          </div>
-          <div class="faction-slot setup-pane" data-pane="p2">
+          `}</div>
+          <div class="faction-slot setup-pane" data-pane="p2">${state.aiVsAi ? aiVsColumnHtml('f2') : `
             <div class="faction-lbl" style="color:var(--shal)">${state.aiOpponent ? '🤖 AI OPPONENT' : (_netSide === 'player2' ? '▶ YOUR NAME' : _netSide === 'player1' ? 'Opponent' : 'Player 2')}${p2Ready ? ' <span style="color:var(--hull-good);font-size:9px;">✓ READY</span>' : ''}</div>
             ${state.aiOpponent ? (() => {
               const lbl = `font-size:9px;letter-spacing:0.08em;color:var(--text-mute);font-family:var(--mono);margin:6px 0 3px;`;
@@ -8949,7 +9029,7 @@ function renderSetupOverlay() {
               </select>` : ''}
             ${!state.aiOpponent ? `<button class="btn" data-import-fleet="f2" style="width:100%;margin-top:5px;font-size:10px;" ${f2Lock ? 'disabled' : ''}>${state.importedFleets&&state.importedFleets.f2 ? '✏ EDIT IMPORT' : '≡ IMPORT LIST'}</button>` : ''}
             ${state.fleetChoices?.f2 && !state.aiOpponent ? `<button class="btn${fleetAssignmentsReady('f2')?'':' btn-primary'}" data-view-fleet="f2" style="width:100%;margin-top:3px;font-size:10px;" ${f2ViewLock ? 'disabled' : ''}>${fleetAssignmentsReady('f2')?'👁':'⚠'} ${state.importedFleets?.f2||(fleetHasPayloads(state.fleetChoices.f2)&&!state.importedFleets?.f2)?'SETUP / ':''}VIEW FLEET${state.importedFleets&&state.importedFleets.f2?' ('+_fleetTotalPts(state.importedFleets.f2)+' pts)':''}</button>` : ''}
-          </div>
+          `}</div>
         </div>
         <div class="setup-pane" data-pane="scen">
         <div style="font-size:9px;color:var(--text-mute);margin:-4px 0 10px;text-align:center;">Red and Blue deployment sides are assigned randomly when you confirm.</div>
@@ -8979,6 +9059,10 @@ function renderSetupOverlay() {
       <div class="setup-footer">
         <button class="btn" id="exit-to-menu">← Back</button>
         ${(() => {
+          if (state.aiVsAi) {
+            // AI-vs-AI: one button builds both AI fleets and starts the battle (then spectate).
+            return `<button class="btn-primary" id="aivs-begin" ${scenarioComplete ? '' : 'disabled'}>▶ BEGIN AI vs AI</button>`;
+          }
           if (!_netSide) {
             // Hotseat: single button confirms both sides at once.
             if (p1Ready && p2Ready) {
@@ -9422,6 +9506,37 @@ function renderSetupOverlay() {
         renderSetupOverlay();
       });
     });
+  }
+
+  // AI-vs-AI in-room setup: wire both AI columns + the single BEGIN button.
+  if (state.aiVsAi) {
+    for (const slot of ['f1', 'f2']) {
+      const C = _aiVsCfg[slot];
+      overlay.querySelector(`#aivs-mode-${slot}`)?.addEventListener('change', e => { C.mode = e.target.value; C.fleetBuilt = false; renderSetupOverlay(); });
+      overlay.querySelector(`#aivs-gen-faction-${slot}`)?.addEventListener('change', e => { C.genFaction = e.target.value; C.fleetBuilt = false; });
+      overlay.querySelector(`#aivs-pts-${slot}`)?.addEventListener('input', e => { C.targetPts = parseInt(e.target.value, 10) || 1000; C.fleetBuilt = false; });
+      overlay.querySelector(`#aivs-sec0-${slot}`)?.addEventListener('change', e => { C.sec1 = e.target.value; });
+      overlay.querySelector(`#aivs-sec1-${slot}`)?.addEventListener('change', e => { C.sec2 = e.target.value; });
+      overlay.querySelector(`#aivs-personality-${slot}`)?.addEventListener('change', e => { C.personality = e.target.value; });
+      overlay.querySelector(`#aivs-llm-${slot}`)?.addEventListener('change', e => { C.useLlm = e.target.checked; });
+      overlay.querySelector(`#aivs-generate-${slot}`)?.addEventListener('click', async () => {
+        const gb = overlay.querySelector(`#aivs-generate-${slot}`); gb.disabled = true; gb.textContent = '…';
+        try {
+          const res = await fetch(`/api/rooms/${_netRoom}/build-ai`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ slot, mode: 'generate', faction: C.genFaction || 'random', targetPts: C.targetPts,
+              personality: C.personality === 'random' ? null : C.personality, secondaries: [C.sec1, C.sec2].filter(s => s && s !== 'random') }) });
+          const data = await res.json();
+          if (!data.ok) { flashLaunchMsg(data.error || 'Build failed'); }
+          else { C.fleetBuilt = true; if (data.secondaries?.[0]) C.sec1 = data.secondaries[0]; if (data.secondaries?.[1]) C.sec2 = data.secondaries[1]; renderSetupOverlay(); }
+        } catch { flashLaunchMsg('Could not reach server'); }
+        const g2 = overlay.querySelector(`#aivs-generate-${slot}`); if (g2) { g2.disabled = false; g2.textContent = C.fleetBuilt ? '✓ Fleet Generated' : '⚙ Generate Fleet'; }
+      });
+      overlay.querySelector(`#aivs-import-${slot}`)?.addEventListener('click', () => {
+        openFleetImport(slot, (parsed) => { C.importFaction = parsed.faction; if (parsed.secondaries?.[0]) C.sec1 = parsed.secondaries[0]; if (parsed.secondaries?.[1]) C.sec2 = parsed.secondaries[1]; renderSetupOverlay(); });
+      });
+    }
+    const beginBtn = overlay.querySelector('#aivs-begin');
+    if (beginBtn) beginBtn.addEventListener('click', () => beginAiVsAi(beginBtn));
   }
 
   const exitBtn = overlay.querySelector('#exit-to-menu');
@@ -16817,6 +16932,12 @@ let _aiTargetPts     = 1500;
 let _aiUseLlm        = false;
 let _aiFleetBuilt    = false;      // generate mode: true after Generate button clicked
 
+// AI-vs-AI in-room setup: per-side AI fleet config (mirrors the single-player AI controls for
+// BOTH sides). Kept separate from the single-player _ai* vars so that path is untouched.
+const _aiVsDefault = () => ({ mode: 'fastplay', genFaction: 'random', importFaction: null,
+  sec1: 'random', sec2: 'random', personality: 'random', targetPts: 1000, useLlm: false, fleetBuilt: false });
+let _aiVsCfg = { f1: _aiVsDefault(), f2: _aiVsDefault() };
+
 let _hotseatRoomId          = null;
 let _hotseatSeed             = null;
 let _hotseatPlayStartState   = null;
@@ -17759,7 +17880,19 @@ async function showModeSelector() {
       overlay.querySelector('#ms-join').onclick    = () => render('join');
       overlay.querySelector('#ms-spectate').onclick = () => render('spectate');
       const aiTestBtn = overlay.querySelector('#ms-ai-test');
-      if (aiTestBtn) aiTestBtn.onclick = () => render('aivs');
+      if (aiTestBtn) aiTestBtn.onclick = async () => {
+        // Create a configurable AI-vs-AI room and enter the in-room setup screen (both sides AI).
+        aiTestBtn.disabled = true;
+        try {
+          const r = await fetch('/api/rooms', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ aiVsAi: true, setup: true }) });
+          const d = await r.json();
+          if (d.roomId) { location.href = `${location.pathname}?room=${d.roomId}&side=player1`; return; }
+          throw new Error('no room');
+        } catch {
+          aiTestBtn.disabled = false;
+          aiTestBtn.innerHTML = '🤖 AI vs AI<div style="font-size:10px;font-weight:400;color:var(--hull-crit);margin-top:3px;">Failed — try again</div>';
+        }
+      };
       const soloBtn = overlay.querySelector('#ms-solo');
       if (soloBtn) soloBtn.onclick = async () => {
         soloBtn.disabled = true;
