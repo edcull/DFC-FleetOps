@@ -108,6 +108,12 @@ function defIsDropper(def) {
 // to hit while in it — so it's both protection and where ground drops happen.
 function defIsDescent(def) { return !!def && /Descent/i.test(def.special || ''); }
 function defIsCorvette(def) { return !!def && /corvette/i.test(def.role || ''); }
+// A "primary" target worth firing everything at: an enemy drop carrier, or an important combat
+// ship (capital/heavy hull, or high points).
+function defIsPrimaryTarget(def) {
+  return !!def && (defIsDropper(def) || (def.launch || []).some(l => l.type === 'gate_dropship')
+    || def.tonnage === 'C' || def.tonnage === 'H' || (def.pts || 0) >= 90);
+}
 // Missions where landing Battalions scores (so drop-capable ships should prioritise dropping).
 function isDropMission(state) {
   const obj = state?.scenario?.objective;
@@ -463,6 +469,26 @@ function findBestTarget(state, gid, si, wi, aiSide) {
   return best;
 }
 
+// True if any of this ship's weapons can hit a PRIMARY enemy target (drop carrier or important
+// combat ship) from the current position — i.e. we should fire everything (Weapons Free) at it.
+function hasPrimaryTargetInRange(state, gid, si, aiSide) {
+  const grp = state.groups[gid];
+  const def = grp?.def;
+  const ship = grp?.ships[si];
+  if (!def?.weapons?.length || !ship || ship.destroyed || ship.offTable) return false;
+  const enemySide = aiSide === 'player1' ? 'player2' : 'player1';
+  for (const [, tgrp] of Object.entries(state.groups)) {
+    if (tgrp.def?.side !== enemySide || !defIsPrimaryTarget(tgrp.def)) continue;
+    for (const ts of tgrp.ships) {
+      if (ts.destroyed || ts.offTable || ts.attachedTo) continue;
+      for (const w of def.weapons) {
+        if (weaponCanTarget(state, def, ship, w, tgrp.def, ts, tgrp)) return true;
+      }
+    }
+  }
+  return false;
+}
+
 export function generateActivationOptions(state, aiSide) {
   const options = [];
 
@@ -525,6 +551,9 @@ export function generateActivationOptions(state, aiSide) {
         }
       }
     }
+    // Weapons Free fires ALL weapons (vs GQ's half): always favour it when a PRIMARY target — an
+    // enemy drop carrier or important combat ship — is already in arc and range.
+    const primaryInRange = si >= 0 && hasPrimaryTargetInRange(state, gid, si, aiSide);
     const fullThrustPx = (grp.def?.thrust || 8) * INCH;
     const farAdvance = nearest > fullThrustPx; // more than one full move from anything worth reaching
     // Max Thrust is risky: no firing, no launching, and it can fling a ship deep into enemy guns.
@@ -536,7 +565,7 @@ export function generateActivationOptions(state, aiSide) {
     for (const o of validOrders) {
       let r = 0;
       if (o === 'GQ') r = 3;                                              // versatile default
-      else if (o === 'WF') r = hasTargets && !farAdvance ? 4 : 1;         // alpha strike when in range
+      else if (o === 'WF') r = primaryInRange ? 6 : (hasTargets && !farAdvance ? 4 : 1); // unload on a primary target
       else if (o === 'MT') r = mtSafe ? 2.5 : 0.1;                        // sprint only across open space
       else if (o === 'DC') r = (damaged && !hasTargets) ? 3.5 : 0.2;      // repair when it can't fight
       else if (o === 'SR') r = 1.2;                                       // shed spikes / sneak

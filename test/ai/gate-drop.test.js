@@ -330,6 +330,26 @@ describe('UCM tactical rules — droppers, Max Thrust, corvettes', () => {
     expect(ordersOf(open)).toContain('MT');
   });
 
+  it('uses Weapons Free when a primary target (drop carrier / important ship) is in arc and range', () => {
+    const s = makeState(); s.activeSide = 'player1'; s.scenario = { objective: 'standard' }; s.scenarioData = { dropsites: [] };
+    addGroup(s, shipDef({ id: 'player1:a', side: 'player1', scan: 12, weapons: [weapon({ arc: 'F', att: 4, lock: '3+' })] }), [shipInstance({ x: 200, y: 200, heading: 0 })]);
+    addGroup(s, shipDef({ id: 'player2:carrier', side: 'player2', name: 'Troopship', pts: 100, launch: [{ type: 'bulk_lander', n: 4 }] }),
+      [Object.assign(shipInstance({ x: 250, y: 200 }), { maxHull: 10, hull: 10 })]);
+    const opts = generateActivationOptions(s, 'player1').filter(o => o.groupId);
+    expect(opts[0].order).toBe('WF'); // top-ranked order for a primary target in range
+  });
+
+  it('a dropper with an enemy in range still drops (GQ) rather than alpha-striking', () => {
+    const s = makeState(); s.activeSide = 'player1'; s.scenario = { objective: 'standard' };
+    s.scenarioData = { dropsites: [{ id: 'ds1', type: 'small_station', base: { layer: 'Orbit' }, x: 24, y: 18, destroyed: false, battalions: { ground: { player1: 0, player2: 0 } } }] };
+    addGroup(s, shipDef({ id: 'player1:tp', side: 'player1', name: 'Troopship', role: 'Troopship', scan: 12, thrust: 8,
+      launch: [{ type: 'bulk_lander', n: 4 }], weapons: [weapon({ arc: 'F/S', att: 4, lock: '4+' })] }), [shipInstance({ x: 288, y: 240, heading: -90 })]);
+    addGroup(s, shipDef({ id: 'player2:carrier', side: 'player2', pts: 100, launch: [{ type: 'bulk_lander', n: 4 }] }), [shipInstance({ x: 288, y: 250 })]);
+    const orders = [...new Set(generateActivationOptions(s, 'player1').filter(o => o.groupId).map(o => o.order))];
+    expect(orders).toContain('GQ');
+    expect(orders).not.toContain('WF'); // dropping takes priority over firing for our own carriers
+  });
+
   it('corvettes dive into Atmosphere onto the nearest enemy Descent ship', () => {
     const s = makeState(); s.activeSide = 'player1'; s.scenario = { objective: 'standard' };
     s.scenarioData = { dropsites: [{ id: 'ds1', type: 'large_city', base: { layer: 'Atmosphere' }, x: 24, y: 24, destroyed: false, battalions: {} }] };
