@@ -1,8 +1,11 @@
 import { describe, it, expect } from 'vitest';
 import { gateRunnerPlan, gateMotherPlan } from '../../src/ai/options.js';
+import { buildActivation } from '../../src/ai/translator.js';
 import { evaluate } from '../../src/ai/evaluate.js';
 import { PERSONALITIES } from '../../src/ai/personalities.js';
-import { makeState, shipDef, shipInstance, addGroup } from '../engine/helpers.js';
+import { makeState, shipDef, shipInstance, addGroup, fixedRng } from '../engine/helpers.js';
+import { isLegal } from '../../src/engine/gating.js';
+import { apply } from '../../src/engine/mutators.js';
 import { INCH } from '../../src/engine/constants.js';
 
 // A Voidgate (Gateship) group on the given layer at (x,y).
@@ -75,6 +78,67 @@ describe('gateMotherPlan — city channel (previously impossible)', () => {
     expect(plan.launch).toBeTruthy();
     expect(plan.launch.dsId).toBe('ds1');     // the CITY
     expect(plan.launch.type).toBe('gate_dropship');
+  });
+});
+
+describe('buildActivation — formation discipline', () => {
+  // A 2-ship L-tonnage group (coherency 3") pointing the same way (as a group that's been
+  // moving together would), offset laterally by `sep`. On GQ the ½-Thrust forced move + 45°
+  // turn cap flings such ships apart; the AI should use Course Change (0" minimum) to hold or
+  // regroup instead.
+  function twoShipState(sep, { x = 200, y = 200, heading = 90 } = {}) {
+    const s = makeState();
+    s.activeSide = 'player1';
+    s.scenarioData = { dropsites: [] };
+    const def = shipDef({ id: 'player1:fr', side: 'player1', name: 'Frigate', tonnage: 'L',
+                          thrust: 10, weapons: [] });
+    addGroup(s, def, [
+      shipInstance({ x, y, heading }),
+      shipInstance({ x: x + sep, y, heading }),
+    ]);
+    return s;
+  }
+  function applier(s, rng) {
+    return (intent) => { if (!isLegal(s, intent, 'player1')) return false; apply(s, intent, rng); return true; };
+  }
+  const dist = (g) => Math.hypot(g.ships[0].x - g.ships[1].x, g.ships[0].y - g.ships[1].y);
+  function newRound(grp, s) {
+    grp.activated = false; grp.order = null;
+    grp.ships.forEach(sh => { sh.movedThisRound = false; sh.firedThisActivation = false; });
+    s.aiming = null; s.vectoredSecondMove = null;
+  }
+
+  it('switches an out-of-coherency group to Course Change', () => {
+    const s = twoShipState(8 * INCH); // 8" apart, coherency 3" → out of formation
+    buildActivation(s, fixedRng(3), 'player1:fr', 'GQ', { x: 248, y: 200, reason: 'hold' }, 'player1', applier(s, fixedRng(3)));
+    expect(s.groups['player1:fr'].order).toBe('CC');
+  });
+
+  it('regroups a broken group back into coherency within two activations', () => {
+    const s = twoShipState(8 * INCH);
+    const grp = s.groups['player1:fr'];
+    for (let r = 0; r < 2; r++) {
+      newRound(grp, s);
+      buildActivation(s, fixedRng(3), 'player1:fr', 'GQ', { x: 248, y: 200, reason: 'hold' }, 'player1', applier(s, fixedRng(3)));
+    }
+    expect(dist(grp)).toBeLessThanOrEqual(3 * INCH + 1); // back inside the 3" band
+  });
+
+  it('uses Course Change to hold a coherent group near its target (no GQ scatter)', () => {
+    // Coherent (2" apart) with a target inside the GQ forced ½-Thrust move → would overshoot.
+    const s = twoShipState(2 * INCH);
+    buildActivation(s, fixedRng(3), 'player1:fr', 'GQ', { x: 213, y: 205, reason: 'hold' }, 'player1', applier(s, fixedRng(3)));
+    expect(s.groups['player1:fr'].order).toBe('CC');
+    expect(dist(s.groups['player1:fr'])).toBeLessThanOrEqual(3 * INCH); // stayed coherent
+  });
+
+  it('leaves a coherent group on GQ when the target is genuinely distant (still advances)', () => {
+    const s = twoShipState(2 * INCH, { x: 200, y: 500, heading: -90 });
+    const grp = s.groups['player1:fr'];
+    const y0 = grp.ships[0].y;
+    buildActivation(s, fixedRng(3), 'player1:fr', 'GQ', { x: 212, y: 100, reason: 'vp' }, 'player1', applier(s, fixedRng(3)));
+    expect(grp.order).toBe('GQ');                       // not overridden — advancing
+    expect(grp.ships[0].y).toBeLessThan(y0 - 5 * INCH); // actually moved a long way
   });
 });
 

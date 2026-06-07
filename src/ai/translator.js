@@ -1,8 +1,8 @@
 // Expands an activation-level option into a concrete intent sequence.
 // Mutates state directly via applyFn so post-move targeting is accurate.
 
-import { INCH } from '../engine/constants.js';
-import { moveCone, dsEnemyBattalions, dsBattalions, connectedGateships, coherencyInches } from '../engine/mutators.js';
+import { INCH, ORDERS } from '../engine/constants.js';
+import { moveCone, dsEnemyBattalions, dsBattalions, connectedGateships, coherencyInches, outOfFormationSet } from '../engine/mutators.js';
 import { isLegal } from '../engine/gating.js';
 import { bestMoveToward, findBestTarget, baseDiameterPx, gateRunnerPlan, gateMotherPlan } from './options.js';
 
@@ -272,6 +272,32 @@ export function buildActivation(state, rng, gid, order, movePlan, aiSide, applyF
   // (Normal bulk-lander/dropship droppers are intentionally NOT forced onto Course Change:
   // their 6" launch range reaches dropsites from Orbit without the gate's tight 3"/same-layer
   // constraint, so they already drop reliably; forcing CC's ½-Thrust cap only slows them.)
+
+  // Formation discipline for multi-ship combat groups. General Quarters forces a ≥½-Thrust
+  // move AND allows a 45° turn, so it breaks tight formations two ways:
+  //   • a group already OUT of coherency can't tighten up — ships get flung apart (we saw a
+  //     2-ship Frigate turn 45° left and 45° right on the same GQ activation, splitting it);
+  //   • a coherent group HOLDING near its target is forced to overshoot and scatter.
+  // Course Change (0" minimum, two 45° turns) is the DFC tool for both: when broken, collapse
+  // onto the group centroid to regroup; when holding (target within the forced min move), keep
+  // the plan but use CC so ships stay put. A coherent group with a genuinely distant target is
+  // left on GQ so it still advances at full speed. WF/SR/MT can't turn — they move straight and
+  // so keep formation already — so only a *broken* group is pulled off them (to enable a turn).
+  else if (!def?.openNetwork && !def?.payload && (ORDERS[order]?.moveMin ?? 0) > 0) {
+    const live = grp.ships.filter(s => !s.destroyed && !s.offTable);
+    if (live.length >= 2 && isLegal(state, { type: 'applyOrder', gid, order: 'CC' }, aiSide)) {
+      const cx = live.reduce((a, s) => a + s.x, 0) / live.length;
+      const cy = live.reduce((a, s) => a + s.y, 0) / live.length;
+      const broken = outOfFormationSet(state, def).size > 0;
+      const minMovePx = (ORDERS[order].moveMin || 0) * (def.thrust || 8) * INCH;
+      const targetDist = movePlan ? Math.hypot(movePlan.x - cx, movePlan.y - cy) : 0;
+      const holdingOnGQ = order === 'GQ' && targetDist < minMovePx; // GQ would overshoot the target
+      if (broken || holdingOnGQ) {
+        order = 'CC';
+        if (broken) movePlan = { x: cx, y: cy, reason: 'regroup' };
+      }
+    }
+  }
 
 // By the time buildActivation is called, the ship should be on-table (arrived).
   if (!applyFn({ type: 'applyOrder', gid, order })) return;
