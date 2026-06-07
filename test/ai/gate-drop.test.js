@@ -281,6 +281,25 @@ describe('buildActivation — in-network Voidgate movement', () => {
   });
 });
 
+describe('gateMotherPlan — Mothership hangs back (survivability)', () => {
+  it('positions the carrier behind the forward gate toward our own edge, not into the front', () => {
+    const s = makeState();
+    s.deployZone = { player1: 'south', player2: 'north' }; // player2 edge at y=0
+    s.scenarioData = { dropsites: [{ id: 'ds1', type: 'small_station', base: { layer: 'Orbit' }, x: 24, y: 30, destroyed: false, battalions: { ground: { player1: 0, player2: 0 } } }] };
+    // Forward gate advanced south (toward the enemy dropsite at y=360px), connected to the carrier.
+    const gate = shipDef({ id: 'player2:vg', side: 'player2', name: 'Voidgate', openNetwork: true, gateship: 2, thrust: 12, weapons: [] });
+    addGroup(s, gate, [Object.assign(shipInstance({ x: 288, y: 300, layer: 'orbit' }), { deployedRound: 1 })]);
+    const mother = shipDef({ id: 'player2:em', side: 'player2', name: 'Emerald Mothership', thrust: 10, launch: [{ name: 'Dropships', n: 4, type: 'gate_dropship' }] });
+    addGroup(s, mother, [shipInstance({ x: 288, y: 280, layer: 'orbit' })]);
+
+    const plan = gateMotherPlan(s, 'player2:em', 'player2');
+    expect(plan).toBeTruthy();
+    expect(plan.launch).toBeUndefined();        // no drop live yet → reposition
+    expect(plan.y).toBeLessThan(300);           // BACK toward our edge (north), not into the front
+    expect(plan.y).toBeCloseTo(300 - 15 * 12, -1); // ~15" behind the forward gate
+  });
+});
+
 describe('evaluate — personality weighting', () => {
   // State where we wiped half the opponent while staying at full hull.
   function killState() {

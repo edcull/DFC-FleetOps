@@ -187,10 +187,11 @@ export function gateRunnerPlan(state, gid, aiSide) {
 }
 
 // Drive a Mothership to keep the 18" channel to the forward gate and CHANNEL a drop the
-// moment a connected gate is parked within 3" of a contestable Orbit dropsite. MCTS treats
-// the Mothership as a combat ship and lets it wander out of the network, so script it:
-// hold-and-launch when the drop is live, otherwise shadow the forward gate (Course Change to
-// hold the chain once close). Returns { order, x, y, launch? } | null.
+// moment a connected gate is parked within 3" of a contestable dropsite. MCTS treats the
+// Mothership as a combat ship and lets it wander into enemy guns, so script it: hold-and-launch
+// when the drop is live; otherwise hang BACK toward our own edge — the carrier channels from up
+// to 18" away, so it never needs to approach the front, and keeping it safe denies the enemy an
+// easy ~115pt kill (which historically lost Shaltari the game). Returns { order, x, y, launch? } | null.
 export function gateMotherPlan(state, gid, aiSide) {
   const grp = state.groups[gid];
   const def = grp?.def;
@@ -205,8 +206,9 @@ export function gateMotherPlan(state, gid, aiSide) {
   // cities included once a gate has descended) → hold position and launch.
   const launch = gateLaunchPlan(state, grp, ship, aiSide);
   if (launch) return { order: 'CC', x: ship.x, y: ship.y, launch };
-  // Otherwise shadow the forward gate (the Open-Network gate nearest a contestable
-  // dropsite) so the chain is intact when it parks. Stay ~12" off it (well inside 18").
+  // Otherwise: stay safe. Anchor on the forward gate (nearest connected gate to a contestable
+  // dropsite) but sit ~15" BEHIND it toward our own deployment edge — far enough back to keep
+  // the carrier out of the firefight while still holding the 18" chain so it can channel.
   let fwd = null, fbest = Infinity;
   for (const g of Object.values(state.groups)) {
     if (g.def?.side !== aiSide || !g.def?.openNetwork) continue;
@@ -217,10 +219,17 @@ export function gateMotherPlan(state, gid, aiSide) {
     }
   }
   if (!fwd) return null;
-  const d = dist2d(ship.x, ship.y, fwd.x, fwd.y) || 1;
-  const keep = Math.max(0, d - 12 * INCH); // move only enough to sit ~12" off the gate
-  const order = keep <= 0.5 * (def.thrust || 10) * INCH + 1 ? 'CC' : 'GQ';
-  return { order, x: ship.x + (fwd.x - ship.x) / d * keep, y: ship.y + (fwd.y - ship.y) / d * keep };
+  // Direction toward our own board edge (away from the enemy line).
+  const zone = state.deployZone?.[aiSide];
+  const edgeY = zone === 'north' ? 0 : zone === 'south' ? BOARD_PX : (aiSide === 'player1' ? BOARD_PX : 0);
+  const backDir = edgeY < fwd.y ? -1 : 1;
+  const KEEP_PX = 15 * INCH; // 15" behind the forward gate — inside the 18" chain with margin
+  const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+  const tx = clamp(fwd.x, INCH * 2, BOARD_PX - INCH * 2);
+  const ty = clamp(fwd.y + backDir * KEEP_PX, INCH * 2, BOARD_PX - INCH * 2);
+  const d = dist2d(ship.x, ship.y, tx, ty);
+  const order = d <= 0.5 * (def.thrust || 10) * INCH + 1 ? 'CC' : 'GQ';
+  return { order, x: tx, y: ty };
 }
 // { li, dsId, count, type:'gate_dropship' } | null. The Mothership needn't move — it just
 // needs to stay in the 18" Voidgate network.
