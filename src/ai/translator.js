@@ -2,7 +2,7 @@
 // Mutates state directly via applyFn so post-move targeting is accurate.
 
 import { INCH, ORDERS } from '../engine/constants.js';
-import { moveCone, dsEnemyBattalions, dsBattalions, connectedGateships, coherencyInches, outOfFormationSet } from '../engine/mutators.js';
+import { moveCone, dsEnemyBattalions, dsBattalions, connectedGateships, coherencyInches, outOfFormationSet, shipInNetwork } from '../engine/mutators.js';
 import { isLegal } from '../engine/gating.js';
 import { bestMoveToward, findBestTarget, baseDiameterPx, gateRunnerPlan, gateMotherPlan } from './options.js';
 
@@ -337,6 +337,17 @@ export function buildActivation(state, rng, gid, order, movePlan, aiSide, applyF
 
 // By the time buildActivation is called, the ship should be on-table (arrived).
   if (!applyFn({ type: 'applyOrder', gid, order })) return;
+  // Open-network gates (Voidgates) that are established in the network read their PER-SHIP
+  // order, not the group order — effectiveOrder() returns ship.order for in-network ships. The
+  // group applyOrder above leaves ship.order null, which zeroes their move cone (they freeze in
+  // place from round 2 on). Set each in-network gate's own order so it can actually move.
+  if (def?.openNetwork) {
+    grp.ships.forEach((s, si) => {
+      if (!s.destroyed && !s.offTable && shipInNetwork(state, def, s)) {
+        applyFn({ type: 'applyShipOrder', gid, si, order });
+      }
+    });
+  }
 
   const tx = movePlan?.x ?? null;
   const ty = movePlan?.y ?? null;
