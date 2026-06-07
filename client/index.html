@@ -7962,21 +7962,13 @@ function renderGameOver() {
       ${u.vp === s.vp ? `<div class="init-result" style="font-size:10px;color:var(--text-mute);text-align:center;margin-top:6px;">VP tied — broken by Kill Points</div>` : ''}
       ${(G.scoreLog||[]).map(l => `<div class="am-line" style="font-size:10px;">${l}</div>`).join('')}
       <div style="margin-top:12px;display:flex;flex-direction:column;gap:6px;">
-        <div style="display:flex;gap:6px;">
-          <button class="btn" id="gameover-report" style="flex:1;">📋 GAME REPORT</button>
-          <button class="btn" id="gameover-download" style="flex:1;" title="Save the full game state as a JSON file">⬇ STATE FILE</button>
-        </div>
+        <button class="btn" id="gameover-report" style="width:100%;">📋 GAME REPORT</button>
         <button class="btn-primary" id="gameover-reset" style="width:100%;">NEW GAME →</button>
       </div>
     </div>`;
   document.body.appendChild(overlay);
   initPanel(overlay, 'GAME OVER', 'gameover-overlay', 100, 50);
   overlay.querySelector('#gameover-report').addEventListener('click', () => { _reportRound = 1; openGameReport(state); });
-  overlay.querySelector('#gameover-download').addEventListener('click', () => {
-    const tag = (state.factions?.f1 || playerNameForSide('player1')) + '-vs-' + (state.factions?.f2 || playerNameForSide('player2'));
-    const stamp = new Date().toISOString().slice(0, 16).replace(/[:T]/g, '-');
-    _downloadJson(`dfc-state-${tag}-${stamp}.json`.replace(/[^a-z0-9.\-]/gi, '_'), state);
-  });
   overlay.querySelector('#gameover-reset').addEventListener('click', () => {
     state.gameOver = null; state.score = { player1:{vp:0,kp:0}, player2:{vp:0,kp:0} }; state.scoredRounds = []; state.scoreLog = []; state.lastScoring = null; state.captured = {player1:0,player2:0}; state.admiralKilled = {player1:false,player2:false};
     state.secondaryNominations = { player1:{}, player2:{} }; state.shipReconOps = {}; state.reconKills = { player1:0, player2:0 }; state.nominationPhase = false;
@@ -8192,6 +8184,7 @@ function openGameReport(R) {
       <div class="rep-head">
         <div style="display:flex;align-items:center;gap:10px;">
           <div style="font-family:var(--display);font-weight:700;letter-spacing:0.1em;font-size:14px;flex:1;">📋 GAME REPORT</div>
+          <button class="btn" id="rep-download" style="padding:4px 10px;font-size:11px;" title="Save the full game state as a JSON file">⬇ STATE FILE</button>
           <button class="btn" id="rep-close" style="padding:4px 10px;font-size:11px;">✕ CLOSE</button>
         </div>
         <div style="display:flex;align-items:center;justify-content:center;gap:14px;margin-top:8px;">
@@ -8215,6 +8208,12 @@ function openGameReport(R) {
 
   const close = () => overlay.remove();
   overlay.querySelector('#rep-close').addEventListener('click', close);
+  // Download the report's own state (works for live games and replays alike).
+  overlay.querySelector('#rep-download').addEventListener('click', () => {
+    const tag = (R.factions?.f1 || _repName(R, 'player1')) + '-vs-' + (R.factions?.f2 || _repName(R, 'player2'));
+    const stamp = new Date().toISOString().slice(0, 16).replace(/[:T]/g, '-');
+    _downloadJson(`dfc-state-${tag}-${stamp}.json`.replace(/[^a-z0-9.\-]/gi, '_'), R);
+  });
   overlay.addEventListener('click', e => { if (e.target === overlay) close(); });
   overlay.querySelectorAll('[data-rep-round]').forEach(btn => {
     btn.addEventListener('click', () => {
