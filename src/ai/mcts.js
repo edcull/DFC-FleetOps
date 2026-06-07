@@ -36,7 +36,7 @@ function makeSimApply(state, rng) {
 
 // ── Random rollout ────────────────────────────────────────────────────────────
 // Plays random intents from `state` for `depth` steps, alternating sides.
-function rollout(state, rootSide, depth, rng) {
+function rollout(state, rootSide, depth, rng, weights = null) {
   const s = cloneState(state);
   let activeSide = rootSide;
 
@@ -70,7 +70,7 @@ function rollout(state, rootSide, depth, rng) {
     activeSide = activeSide === 'player1' ? 'player2' : 'player1';
   }
 
-  return evaluate(s, rootSide);
+  return evaluate(s, rootSide, weights);
 }
 
 // ── Option-level Monte Carlo ───────────────────────────────────────────────────
@@ -86,7 +86,7 @@ function rollout(state, rootSide, depth, rng) {
  * @param {number}   opts.rollouts     - rollouts per option (default 6)
  * @param {number}   opts.rolloutDepth - steps per rollout (default 12)
  */
-export function mctsChooseOption(options, state, rng, side, { rollouts = 6, rolloutDepth = 12 } = {}) {
+export function mctsChooseOption(options, state, rng, side, { rollouts = 6, rolloutDepth = 12, weights = null } = {}) {
   if (!options.length) return null;
 
   // Pass options (no groupId) are last resort — only consider them if they're the only choice
@@ -123,7 +123,7 @@ export function mctsChooseOption(options, state, rng, side, { rollouts = 6, roll
       }
 
       // Short rollout from the post-activation state
-      totalScore += rollout(simState, side, rolloutDepth, makeRng(simRng.getState ? simRng.getState() : seedBase ^ r));
+      totalScore += rollout(simState, side, rolloutDepth, makeRng(simRng.getState ? simRng.getState() : seedBase ^ r), weights);
       seedBase = (seedBase + 0x6d2b79f5) >>> 0;
     }
 

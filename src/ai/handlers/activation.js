@@ -1,4 +1,4 @@
-import { generateActivationOptions, mapLlmOptions, deployZoneFor, legalZonePosPx, baseDiameterPx, placeNonOverlap } from '../options.js';
+import { generateActivationOptions, mapLlmOptions, deployZoneFor, legalZonePosPx, baseDiameterPx, placeNonOverlap, gateRunnerPlan, gateMotherPlan } from '../options.js';
 import { mctsChooseOption } from '../mcts.js';
 import { buildActivation } from '../translator.js';
 import { buildStateBriefing, buildGroupCapabilities } from '../state-parser.js';
@@ -71,6 +71,40 @@ function arriveGroup(state, gid, grp, aiSide, applyFn, overrideTargetX = null) {
   });
 }
 
+// Drop sequencing (Shaltari): the un-activated, on-table Voidgate that should position this
+// round, picked as the one nearest its objective so the closest gate parks first. Returns
+// { gid, plan } | null.
+function pickGateToPosition(state, aiSide) {
+  let best = null, bestDist = Infinity;
+  for (const [gid, grp] of Object.entries(state.groups)) {
+    const def = grp.def;
+    if (def?.side !== aiSide || grp.activated) continue;
+    if (!def.openNetwork || !(def.gateship > 0)) continue;
+    const si = grp.ships.findIndex(s => !s.destroyed && !s.offTable);
+    if (si < 0) continue;
+    const plan = gateRunnerPlan(state, gid, aiSide);
+    if (!plan) continue;
+    const sh = grp.ships[si];
+    const d = Math.hypot(sh.x - plan.x, sh.y - plan.y);
+    if (d < bestDist) { bestDist = d; best = { gid, plan }; }
+  }
+  return best;
+}
+
+// An un-activated, on-table Mothership whose connected gate is already parked within 3" of a
+// contestable dropsite (same layer), so it can channel a drop right now. Returns { gid, plan } | null.
+function pickMotherToChannel(state, aiSide) {
+  for (const [gid, grp] of Object.entries(state.groups)) {
+    const def = grp.def;
+    if (def?.side !== aiSide || grp.activated) continue;
+    if (!(def.launch || []).some(l => l.type === 'gate_dropship')) continue;
+    if (!grp.ships.some(s => !s.destroyed && !s.offTable)) continue;
+    const plan = gateMotherPlan(state, gid, aiSide);
+    if (plan?.launch) return { gid, plan };
+  }
+  return null;
+}
+
 export async function handleActivation(state, rng, aiSide, personality, applyFn, useLlm = false) {
   // Auto-finish reserve groups that have nothing to bring on this round: either no
   // live ship left to arrive (e.g. wiped out mid-round — canActivateOffTable doesn't
@@ -85,6 +119,28 @@ export async function handleActivation(state, rng, aiSide, personality, applyFn,
       if (applyFn({ type: 'finishActivation', gid })) return;
     }
     // Eligible reserve groups with live ships: leave them — LLM or heuristic chooses which to arrive.
+  }
+
+  // Drop sequencing: position Voidgates FIRST so a connected Mothership can channel a drop the
+  // same round; then activate any Mothership whose gate is already parked to drop NOW. Gates are
+  // weaponless positioning ships, so front-loading them costs no combat tempo, and it's the only
+  // way the multi-step gate drop (park → channel) completes inside a single round. This runs
+  // before the LLM/MCTS choice because it's mechanical, always-correct play the search can't see.
+  const gatePos = pickGateToPosition(state, aiSide);
+  if (gatePos) {
+    buildActivation(state, rng, gatePos.gid, gatePos.plan.order,
+      { x: gatePos.plan.x, y: gatePos.plan.y, reason: 'vp', toggle: gatePos.plan.toggle },
+      aiSide, applyFn, null);
+    // Guard against a loop if the scripted order was somehow rejected: only consume the
+    // activation if the group actually finished; otherwise fall through to normal selection.
+    if (state.groups[gatePos.gid]?.activated) return;
+  }
+  const motherReady = pickMotherToChannel(state, aiSide);
+  if (motherReady) {
+    buildActivation(state, rng, motherReady.gid, motherReady.plan.order,
+      { x: motherReady.plan.x, y: motherReady.plan.y, reason: 'vp' },
+      aiSide, applyFn, motherReady.plan.launch);
+    if (state.groups[motherReady.gid]?.activated) return;
   }
 
   // Ask LLM BEFORE arriving any ship.
@@ -126,7 +182,7 @@ export async function handleActivation(state, rng, aiSide, personality, applyFn,
     return;
   }
 
-  if (!chosen) chosen = mctsChooseOption(options, state, rng, aiSide);
+  if (!chosen) chosen = mctsChooseOption(options, state, rng, aiSide, { weights: personality?.weights });
   if (!chosen) return;
   if (!chosen.groupId) { applyFn({ type: 'pass' }); return; }
 

@@ -3,8 +3,11 @@ export const PERSONALITIES = {
     label: 'Aggressive',
     systemPrompt: `You favour closing range and maximising kills.
 Prioritise hull damage over positioning. Accept risk. Prefer Weapons Free and General Quarters.
-Closing to Close Action range is almost always worth it.`,
-    weights: { kill: 2.5, vp: 1.0, survival: 0.3, objective: 0.8, momentum: 0.5 },
+Closing to Close Action range is almost always worth it. Still grab and hold a couple of
+objectives along the way — kills alone don't win on VP.`,
+    // Kill stays the defining lever, but objective/vp are no longer so low that the AI
+    // ignores the win condition: it should contest a few objectives while it brawls.
+    weights: { kill: 2.5, vp: 1.2, survival: 0.4, objective: 1.1, momentum: 0.5 },
   },
   positional: {
     label: 'Positional',
