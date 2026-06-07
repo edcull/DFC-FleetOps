@@ -1,8 +1,8 @@
 // Expands an activation-level option into a concrete intent sequence.
 // Mutates state directly via applyFn so post-move targeting is accurate.
 
-import { INCH } from '../engine/constants.js';
-import { moveCone, dsEnemyBattalions, dsBattalions, connectedGateships, coherencyInches } from '../engine/mutators.js';
+import { INCH, ORDERS } from '../engine/constants.js';
+import { moveCone, dsEnemyBattalions, dsBattalions, connectedGateships, coherencyInches, outOfFormationSet } from '../engine/mutators.js';
 import { isLegal } from '../engine/gating.js';
 import { bestMoveToward, findBestTarget, baseDiameterPx, gateRunnerPlan, gateMotherPlan } from './options.js';
 
@@ -133,6 +133,42 @@ function moveGroupCoherent(state, rng, gid, movers, tx, ty, applyFn, toggle = fa
     const t = chosen.target[si];
     moveShipToward(state, rng, gid, si, t.x, t.y, applyFn, toggle);
   }
+}
+
+// Mass-Driver "shot" score for a Group: total Attack dice from Mass Driver weapons on its live
+// on-table ships, ranked so 6400-series outweighs 4200-series outweighs any other Mass Driver
+// (2200/9000 etc.) — a lexicographic score (6400, 4200, other).
+function massDriverScore(state, gid) {
+  const grp = state.groups[gid];
+  const def = grp?.def;
+  if (!def?.weapons) return 0;
+  let s6400 = 0, s4200 = 0, sOther = 0;
+  for (const sh of grp.ships) {
+    if (sh.destroyed || sh.offTable) continue;
+    for (const w of def.weapons) {
+      if (!/Mass Driver/i.test(w.name || '')) continue;
+      const att = w.att || 0;
+      if (/6400/.test(w.name)) s6400 += att;
+      else if (/4200/.test(w.name)) s4200 += att;
+      else sOther += att;
+    }
+  }
+  return s6400 * 1e6 + s4200 * 1e3 + sOther;
+}
+
+// Use Mass Driver Volley on `gid` only when the side can afford it (≥2 AP) and no other
+// still-unactivated friendly Group has a higher Mass Driver score — so the AI saves its AP for
+// its strongest volley instead of spending it on the first Mass Driver group that fires.
+function shouldUseMassDriverVolley(state, gid, aiSide) {
+  if (!state.planning || (state.planning.ap?.[aiSide] || 0) < 2) return false;
+  const myScore = massDriverScore(state, gid);
+  if (myScore <= 0) return false;
+  for (const [ogid, g] of Object.entries(state.groups)) {
+    if (ogid === gid || g.def?.side !== aiSide || g.activated) continue;
+    if (!g.ships.some(s => !s.destroyed && !s.offTable)) continue;
+    if (massDriverScore(state, ogid) > myScore) return false; // a better volley is still to come
+  }
+  return true;
 }
 
 // Find the best dropsite to bombard: enemy/contested DS with most battalions,
@@ -273,6 +309,32 @@ export function buildActivation(state, rng, gid, order, movePlan, aiSide, applyF
   // their 6" launch range reaches dropsites from Orbit without the gate's tight 3"/same-layer
   // constraint, so they already drop reliably; forcing CC's ½-Thrust cap only slows them.)
 
+  // Formation discipline for multi-ship combat groups. General Quarters forces a ≥½-Thrust
+  // move AND allows a 45° turn, so it breaks tight formations two ways:
+  //   • a group already OUT of coherency can't tighten up — ships get flung apart (we saw a
+  //     2-ship Frigate turn 45° left and 45° right on the same GQ activation, splitting it);
+  //   • a coherent group HOLDING near its target is forced to overshoot and scatter.
+  // Course Change (0" minimum, two 45° turns) is the DFC tool for both: when broken, collapse
+  // onto the group centroid to regroup; when holding (target within the forced min move), keep
+  // the plan but use CC so ships stay put. A coherent group with a genuinely distant target is
+  // left on GQ so it still advances at full speed. WF/SR/MT can't turn — they move straight and
+  // so keep formation already — so only a *broken* group is pulled off them (to enable a turn).
+  else if (!def?.openNetwork && !def?.payload && (ORDERS[order]?.moveMin ?? 0) > 0) {
+    const live = grp.ships.filter(s => !s.destroyed && !s.offTable);
+    if (live.length >= 2 && isLegal(state, { type: 'applyOrder', gid, order: 'CC' }, aiSide)) {
+      const cx = live.reduce((a, s) => a + s.x, 0) / live.length;
+      const cy = live.reduce((a, s) => a + s.y, 0) / live.length;
+      const broken = outOfFormationSet(state, def).size > 0;
+      const minMovePx = (ORDERS[order].moveMin || 0) * (def.thrust || 8) * INCH;
+      const targetDist = movePlan ? Math.hypot(movePlan.x - cx, movePlan.y - cy) : 0;
+      const holdingOnGQ = order === 'GQ' && targetDist < minMovePx; // GQ would overshoot the target
+      if (broken || holdingOnGQ) {
+        order = 'CC';
+        if (broken) movePlan = { x: cx, y: cy, reason: 'regroup' };
+      }
+    }
+  }
+
 // By the time buildActivation is called, the ship should be on-table (arrived).
   if (!applyFn({ type: 'applyOrder', gid, order })) return;
 
@@ -367,6 +429,14 @@ export function buildActivation(state, rng, gid, order, movePlan, aiSide, applyF
       }
     }
     if (applyFn({ type: 'fireWeapons', gid })) {
+      // UCM Mass Driver Volley: spend 2 AP for Lock +1 on this Group's Mass Drivers, but only on
+      // the Group with the most Mass Driver shots (6400s prioritised over 4200s) so the AI reserves
+      // its AP for its best volley rather than burning it on the first Mass Driver group it fires.
+      const M = state.attackModal;
+      if (M && M.shots?.some(sh => /Mass Driver/i.test(sh.w?.name || ''))
+          && shouldUseMassDriverVolley(state, gid, aiSide)) {
+        applyFn({ type: 'setMassDriverVolley' });
+      }
       resolveAttackModal(state, rng, applyFn);
     }
   }

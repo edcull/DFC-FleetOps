@@ -2110,6 +2110,9 @@ export function rollHits(state, rng, M) {
     if (sv != null) lock = sv;
   }
   if (sp.calibre && sp.calibre.toUpperCase().includes(td.tonnage)) lock = Math.max(2, lock - 1);
+  // UCM Mass Driver Volley admiral ability: every "Mass Driver" weapon in the firing Group
+  // improves Lock by 1 for this attack sequence (set once on the modal when the ability is used).
+  if (M.massDriverVolley && /Mass Driver/i.test(s.w.name || '')) lock = Math.max(2, lock - 1);
   // Atmosphere attack rules (§4.1.2).
   let forceSix = false;
   if (!M.bomber && M.attackerGid) {
@@ -4180,6 +4183,28 @@ function applyUnlockWeapon(state, intent) {
   return state;
 }
 
+/* True if a Group definition mounts any weapon with "Mass Driver" in its name. */
+export function groupHasMassDriver(def) {
+  return !!def && (def.weapons || []).some(w => /Mass Driver/i.test(w.name || ''));
+}
+
+// UCM Mass Driver Volley admiral ability (2 AP): set the flag on the open attack modal so every
+// Mass-Driver weapon in the firing Group gets Lock +1 (applied in rollHits). Must be invoked
+// before any hits are rolled. No-op if it's already on, the attacker can't afford it, or the
+// Group has no Mass Driver weapon (gating enforces the same — this is the authoritative apply).
+function applySetMassDriverVolley(state) {
+  const M = state.attackModal;
+  if (!M || !M.attackerGid || M.massDriverVolley) return state;
+  if ((M.resolvedShots && M.resolvedShots.length) || M.hitResult) return state; // hits already rolling
+  const def = getDef(state, M.attackerGid);
+  if (!def || !groupHasMassDriver(def)) return state;
+  if (!state.planning || (state.planning.ap[def.side] || 0) < 2) return state;
+  state.planning.ap[def.side] -= 2;
+  M.massDriverVolley = true;
+  logEvent(state, `${def.name}: Mass Driver Volley — Lock +1 (−2 AP)`, 'attack');
+  return state;
+}
+
 function applyFireWeapons(state, intent) {
   const { gid, si } = intent;
   const grp = state.groups[gid];
@@ -4653,6 +4678,7 @@ export function apply(state, intent, rng) {
     case 'resolveBombardCollateral':     return applyResolveBombardCollateral(state, intent);
     case 'unlockWeapon':              return applyUnlockWeapon(state, intent);
     case 'fireWeapons':        return applyFireWeapons(state, intent);
+    case 'setMassDriverVolley':   return applySetMassDriverVolley(state);
     case 'advanceRound':          return advanceRound(state, rng);
     case 'daFinishDropsite':       return applyDaFinishDropsite(state, intent, rng);
     case 'daSwitchSide':           return applyDaSwitchSide(state, rng);
