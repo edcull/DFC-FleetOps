@@ -441,6 +441,12 @@
   #report-overlay .rep-line { font-size: 11px; color: var(--text-dim); padding: 2px 0; line-height: 1.4; }
   #report-overlay .rep-line.detail { color: var(--text-mute); font-size: 10px; padding-left: 12px; }
   #report-overlay .rep-empty { font-size: 11px; color: var(--text-mute); text-align: center; padding: 24px 0; }
+  #report-overlay .rep-act { margin-bottom: 10px; padding-bottom: 6px; border-bottom: 1px solid var(--border); }
+  #report-overlay .rep-act-hdr { font-size: 11px; padding: 3px 0 4px; letter-spacing: 0.02em; }
+  #report-overlay .rep-act-line { font-size: 11px; color: var(--text-dim); padding: 2px 0; line-height: 1.4; }
+  #report-overlay .rep-act-line.detail { color: var(--text-mute); font-size: 10px; padding-left: 10px; }
+  #report-overlay .rep-act-line[data-rep-exp]:hover { color: var(--text); }
+  #report-overlay .rep-exp-body { font-size: 10px; }
 
   @keyframes dieRoll {
     0%   { transform: rotate(-220deg) scale(0.35); opacity: 0.15; filter: blur(1.4px); }
@@ -8054,6 +8060,70 @@ function _repDiceHtml(R, p1, p2) {
 function _repEsc(t) {
   return String(t).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 }
+// ── Per-activation trace (report round view) ──────────────────────────────────
+const _REP_ORDER_RE = /\s→\s(General Quarters|Silent Running|Weapons Free|Course Change|Max Thrust|Damage Control)$/;
+const _REP_DIE_COL = { crit: '#ffb547', hit: '#6ec97a', miss: '#5a6b78', saved: '#4ad6ff', fail: '#ff5252' };
+function _repDie(face, cls) {
+  return `<span style="display:inline-block;min-width:15px;height:15px;line-height:15px;text-align:center;margin:1px;border-radius:2px;font-family:var(--mono);font-size:9px;background:${_REP_DIE_COL[cls] || '#33424d'};color:#06121a;font-weight:700;">${face}</span>`;
+}
+// Expanded roll trace for one weapon shot: to-hit dice (lock / atmosphere) and save dice.
+function _repShot(sh) {
+  const hitB = (sh.hitDice || []).map(d => _repDie(d.r, d.crit ? 'crit' : d.hit ? 'hit' : 'miss')).join('');
+  const lockTxt = sh.forceSix ? 'Atmosphere — hits on 6 only, no crit' : `Lock ${sh.lock}+`;
+  const sv = (sh.saveDice && sh.saveDice[0]) ? sh.saveDice[0].sv : null;
+  const saveB = (sh.saveDice || []).map(d => _repDie(d.r, d.ok ? 'saved' : 'fail')).join('');
+  const backB = (sh.backupDice || []).map(d => _repDie(d.r, d.ok ? 'saved' : 'fail')).join('');
+  const aegB  = (sh.aegisDice  || []).map(d => _repDie(d.r, d.ok ? 'saved' : 'fail')).join('');
+  const typeTxt = { K: 'Kinetic', E: 'Energy', C: 'Core' }[sh.type] || sh.type || '';
+  return `<div style="padding:5px 0;border-top:1px solid rgba(255,255,255,0.05);">
+    <div style="font-size:10px;color:var(--text-dim);"><b>${_repEsc(sh.weapon)}</b> ▶ ${_repEsc(sh.target)}</div>
+    <div style="font-size:9px;color:var(--text-mute);margin:2px 0;">To-hit · ${lockTxt}</div>
+    <div>${hitB || '<span style="font-size:9px;color:var(--text-mute);">no dice</span>'} <span style="font-size:9px;color:var(--text-mute);">→ ${sh.hits} hit${sh.crits ? ` · ${sh.crits} crit` : ''}</span></div>
+    ${saveB ? `<div style="font-size:9px;color:var(--text-mute);margin:4px 0 2px;">${typeTxt} saves · ${sv ? sv + '+' : '—'}${sh.backupVal ? ` · backup ${sh.backupVal}+` : ''}</div>
+      <div>${saveB}${backB ? ` <span style="font-size:9px;color:var(--text-mute);">bk</span> ${backB}` : ''}${aegB ? ` <span style="font-size:9px;color:var(--text-mute);">ae</span> ${aegB}` : ''} <span style="font-size:9px;color:var(--text-mute);">→ ${sh.unsaved} unsaved · ${sh.dmg} dmg</span></div>` : ''}
+  </div>`;
+}
+// Group a round's events into activations (order → moves → attacks/launches) for the trace.
+function _repActivations(R, round) {
+  const ev = (R.eventLog || []).filter(e => (e.round || 1) === round);
+  const acts = []; const tail = [];
+  let cur = null, expId = 0;
+  for (const e of ev) {
+    const m = e.text.match(_REP_ORDER_RE);
+    if (m) {
+      const name = e.text.replace(_REP_ORDER_RE, '').replace(/\s#\d+$/, '').trim();
+      if (cur && cur.group === name && cur.order === m[1]) continue; // same group, individual-order spam
+      cur = { group: name, order: m[1], moveIn: 0, events: [] }; acts.push(cur);
+      continue;
+    }
+    if (e.cat === 'vp' || e.cat === 'round') { tail.push(e); continue; }
+    const mv = e.text.match(/ moved ([\d.]+)"/);
+    if (mv && cur) { cur.moveIn += parseFloat(mv[1]); continue; }
+    (cur ? cur.events : tail).push(e);
+  }
+  const ORDER_SHORT = { 'General Quarters': 'GQ', 'Silent Running': 'SR', 'Weapons Free': 'WF', 'Course Change': 'CC', 'Max Thrust': 'MT', 'Damage Control': 'DC' };
+  const lineHtml = (e) => {
+    const col = _repLineColor(e);
+    const detail = /^[·•]/.test(e.text.trim());
+    if (e.detail && e.detail.shots && e.detail.shots.length) {
+      const id = `exp${round}_${expId++}`;
+      const body = e.detail.shots.map(_repShot).join('');
+      return `<div class="rep-act-line" data-rep-exp="${id}" style="cursor:pointer;${col ? `color:${col};` : ''}">▸ ${_repEsc(e.text)}</div>
+        <div id="${id}" class="rep-exp-body" style="display:none;margin:2px 0 6px 10px;padding-left:8px;border-left:2px solid var(--border);">${body}</div>`;
+    }
+    return `<div class="rep-act-line${detail ? ' detail' : ''}"${col ? ` style="color:${col};"` : ''}>${_repEsc(e.text)}</div>`;
+  };
+  let html = acts.map(a => {
+    const side = a.events[0] || {};
+    return `<div class="rep-act">
+      <div class="rep-act-hdr"><b>${_repEsc(a.group)}</b> <span style="color:var(--text-mute);">· ${ORDER_SHORT[a.order] || a.order}${a.moveIn ? ` · moved ${a.moveIn.toFixed(1)}"` : ''}</span></div>
+      ${a.events.length ? a.events.map(lineHtml).join('') : '<div class="rep-act-line detail">(no attacks or launches)</div>'}
+    </div>`;
+  }).join('');
+  const tailLines = tail.filter(e => e.cat === 'vp');
+  if (tailLines.length) html += `<div class="rep-act"><div class="rep-act-hdr" style="color:#6ec97a;">⊕ End Phase · Scoring</div>${tailLines.map(lineHtml).join('')}</div>`;
+  return html || `<div class="rep-empty">No recorded activations for Round ${round}.</div>`;
+}
 function _repName(R, side) {
   const slot = side === 'player1' ? 'f1' : 'f2';
   return (R.playerNames && R.playerNames[slot]) || (side === 'player1' ? 'Player 1' : 'Player 2');
@@ -8081,21 +8151,21 @@ function openGameReport(R) {
 
   const renderBody = () => {
     if (_reportRound === 'dice') return _repDiceHtml(R, p1, p2);
-    const roundLog = log.filter(e => (e.round || 1) === _reportRound);
-    const secs = _REPORT_SECTIONS.map(s => {
-      const lines = roundLog.filter(e => e.cat === s.cat);
-      if (!lines.length) return '';
-      const items = lines.map(e => {
-        const detail = /^[·•]/.test(e.text.trim());
-        const col = _repLineColor(e);
-        return `<div class="rep-line${detail ? ' detail' : ''}"${col ? ` style="color:${col};"` : ''}>${_repEsc(e.text)}</div>`;
-      }).join('');
-      return `<div class="rep-sec">
-        <div class="rep-sec-title" style="color:${s.color};">${s.title} <span style="opacity:0.55;font-size:9px;">${lines.length}</span></div>
-        ${items}
-      </div>`;
-    }).join('');
-    return secs || `<div class="rep-empty">No recorded events for Round ${_reportRound}.</div>`;
+    // Per-activation trace: each group's activation (order · move) with its attacks and
+    // launches; attack lines expand to show the to-hit and save rolls (one open at a time).
+    return _repActivations(R, _reportRound);
+  };
+  // Accordion: clicking an attack line toggles its roll detail; only one open at a time.
+  const wireExpanders = () => {
+    overlay.querySelectorAll('[data-rep-exp]').forEach(line => {
+      line.addEventListener('click', () => {
+        const id = line.dataset.repExp;
+        const body = overlay.querySelector('#' + id);
+        const open = body && body.style.display !== 'none';
+        overlay.querySelectorAll('.rep-exp-body').forEach(b => { b.style.display = 'none'; });
+        if (body && !open) body.style.display = 'block';
+      });
+    });
   };
 
   overlay.innerHTML = `
@@ -8122,6 +8192,7 @@ function openGameReport(R) {
       <div class="rep-body" id="rep-body">${renderBody()}</div>
     </div>`;
   document.body.appendChild(overlay);
+  wireExpanders();
 
   const close = () => overlay.remove();
   overlay.querySelector('#rep-close').addEventListener('click', close);
@@ -8131,6 +8202,7 @@ function openGameReport(R) {
       _reportRound = btn.dataset.repRound === 'dice' ? 'dice' : parseInt(btn.dataset.repRound, 10);
       overlay.querySelectorAll('.rep-tab').forEach(t => t.classList.toggle('active', t === btn));
       overlay.querySelector('#rep-body').innerHTML = renderBody();
+      wireExpanders();
     });
   });
 }

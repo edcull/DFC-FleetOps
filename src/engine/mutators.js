@@ -308,10 +308,14 @@ export function awardVP(state, side, vp, reason, round) {
 }
 
 /* Append a game event to the log (orders, moves, shots, launches, extracts, etc.). */
-export function logEvent(state, text, cat = 'misc') {
+export function logEvent(state, text, cat = 'misc', detail = null) {
   if (!text) return;
   state.eventLog = state.eventLog || [];
-  state.eventLog.push({ round: state.round || 0, text, cat, ts: Date.now() });
+  const e = { round: state.round || 0, text, cat, ts: Date.now() };
+  // `detail` carries structured data for the report (e.g. an attack's per-shot hit/save
+  // dice) so a line can be expanded to trace the rolls. Kept off the text path.
+  if (detail) e.detail = detail;
+  state.eventLog.push(e);
   // Cap the stored history. Large enough to retain a whole 6-round game so the
   // end-game report has every round's events (a busy game runs a few thousand lines).
   if (state.eventLog.length > 4000) state.eventLog.shift();
@@ -2630,6 +2634,20 @@ export function advanceAttack(state, rng, M, to) {
     }
     const td = getDef(state, s.targetGid);
     M.log.push(`${s.w.name} ▶ ${td.name}: ${sr.dmg} dmg${sr.flash && sr.dmg > 0 ? ` (+${sr.flash} spike)` : ''}`);
+    // Structured per-shot record for the report's expandable attack trace.
+    const _multi = state.groups[s.targetGid] && state.groups[s.targetGid].ships.length > 1;
+    M.shotDetails = M.shotDetails || [];
+    M.shotDetails.push({
+      weapon: s.w.name, type: s.w.type, target: td.name + (_multi ? ` #${s.targetSi + 1}` : ''),
+      lock: M.hitResult.lock, forceSix: !!M.hitResult.forceSix,
+      hits: M.hitResult.hits, crits: M.hitResult.crits,
+      hitDice: (M.hitResult.dice || []).map(d => ({ r: d.r, hit: d.isHit, crit: d.isCrit })),
+      saveDice: (sr.primDice || []).map(d => ({ r: d.r, ok: d.ok, sv: d.sv })),
+      backupVal: sr.backupVal ?? null,
+      backupDice: (sr.backDice || []).map(d => ({ r: d.r, ok: d.ok })),
+      aegisDice: (sr.aegisDice || []).map(d => ({ r: d.r, ok: d.ok })),
+      unsaved: sr.unsaved, dmg: sr.dmg,
+    });
     nextShotOrResolve(state, rng, M);
   }
   else if (to === 'crippling-roll') {
@@ -2810,8 +2828,10 @@ export function finishAttack(state, M) {
     // end-game report can surface them alongside launches rather than burying them in
     // ship gunnery.
     const atkCat = M.bomber ? 'bomber' : 'attack';
-    if (totDmg > 0 || kills > 0) logEvent(state, `${atkName} hit ${tgtList} for ${totDmg} dmg${kills ? ` · ${kills} destroyed` : ''}`, atkCat);
-    else logEvent(state, `${atkName} fired at ${tgtList} — no damage`, atkCat);
+    // Attach the per-shot roll trace to the summary line so the report can expand it.
+    const _detail = (M.shotDetails && M.shotDetails.length) ? { attacker: atkName, shots: M.shotDetails } : null;
+    if (totDmg > 0 || kills > 0) logEvent(state, `${atkName} hit ${tgtList} for ${totDmg} dmg${kills ? ` · ${kills} destroyed` : ''}`, atkCat, _detail);
+    else logEvent(state, `${atkName} fired at ${tgtList} — no damage`, atkCat, _detail);
     (M.log || []).forEach(line => logEvent(state, `· ${line}`, atkCat));
   }
   let hint = null;
