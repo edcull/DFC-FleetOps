@@ -420,6 +420,29 @@ describe('UCM tactical rules — droppers, Max Thrust, corvettes', () => {
     expect(orders).not.toContain('WF'); // dropping takes priority over firing for our own carriers
   });
 
+  it('a dropper NEVER takes a combat order over dropping while a securable dropsite exists', () => {
+    const s = makeState(); s.activeSide = 'player1'; s.scenario = { objective: 'standard' };
+    // A contestable, winnable city (enemy lead 4 < 5) and a tempting enemy Mothership to shoot.
+    s.scenarioData = { dropsites: [{ id: 'city', type: 'medium_city', base: { layer: 'Orbit' }, x: 24, y: 18, destroyed: false, battalions: { ground: { player1: 0, player2: 4 } } }] };
+    addGroup(s, shipDef({ id: 'player1:tp', side: 'player1', name: 'Troopship', role: 'Troopship', tonnage: 'M', scan: 12, thrust: 8,
+      launch: [{ name: 'Bulk Landers', n: 4, type: 'bulk_lander' }], weapons: [weapon({ arc: 'F/S', att: 4, lock: '4+', special: 'Fusillade-2' })] }), [shipInstance({ x: 288, y: 230, heading: 90 })]);
+    addGroup(s, shipDef({ id: 'player2:moth', side: 'player2', name: 'Emerald Mothership', tonnage: 'M', pts: 115, launch: [{ name: 'Dropships', n: 4, type: 'gate_dropship' }] }), [Object.assign(shipInstance({ x: 300, y: 255 }), { maxHull: 12, hull: 12 })]);
+    const orders = [...new Set(generateActivationOptions(s, 'player1').filter(o => o.groupId === 'player1:tp').map(o => o.order))];
+    expect(orders.length).toBeGreaterThan(0);
+    expect(orders.every(o => o === 'GQ' || o === 'CC')).toBe(true); // only launch-capable move orders — never WF/SR/MT
+  });
+
+  it('a dropper with NO securable dropsite left may still fight', () => {
+    const s = makeState(); s.activeSide = 'player1'; s.scenario = { objective: 'standard' };
+    // Only dropsite is a lost cause (enemy 30-0) — nothing useful to drop on, so combat is allowed.
+    s.scenarioData = { dropsites: [{ id: 'lost', type: 'large_city', base: { layer: 'Orbit' }, x: 24, y: 18, destroyed: false, battalions: { ground: { player1: 0, player2: 30 } } }] };
+    addGroup(s, shipDef({ id: 'player1:tp', side: 'player1', name: 'Troopship', role: 'Troopship', tonnage: 'M', scan: 12, thrust: 8,
+      launch: [{ name: 'Bulk Landers', n: 4, type: 'bulk_lander' }], weapons: [weapon({ arc: 'F/S', att: 4, lock: '4+', special: 'Fusillade-2' }), weapon({ arc: 'F/S', att: 4, lock: '3+' })] }), [shipInstance({ x: 288, y: 230, heading: 90 })]);
+    addGroup(s, shipDef({ id: 'player2:cr', side: 'player2', pts: 100, tonnage: 'M' }), [Object.assign(shipInstance({ x: 290, y: 255 }), { maxHull: 10, hull: 10 })]);
+    const orders = [...new Set(generateActivationOptions(s, 'player1').filter(o => o.groupId === 'player1:tp').map(o => o.order))];
+    expect(orders).toContain('WF'); // no securable dropsite → free to fight
+  });
+
   it('corvettes dive into Atmosphere onto the nearest enemy Descent ship', () => {
     const s = makeState(); s.activeSide = 'player1'; s.scenario = { objective: 'standard' };
     s.scenarioData = { dropsites: [{ id: 'ds1', type: 'large_city', base: { layer: 'Atmosphere' }, x: 24, y: 24, destroyed: false, battalions: {} }] };

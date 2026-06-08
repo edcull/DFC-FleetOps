@@ -901,8 +901,22 @@ export function generateActivationOptions(state, aiSide) {
     // MT'd 16" straight into frigate range on round 1 and was destroyed; this prevents that.
     const mtSafe = farAdvance && (nearestEnemy - 2 * fullThrustPx) > 30 * INCH;
 
+    // Scoring missions: a drop-capable ship must ALWAYS work toward landing battalions and never
+    // pick a combat order over it. When a securable contestable dropsite exists, restrict its orders
+    // to the launch-capable MOVE orders (GQ — advance, drop, fire opportunistically; CC — park/hold
+    // on a dropsite); exclude Weapons Free and the no-launch combat orders entirely. (If no securable
+    // dropsite remains, normal ranking applies so it can still fight.)
+    const securableDs = (state.scenarioData?.dropsites || []).some(d => !d.destroyed
+      && dropsiteController(d) !== aiSide
+      && (dsEnemyBattalions(d, aiSide) - dsSideBattalions(d, aiSide)) < 5);
+    let orderPool = validOrders;
+    if ((dropper || gateMother) && isDropMission(state) && securableDs) {
+      const dropOrders = validOrders.filter(o => o === 'GQ' || o === 'CC');
+      if (dropOrders.length) orderPool = dropOrders;
+    }
+
     const rank = {};
-    for (const o of validOrders) {
+    for (const o of orderPool) {
       let r = 0;
       if (o === 'GQ') r = 3;                                              // versatile default
       // Weapons Free only when it actually fires more than GQ (2+ systems in range, or Fusillade);
@@ -922,7 +936,7 @@ export function generateActivationOptions(state, aiSide) {
       }
       rank[o] = r;
     }
-    const orderList = [...validOrders].sort((a, b) => rank[b] - rank[a]);
+    const orderList = [...orderPool].sort((a, b) => rank[b] - rank[a]);
 
     for (const order of orderList.slice(0, 2)) { // cap to 2 orders per group
       if (options.length >= 8) break;
