@@ -286,7 +286,10 @@ export function corvettePlan(state, gid, aiSide) {
   const thrustPx = (def.thrust || 14) * INCH;
   if (inAtmo) return { order: 'GQ', x: tgt.x, y: tgt.y, toggle: false };              // already down — engage
   if (dist <= thrustPx + 1) return { order: 'GQ', x: tgt.x, y: tgt.y, toggle: true }; // reach + descend + fire
-  if (dist <= 2 * thrustPx + 1) return { order: 'MT', x: tgt.x, y: tgt.y, toggle: true }; // sprint-dive for cover
+  // Too far to reach this turn: close the gap in ORBIT at full speed. Never descend
+  // mid-field — atmosphere caps movement at 2"/turn, so a mid-flight dive strands the
+  // corvette crawling with nothing in range. Only descend (above) once it can land on target.
+  if (dist <= 2 * thrustPx + 1) return { order: 'MT', x: tgt.x, y: tgt.y, toggle: false }; // sprint to close in Orbit
   return { order: 'GQ', x: tgt.x, y: tgt.y, toggle: false };                          // close the gap in Orbit
 }
 
