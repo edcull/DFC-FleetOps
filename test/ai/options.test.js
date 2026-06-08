@@ -118,6 +118,59 @@ describe('generateDeployOptions', () => {
     addGroup(s, def, [shipInstance({ offTable: true })]);
     expect(generateDeployOptions(s, 'player1')).toEqual([]);
   });
+
+  // Helper: run the deploy loop to completion for player1 (south edge, standoff = direct deploy).
+  function runDeploy(s) {
+    for (let i = 0; i < 30; i++) {
+      const opts = generateDeployOptions(s, 'player1');
+      if (!opts.length) break;
+      const o = opts[0];
+      const sh = s.groups[o.gid].ships[o.si];
+      sh.x = o.x; sh.y = o.y; sh.heading = o.heading; sh.offTable = false;
+    }
+  }
+
+  it('deploys a multi-ship group line-abreast and coherent (no vertical conga stack)', () => {
+    const s = makeState();
+    s.phase = 'deploy';
+    s.scenario = { deployment: 'line', approach: 'standoff', objective: 'standard' };
+    s.deployZone = { player1: 'south', player2: 'north' };
+    const def = shipDef({ id: 'player1:fr', side: 'player1', name: 'Frigate', role: 'Frigate', tonnage: 'L', thrust: 12 });
+    def.groupSize = 3;
+    addGroup(s, def, [shipInstance({ offTable: true }), shipInstance({ offTable: true }), shipInstance({ offTable: true })]);
+    s.groups['player1:fr'].ships.forEach(sh => { sh.offTable = true; sh.x = undefined; sh.y = undefined; });
+    runDeploy(s);
+    const ships = s.groups['player1:fr'].ships.filter(sh => sh.x != null);
+    expect(ships).toHaveLength(3);
+    // Abreast: spread along X, all at ~the same Y (not stacked vertically).
+    const xs = ships.map(sh => sh.x).sort((a, b) => a - b);
+    const ys = ships.map(sh => sh.y);
+    expect((xs[2] - xs[0]) / INCH).toBeGreaterThan(2);                 // spread horizontally
+    expect((Math.max(...ys) - Math.min(...ys)) / INCH).toBeLessThan(2); // ~same row
+    // Coherent: every ship within 3" (L coherency) of at least one group-mate.
+    const coh = 3 * INCH;
+    for (const a of ships) {
+      expect(ships.some(b => b !== a && Math.hypot(a.x - b.x, a.y - b.y) <= coh)).toBe(true);
+    }
+  });
+
+  it('deploys a Vanguard-X ship forward of the back edge (uses its halo)', () => {
+    const s = makeState();
+    s.phase = 'deploy';
+    s.scenario = { deployment: 'line', approach: 'standoff', objective: 'standard' };
+    s.deployZone = { player1: 'south', player2: 'north' };
+    const def = shipDef({ id: 'player1:bc', side: 'player1', name: 'Johannesburg', role: 'Battlecruiser', tonnage: 'H', thrust: 8 });
+    def.vanguard = 4; def.groupSize = 1;
+    addGroup(s, def, [shipInstance({ offTable: true })]);
+    s.groups['player1:bc'].ships.forEach(sh => { sh.offTable = true; sh.x = undefined; sh.y = undefined; });
+    runDeploy(s);
+    const ship = s.groups['player1:bc'].ships[0];
+    expect(ship.x).not.toBeNull();
+    // South edge is y=48"; a Vanguard-4 ship should sit meaningfully forward of it (toward y<48).
+    const distFromEdge = 48 - ship.y / INCH;
+    expect(distFromEdge).toBeGreaterThan(2);   // pushed forward into the 4" halo
+    expect(distFromEdge).toBeLessThan(5);      // but still within the halo
+  });
 });
 
 // ─── generateDropsiteOptions ──────────────────────────────────────────────────
