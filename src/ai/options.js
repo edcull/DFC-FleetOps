@@ -608,6 +608,52 @@ function fleetFocusTarget(state, aiSide) {
   return (cache[aiSide] = computeFleetFocusTarget(state, aiSide));
 }
 
+// Detector ships (Detector special, or a LoS/Detector weapon) can spend their activation to put
+// +2 Spikes on an enemy, making it far easier for the rest of the fleet to lock and hit. It costs
+// the ship its own shot, so only WEAK shooters should do it — and only on a high-value target the
+// fleet will actually concentrate on (the focus target, else the nearest primary enemy). Returns
+// { si, wi, targetGid, targetSi } | null.
+export function detectorPlan(state, gid, aiSide) {
+  const grp = state.groups[gid];
+  const def = grp?.def;
+  if (!def) return null;
+  const hasSpecial = /\bDetector\b/i.test(def.special || '');
+  let wi = (def.weapons || []).findIndex(w => w.arc === 'LoS' || /^Detector$/i.test(w.name || ''));
+  if (!hasSpecial && wi < 0) return null;
+  if (wi < 0) wi = 0;
+  // Single-ship detector groups only, so using Detector never suppresses other shooters in the group.
+  const live = grp.ships.filter(s => !s.destroyed && !s.offTable);
+  if (live.length !== 1) return null;
+  const si = grp.ships.findIndex(s => !s.destroyed && !s.offTable && !s.firedThisActivation && !s.detectorUsed);
+  if (si < 0) return null;
+  const ship = grp.ships[si];
+  // Don't waste a strong gun: only spike when this ship's own firepower is weak (≤2 Attack).
+  const maxAtt = Math.max(0, ...(def.weapons || []).map(w => w.att || 0));
+  if (maxAtt > 2) return null;
+  const enemySide = aiSide === 'player1' ? 'player2' : 'player1';
+  const spikable = (tg, ts) => tg && ts && !ts.destroyed && !ts.offTable && !ts.attachedTo && (ts.spikes || 0) < 3;
+  // Prefer the fleet focus target (the fleet is already concentrating there — spikes amplify it).
+  let tgt = fleetFocusTarget(state, aiSide);
+  if (tgt) { const tg = state.groups[tgt.gid]; const ts = tg?.ships[tgt.si]; if (!spikable(tg, ts)) tgt = null; }
+  if (!tgt) {
+    // Else the nearest high-value enemy worth opening up: a primary target (capital/heavy/dropper)
+    // OR a Voidgate / Mothership (the Shaltari drop engine — fragile and very worth killing).
+    const highValue = d => defIsPrimaryTarget(d) || defIsVoidgate(d) || defIsGateMother(d);
+    let best = null, bd = Infinity;
+    for (const [egid, eg] of Object.entries(state.groups)) {
+      if (eg.def?.side !== enemySide || !highValue(eg.def)) continue;
+      eg.ships.forEach((es, esi) => {
+        if (!spikable(eg, es)) return;
+        const d = dist2d(ship.x, ship.y, es.x, es.y);
+        if (d < bd) { bd = d; best = { gid: egid, si: esi }; }
+      });
+    }
+    tgt = best;
+  }
+  if (!tgt) return null;
+  return { si, wi, targetGid: tgt.gid, targetSi: tgt.si };
+}
+
 // Find the best weapon target for weapon wi on ship si of group gid from current position.
 function findBestTarget(state, gid, si, wi, aiSide) {
   const grp = state.groups[gid];

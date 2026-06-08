@@ -4,7 +4,7 @@
 import { INCH, ORDERS } from '../engine/constants.js';
 import { moveCone, dsEnemyBattalions, dsBattalions, connectedGateships, coherencyInches, outOfFormationSet, shipInNetwork } from '../engine/mutators.js';
 import { isLegal } from '../engine/gating.js';
-import { bestMoveToward, findBestTarget, baseDiameterPx, gateRunnerPlan, gateMotherPlan, corvettePlan, descentDropperPlan } from './options.js';
+import { bestMoveToward, findBestTarget, baseDiameterPx, gateRunnerPlan, gateMotherPlan, corvettePlan, descentDropperPlan, detectorPlan } from './options.js';
 
 // Ground-launch aura ranges + target constraints (mirrors the client's LAUNCH_TYPES /
 // tryGroundLaunch). Launch range isn't gated, so the AI must check it itself or it
@@ -505,7 +505,17 @@ export function buildActivation(state, rng, gid, order, movePlan, aiSide, applyF
     }
   }
 
-  if (!isFawkes && !NO_FIRE_ORDERS.has(order) && def?.weapons) {
+  // Detector ships spike a high-value enemy for the fleet instead of firing their own weak gun.
+  let detectorUsed = false;
+  if (!NO_FIRE_ORDERS.has(order)) {
+    const dp = detectorPlan(state, gid, aiSide);
+    if (dp && isLegal(state, { type: 'useDetector', gid, ...dp }, aiSide)) {
+      applyFn({ type: 'useDetector', gid, ...dp });
+      detectorUsed = true;
+    }
+  }
+
+  if (!detectorUsed && !isFawkes && !NO_FIRE_ORDERS.has(order) && def?.weapons) {
     const fireSi = grp.ships.findIndex(s => !s.destroyed && !s.offTable);
     if (fireSi >= 0) {
       const fireShip = grp.ships[fireSi];
