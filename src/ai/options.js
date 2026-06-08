@@ -415,29 +415,34 @@ function gateLaunchPlan(state, grp, ship, aiSide) {
   return null;
 }
 
-// Plan to drop battalions at the nearest contestable dropsite the ship can reach AND land on.
+// Plan to drop battalions at the best contestable dropsite the ship can reach AND land on.
 // Filters by matching orbital layer (dropships require same-layer; bulk landers can reach across
-// layers per the rules but must still be within range). Returns { li, dsId, count, type } | null.
+// layers) AND skips LOST CAUSES — a dropsite the enemy has overwhelmed, where our handful of
+// battalions would be wasted (UCM kept dribbling 2 battalions into a city the enemy held 24-0).
+// Prefers the most securable site (smallest enemy lead), then nearest. Returns { li, dsId, count,
+// type } | null.
 function dropLaunchPlan(state, grp, ship, aiSide) {
   if (!ship) return null;
   const launches = grp.def?.launch || [];
   const dropsites = state.scenarioData?.dropsites || [];
   const shipLayer = ship.layer || 'orbit';
+  const enemyLead = d => dsEnemyBattalions(d, aiSide) - dsSideBattalions(d, aiSide);
   for (let li = 0; li < launches.length; li++) {
     const l = launches[li];
     const r = LAUNCH_RANGE[l.type];
     if (r == null) continue;
     const rangePx = (r + 10) * INCH; // launch range + ~one move
-    // Dropships require the ship to be in the same orbital layer as the dropsite.
-    // Only plan a drop on a dropsite we can currently reach from this layer.
     const ds = dropsites
       .filter(d => !d.destroyed && dropsiteController(d) !== aiSide)
+      .filter(d => enemyLead(d) < 5)   // skip lost causes — don't feed a city the enemy has locked up
       .filter(d => {
         const dsLayer = d.base?.layer === 'Atmosphere' ? 'atmosphere' : 'orbit';
         if (l.type === 'dropship' && dsLayer !== shipLayer) return false;
         return dist2d(ship.x, ship.y, d.x * INCH, d.y * INCH) <= rangePx;
       })
-      .sort((a, b) => dist2d(ship.x, ship.y, a.x * INCH, a.y * INCH) - dist2d(ship.x, ship.y, b.x * INCH, b.y * INCH))[0];
+      // Most securable first (smallest enemy lead → free sites win), then nearest.
+      .sort((a, b) => enemyLead(a) - enemyLead(b)
+        || dist2d(ship.x, ship.y, a.x * INCH, a.y * INCH) - dist2d(ship.x, ship.y, b.x * INCH, b.y * INCH))[0];
     if (ds) return { li, dsId: ds.id, count: l.n, type: l.type };
   }
   return null;
