@@ -498,6 +498,30 @@ function spreadDropsiteTarget(state, gid, aiSide, ship, pool) {
   return assigned[gid] || null;
 }
 
+// Expected damage output of a ship (Σ att × dmg × P(hit)) — mirrors fleet-builder.weaponEDPS.
+function lockProbStr(lock) { const n = parseInt(lock, 10); return (n >= 2 && n <= 6) ? (7 - n) / 6 : 0.5; }
+function shipEdps(def) { return (def?.weapons || []).reduce((s, w) => s + (w.att || 0) * (w.dmg || 1) * lockProbStr(w.lock || '4+'), 0); }
+function groupEdps(g) {
+  const per = shipEdps(g.def);
+  return g.ships.reduce((s, sh) => s + (!sh.destroyed && !sh.offTable ? per : 0), 0);
+}
+// Total enemy firepower (EDPS) that could bear on (x,y) within one move + weapon reach — i.e. the
+// threat a group faces if it sits there. Used so an outgunned group doesn't charge a gunline.
+function enemyThreatAt(state, aiSide, x, y) {
+  const enemySide = aiSide === 'player1' ? 'player2' : 'player1';
+  let threat = 0;
+  for (const g of Object.values(state.groups)) {
+    if (g.def?.side !== enemySide) continue;
+    const reachPx = ((g.def.thrust || 8) + (g.def.scan || 6)) * INCH;
+    const per = shipEdps(g.def);
+    for (const sh of g.ships) {
+      if (sh.destroyed || sh.offTable) continue;
+      if (dist2d(sh.x, sh.y, x, y) <= reachPx) threat += per;
+    }
+  }
+  return threat;
+}
+
 // Candidate move targets for (group, order): toward dropsites, enemies, or hold.
 function candidateTargets(state, gid, aiSide) {
   const grp = state.groups[gid];
@@ -551,7 +575,11 @@ function candidateTargets(state, gid, aiSide) {
     targets.push({ x: vpDs.x * INCH, y: vpDs.y * INCH, reason: 'vp' });
   }
 
-  // 2. Nearest enemy group
+  // 2. Nearest enemy group — but DON'T charge into a superior gunline. If the enemy firepower that
+  //    can reach that position badly outguns our own output and we have an objective to contest
+  //    instead, skip the 'kill' charge (we still shoot opportunistically from 'vp'/'hold'). This
+  //    stops fragile/outgunned cruisers from walking into the enemy's heavy hitters and dying for
+  //    nothing. Strong groups (and groups with no objective to fall back on) still press the attack.
   const enemyGroups = Object.values(state.groups)
     .filter(g => g.def?.side === enemySide && g.ships.some(s => !s.destroyed && !s.offTable));
   if (enemyGroups.length) {
@@ -559,7 +587,13 @@ function candidateTargets(state, gid, aiSide) {
       .map(g => { const c = centroid(g.ships); return c ? { g, d: dist2d(ship.x, ship.y, c.x, c.y), c } : null; })
       .filter(Boolean)
       .sort((a, b) => a.d - b.d)[0];
-    if (best) targets.push({ x: best.c.x, y: best.c.y, reason: 'kill' });
+    if (best) {
+      const ourPower = groupEdps(grp);
+      const threat = enemyThreatAt(state, aiSide, best.c.x, best.c.y);
+      const haveObjective = targets.some(t => t.reason === 'vp');
+      const outgunned = threat > ourPower * 1.75 + 0.5;
+      if (!(outgunned && haveObjective)) targets.push({ x: best.c.x, y: best.c.y, reason: 'kill' });
+    }
   }
 
   // 3. Hold position (if min-move allows)
