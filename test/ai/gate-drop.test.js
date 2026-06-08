@@ -530,3 +530,38 @@ describe('evaluate — personality weighting', () => {
     }
   });
 });
+
+describe('buildActivation — fighter/bomber launch (type by enemy air, placed forward)', () => {
+  function carrierVs(enemyDef) {
+    const s = makeState(); s.activeSide = 'player1'; s.scenario = { objective: 'standard' }; s.scenarioData = { dropsites: [] };
+    addGroup(s, shipDef({ id: 'player1:cv', side: 'player1', name: 'Carrier', role: 'Carrier', tonnage: 'M', scan: 10, thrust: 8,
+      launch: [{ name: 'Fighters & Bombers', n: 2, type: 'fighter_bomber' }], weapons: [] }),
+      [shipInstance({ x: 200, y: 200, heading: 90 })]);
+    addGroup(s, enemyDef, [Object.assign(shipInstance({ x: 200, y: 320 }), { maxHull: 10, hull: 10 })]); // enemy 10" away
+    return s;
+  }
+  const ap = (s) => (i) => { if (!isLegal(s, i, 'player1')) return false; apply(s, i, fixedRng(3)); return true; };
+
+  it('launches BOMBERS when the enemy fleet has no air to intercept', () => {
+    const s = carrierVs(shipDef({ id: 'player2:cr', side: 'player2', name: 'Cruiser', tonnage: 'M', launch: [] }));
+    buildActivation(s, fixedRng(3), 'player1:cv', 'GQ', { x: 200, y: 200, reason: 'hold' }, 'player1', ap(s));
+    const air = (s.launchedAssets || []).filter(a => a.side === 'player1');
+    expect(air.length).toBe(1);
+    expect(air[0].kind).toBe('bomber');
+    // Placed forward toward the enemy (not on the carrier), within 6" of the carrier.
+    const cv = s.groups['player1:cv'].ships[0];
+    const fwd = Math.hypot(air[0].x - cv.x, air[0].y - cv.y) / INCH;
+    expect(fwd).toBeGreaterThan(1);
+    expect(fwd).toBeLessThanOrEqual(6.01);
+    expect(air[0].y).toBeGreaterThan(cv.y);   // genuinely toward the enemy (y=320)
+  });
+
+  it('launches FIGHTERS when the enemy fleet has its own air', () => {
+    const s = carrierVs(shipDef({ id: 'player2:cv', side: 'player2', name: 'Enemy Carrier', tonnage: 'M',
+      launch: [{ name: 'Fighters & Bombers', n: 2, type: 'fighter_bomber' }] }));
+    buildActivation(s, fixedRng(3), 'player1:cv', 'GQ', { x: 200, y: 200, reason: 'hold' }, 'player1', ap(s));
+    const air = (s.launchedAssets || []).filter(a => a.side === 'player1');
+    expect(air.length).toBe(1);
+    expect(air[0].kind).toBe('fighter');
+  });
+});
