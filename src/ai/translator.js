@@ -443,7 +443,18 @@ export function buildActivation(state, rng, gid, order, movePlan, aiSide, applyF
       const minMovePx = (ORDERS[order].moveMin || 0) * (def.thrust || 8) * INCH;
       const targetDist = movePlan ? Math.hypot(movePlan.x - cx, movePlan.y - cy) : 0;
       const holdingOnGQ = order === 'GQ' && targetDist < minMovePx; // GQ would overshoot the target
-      if (broken || holdingOnGQ) {
+      // GQ caps the turn at 45° AND forces a ≥½-Thrust move, so if the group must turn hard toward
+      // its target — or its ships are facing different ways — the ships can't converge and split
+      // apart (we saw a 2-ship Frigate end 15" apart chasing a target that needed a big turn). Course
+      // Change (0" min move, two 45° turns) lets them reorient and stay together. Only triggers when
+      // turning is actually needed, so a straight-ahead advance still uses fast GQ.
+      const angDiff = (a, b) => { let d = (a - b) % 360; if (d > 180) d -= 360; if (d < -180) d += 360; return Math.abs(d); };
+      const bearing = movePlan ? Math.atan2(movePlan.y - cy, movePlan.x - cx) * 180 / Math.PI : live[0].heading;
+      const turnNeeded = movePlan && targetDist > 1 ? Math.min(...live.map(s => angDiff(bearing, s.heading))) : 0;
+      let headingSpread = 0;
+      for (let i = 0; i < live.length; i++) for (let j = i + 1; j < live.length; j++) headingSpread = Math.max(headingSpread, angDiff(live[i].heading, live[j].heading));
+      const wouldTurnBreak = order === 'GQ' && (turnNeeded > 45 || headingSpread > 45);
+      if (broken || holdingOnGQ || wouldTurnBreak) {
         order = 'CC';
         if (broken) movePlan = { x: cx, y: cy, reason: 'regroup' };
       }

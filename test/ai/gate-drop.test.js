@@ -551,6 +551,28 @@ describe('buildActivation — regroup a broken group instead of charging while o
     expect(after).toBeLessThan(before);               // the gap closed
   });
 
+  it('uses Course Change (not GQ) when the group must TURN toward its target, so it does not split', () => {
+    const s = makeState(); s.activeSide = 'player1'; s.scenario = { objective: 'standard' }; s.scenarioData = { dropsites: [] };
+    // Two ships only 1" apart but facing DIFFERENT ways (90° vs 0°) — on GQ the 45° turn cap + forced
+    // ½-Thrust move would fling them apart; CC (two 45° turns, 0" min) lets them reorient together.
+    addGroup(s, shipDef({ id: 'player1:tz', side: 'player1', name: 'Topaz', role: 'Frigate', tonnage: 'L', thrust: 12, weapons: [weapon({ arc: 'F', att: 3, lock: '3+' })] }),
+      [shipInstance({ x: 288, y: 300, heading: 90 }), shipInstance({ x: 300, y: 300, heading: 0 })]);
+    addGroup(s, shipDef({ id: 'player2:e', side: 'player2', tonnage: 'L' }), [shipInstance({ x: 294, y: 200 })]);
+    buildActivation(s, fixedRng(3), 'player1:tz', 'GQ', { x: 294, y: 200, reason: 'kill' }, 'player1', ap(s));
+    const t = s.groups['player1:tz'].ships;
+    expect(s.groups['player1:tz'].order).toBe('CC');
+    expect(Math.hypot(t[0].x - t[1].x, t[0].y - t[1].y)).toBeLessThanOrEqual(3.6 * INCH); // still coherent
+  });
+
+  it('keeps fast General Quarters for a straight-ahead advance (no needless slow-down)', () => {
+    const s = makeState(); s.activeSide = 'player1'; s.scenario = { objective: 'standard' }; s.scenarioData = { dropsites: [] };
+    addGroup(s, shipDef({ id: 'player1:gg', side: 'player1', name: 'Frigate', role: 'Frigate', tonnage: 'L', thrust: 12, weapons: [weapon({ arc: 'F', att: 3, lock: '3+' })] }),
+      [shipInstance({ x: 288, y: 200, heading: 90 }), shipInstance({ x: 300, y: 200, heading: 90 })]); // both face the target
+    addGroup(s, shipDef({ id: 'player2:ee', side: 'player2', tonnage: 'L' }), [shipInstance({ x: 294, y: 520 })]); // straight down, far
+    buildActivation(s, fixedRng(3), 'player1:gg', 'GQ', { x: 294, y: 520, reason: 'kill' }, 'player1', ap(s));
+    expect(s.groups['player1:gg'].order).toBe('GQ');
+  });
+
   it('a coherent group advancing toward a crowd stays in formation (holds rather than scattering)', () => {
     const s = makeState(); s.activeSide = 'player1'; s.scenario = { objective: 'standard' }; s.scenarioData = { dropsites: [] };
     addGroup(s, shipDef({ id: 'player1:g', side: 'player1', name: 'Frigate', role: 'Frigate', tonnage: 'L', thrust: 12, weapons: [weapon({ arc: 'F', att: 3, lock: '3+' })] }),
