@@ -179,6 +179,34 @@ function gateObjective(state, aiSide) {
   return best;
 }
 
+// Per-Voidgate-GROUP objective: SPREAD the gate prongs across DISTINCT securable dropsites so the
+// network secures several objectives at once instead of stacking every battalion on one (we saw
+// 30-60+ battalions dumped on a single city while two others sat free). Each Voidgate group claims
+// its own dropsite via the same greedy spread the droppers use (which also avoids lost causes and
+// already-secured sites); the Motherships then distribute behind the prongs. Falls back to the
+// shared objective when the spread can't assign one.
+function gateGroupObjective(state, gid, aiSide) {
+  const grp = state.groups[gid];
+  const ship = grp?.ships.find(s => !s.destroyed && !s.offTable);
+  if (!ship) return gateObjective(state, aiSide);
+  return spreadDropsiteTarget(state, gid, aiSide, ship, defIsVoidgate) || gateObjective(state, aiSide);
+}
+
+// The objective of the Voidgate group nearest (px) a point — used so each Mothership shadows the
+// prong it's closest to, distributing the carriers across the spread network.
+function nearestVoidgateProngObjective(state, aiSide, fromShip) {
+  let bestGid = null, bd = Infinity;
+  for (const [gid, g] of Object.entries(state.groups)) {
+    if (g.def?.side !== aiSide || !defIsVoidgate(g.def)) continue;
+    for (const s of g.ships) {
+      if (s.destroyed || s.offTable) continue;
+      const d = dist2d(fromShip.x, fromShip.y, s.x, s.y);
+      if (d < bd) { bd = d; bestGid = gid; }
+    }
+  }
+  return bestGid ? gateGroupObjective(state, bestGid, aiSide) : null;
+}
+
 // Drive a Voidgate to PARK within 3" of its objective dropsite so a connected Mothership
 // can channel a drop through it. Two crucial details:
 //  1. Layer: the gate must share the dropsite's orbital layer to channel. A CITY sits in
@@ -196,7 +224,7 @@ export function gateRunnerPlan(state, gid, aiSide) {
   const si = grp.ships.findIndex(s => !s.destroyed && !s.offTable);
   if (si < 0) return null;
   const ship = grp.ships[si];
-  const obj = gateObjective(state, aiSide);
+  const obj = gateGroupObjective(state, gid, aiSide);
   if (!obj) return null;
   const ox = obj.x * INCH, oy = obj.y * INCH;
   const objLayer = obj.base?.layer === 'Atmosphere' ? 'atmosphere' : 'orbit';
@@ -238,13 +266,12 @@ export function gateMotherPlan(state, gid, aiSide) {
   // cities included once a gate has descended) → hold position and launch.
   const launch = gateLaunchPlan(state, grp, ship, aiSide);
   if (launch) return { order: 'CC', x: ship.x, y: ship.y, launch };
-  // Otherwise: stay safe AND keep the channel. Anchor behind the SHARED objective (the whole
-  // network's target) rather than chasing the single nearest gate — when one Voidgate strays, the
-  // old code dragged every Mothership after it into a corner, out of channelling range. Sitting
-  // ~15" back from the objective toward our own edge clusters the Motherships in one safe spot
-  // behind the converging gates. If that point drifts out of the 18" chain to the nearest gate,
-  // pull it toward that gate so it can still channel.
-  const obj = gateObjective(state, aiSide);
+  // Otherwise: stay safe AND keep the channel. Anchor ~15" behind the NEAREST Voidgate prong's
+  // objective (toward our own edge) so the Motherships DISTRIBUTE across the spread prongs — each
+  // shadows one — instead of all trailing the single highest-value city. (Anchoring on a real
+  // objective, not the nearest stray gate, stops the old corner-drift.) If the anchor drifts out
+  // of the 18" chain to the nearest gate, it's pulled back toward that gate so it can still channel.
+  const obj = nearestVoidgateProngObjective(state, aiSide, ship) || gateObjective(state, aiSide);
   let anchorX, anchorY;
   if (obj) { anchorX = obj.x * INCH; anchorY = obj.y * INCH; }
   else {
@@ -543,12 +570,14 @@ function candidateTargets(state, gid, aiSide) {
     .filter(ds => !ds.destroyed && dropsiteController(ds) !== aiSide)
     .sort((a, b) => dist2d(ship.x, ship.y, a.x * INCH, a.y * INCH) - dist2d(ship.x, ship.y, b.x * INCH, b.y * INCH));
 
-  // Shaltari gate play needs the whole network to commit to ONE nearby objective, or the
-  // Voidgates over-extend and break the 18" chain to the Mothership. Pick the contestable
-  // dropsite nearest the Mothership (the network anchor) as the shared objective: Voidgates
-  // charge it (to park within 3"); the Mothership advances behind them to stay chained.
+  // Shaltari gate play: each Voidgate GROUP takes its own securable dropsite (spread the prongs to
+  // secure several objectives, not stack one), and the Mothership shadows the nearest prong to keep
+  // the 18" chain. A Mothership uses the nearest Voidgate group's objective so the carriers
+  // distribute behind the prongs rather than all trailing one.
   if (defIsVoidgate(grp.def) || defIsGateMother(grp.def)) {
-    const obj = gateObjective(state, aiSide);
+    const obj = defIsGateMother(grp.def)
+      ? (nearestVoidgateProngObjective(state, aiSide, ship) || gateObjective(state, aiSide))
+      : gateGroupObjective(state, gid, aiSide);
     if (obj) {
       const ox = obj.x * INCH, oy = obj.y * INCH;
       if (defIsGateMother(grp.def)) {

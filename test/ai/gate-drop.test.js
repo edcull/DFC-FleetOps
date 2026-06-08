@@ -56,6 +56,23 @@ describe('gateRunnerPlan — descent to cities', () => {
     expect(plan.order).toBe('CC');
     expect(plan.toggle).toBe(false);
   });
+
+  it('spreads the Voidgate GROUPS across DIFFERENT dropsites (network secures several objectives)', () => {
+    const s = makeState(); s.activeSide = 'player2'; s.scenario = { objective: 'standard' };
+    s.deployZone = { player1: 'north', player2: 'south' };
+    s.scenarioData = { dropsites: [
+      { id: 'ds1', type: 'small_station', base: { layer: 'Orbit' }, x: 24, y: 42, destroyed: false, battalions: {} },
+      { id: 'ds2', type: 'medium_city', base: { layer: 'Atmosphere' }, x: 40, y: 36, destroyed: false, battalions: {} },
+      { id: 'ds3', type: 'large_city', base: { layer: 'Atmosphere' }, x: 24, y: 24, destroyed: false, battalions: {} },
+    ] };
+    for (let i = 0; i < 3; i++) {
+      const def = shipDef({ id: 'player2:vg' + i, side: 'player2', name: 'Voidgate', tonnage: 'L', thrust: 12, openNetwork: true, gateship: 2, weapons: [], special: 'Descent, Gateship-2, Open Net' });
+      addGroup(s, def, [shipInstance({ x: 280 + i * 30, y: 500, heading: -90, layer: 'orbit' }), shipInstance({ x: 292 + i * 30, y: 500, heading: -90, layer: 'orbit' }), shipInstance({ x: 304 + i * 30, y: 500, heading: -90, layer: 'orbit' })]);
+    }
+    const dsAt = (p) => s.scenarioData.dropsites.map(d => ({ id: d.id, dist: Math.hypot(d.x * INCH - p.x, d.y * INCH - p.y) })).sort((a, b) => a.dist - b.dist)[0].id;
+    const picks = [0, 1, 2].map(i => dsAt(gateRunnerPlan(s, 'player2:vg' + i, 'player2')));
+    expect(new Set(picks).size).toBe(3); // three prongs → three different dropsites
+  });
 });
 
 describe('gateMotherPlan — city channel (previously impossible)', () => {
