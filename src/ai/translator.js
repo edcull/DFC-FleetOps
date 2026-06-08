@@ -461,6 +461,32 @@ export function buildActivation(state, rng, gid, order, movePlan, aiSide, applyF
     }
   }
 
+// FORMATION-SAFETY guard (runs after EVERY plan branch, so it also covers corvettes and descent
+// droppers that have their own branches). An order whose total turn limit is less than how far the
+// group must turn — yet still forces a move — flings divergent-heading ships apart: GQ caps at 45°,
+// Silent Running and Max Thrust can't turn at all (we saw a Corvette scatter 23" diving on GQ and
+// an Amethyst split 15" running straight on SR). Course Change (two 45° turns = 90°, 0" min move)
+// lets the ships re-align and hold together. Regrouping a BROKEN group is handled above; this also
+// catches a still-coherent group an order is about to break.
+  if (!def?.openNetwork && !def?.payload) {
+    const live2 = grp.ships.filter(s => !s.destroyed && !s.offTable);
+    const ord = ORDERS[order] || {};
+    const turnCap = (ord.turnLimit || 0) + (ord.turnLimit2 || 0);
+    if (live2.length >= 2 && (ord.moveMin || 0) > 0 && order !== 'CC'
+        && isLegal(state, { type: 'applyOrder', gid, order: 'CC' }, aiSide)) {
+      const angDiff = (a, b) => { const d = Math.abs((((a - b) % 360) + 360) % 360); return d > 180 ? 360 - d : d; };
+      let spread = 0;
+      for (let i = 0; i < live2.length; i++) for (let j = i + 1; j < live2.length; j++) spread = Math.max(spread, angDiff(live2[i].heading || 0, live2[j].heading || 0));
+      const cx = live2.reduce((a, s) => a + s.x, 0) / live2.length, cy = live2.reduce((a, s) => a + s.y, 0) / live2.length;
+      let turnNeeded = 0;
+      if (movePlan && Math.hypot(movePlan.x - cx, movePlan.y - cy) > INCH) {
+        const bearing = Math.atan2(movePlan.y - cy, movePlan.x - cx) * 180 / Math.PI;
+        turnNeeded = Math.min(...live2.map(s => angDiff(bearing, s.heading || 0)));
+      }
+      if (spread > turnCap + 10 || turnNeeded > turnCap + 10) order = 'CC';
+    }
+  }
+
 // By the time buildActivation is called, the ship should be on-table (arrived).
   if (!applyFn({ type: 'applyOrder', gid, order })) return;
   // Open-network gates (Voidgates) that are established in the network read their PER-SHIP

@@ -581,6 +581,29 @@ describe('buildActivation — regroup a broken group instead of charging while o
     expect(Math.hypot(t[0].x - t[1].x, t[0].y - t[1].y)).toBeLessThanOrEqual(3.6 * INCH); // still coherent
   });
 
+  it('a Corvette with divergent headings uses Course Change so its dive does not scatter', () => {
+    const s = makeState(); s.activeSide = 'player1'; s.scenario = { objective: 'standard' }; s.scenarioData = { dropsites: [] };
+    addGroup(s, shipDef({ id: 'player1:cv', side: 'player1', name: 'Santiago', role: 'Corvette', tonnage: 'L', thrust: 14, special: 'Descent', weapons: [weapon({ arc: 'F/S/R', att: 3, lock: '3+', special: 'Air to Air' })] }),
+      [shipInstance({ x: 300, y: 300, heading: 0 }), shipInstance({ x: 312, y: 300, heading: 120 }), shipInstance({ x: 306, y: 312, heading: 240 })]);
+    addGroup(s, shipDef({ id: 'player2:sc', side: 'player2', name: 'Strike Carrier', role: 'Strike Carrier', special: 'Descent' }), [Object.assign(shipInstance({ x: 294, y: 230, layer: 'atmosphere' }), { maxHull: 4, hull: 4 })]);
+    buildActivation(s, fixedRng(3), 'player1:cv', 'GQ', { x: 294, y: 230, reason: 'kill', toggle: false }, 'player1', ap(s));
+    const l = s.groups['player1:cv'].ships.filter(x => !x.destroyed && !x.offTable);
+    let mg = 0; for (let i = 0; i < l.length; i++) for (let j = i + 1; j < l.length; j++) mg = Math.max(mg, Math.hypot(l[i].x - l[j].x, l[i].y - l[j].y));
+    expect(s.groups['player1:cv'].order).toBe('CC');     // corvettes caught by the universal guard too
+    expect(mg).toBeLessThanOrEqual(3.6 * INCH);          // stayed coherent
+  });
+
+  it('a group on a no-turn order (Silent Running) with divergent headings switches to Course Change', () => {
+    const s = makeState(); s.activeSide = 'player1'; s.scenario = { objective: 'standard' }; s.scenarioData = { dropsites: [] };
+    addGroup(s, shipDef({ id: 'player1:fr', side: 'player1', name: 'Frigate', role: 'Frigate', tonnage: 'L', thrust: 12, weapons: [weapon({ arc: 'F', att: 3, lock: '3+' })] }),
+      [shipInstance({ x: 300, y: 300, heading: 60 }), shipInstance({ x: 312, y: 300, heading: -30 })]);
+    addGroup(s, shipDef({ id: 'player2:e', side: 'player2', tonnage: 'L' }), [shipInstance({ x: 306, y: 120 })]);
+    buildActivation(s, fixedRng(3), 'player1:fr', 'SR', { x: 306, y: 120, reason: 'kill' }, 'player1', ap(s));
+    const t = s.groups['player1:fr'].ships;
+    expect(s.groups['player1:fr'].order).toBe('CC');     // SR can't turn → would split → use CC
+    expect(Math.hypot(t[0].x - t[1].x, t[0].y - t[1].y)).toBeLessThanOrEqual(3.6 * INCH);
+  });
+
   it('keeps fast General Quarters for a straight-ahead advance (no needless slow-down)', () => {
     const s = makeState(); s.activeSide = 'player1'; s.scenario = { objective: 'standard' }; s.scenarioData = { dropsites: [] };
     addGroup(s, shipDef({ id: 'player1:gg', side: 'player1', name: 'Frigate', role: 'Frigate', tonnage: 'L', thrust: 12, weapons: [weapon({ arc: 'F', att: 3, lock: '3+' })] }),
