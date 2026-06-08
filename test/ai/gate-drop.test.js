@@ -533,6 +533,34 @@ describe('handleActivation — no re-firing (finish a group that already acted)'
   });
 });
 
+describe('AI — threat-aware positioning (don\'t charge a superior gunline)', () => {
+  function gunlineScenario(ourDef) {
+    const s = makeState(); s.activeSide = 'player1'; s.scenario = { objective: 'standard' };
+    s.scenarioData = { dropsites: [{ id: 'ds1', type: 'large_city', base: { layer: 'Orbit' }, x: 20, y: 30, destroyed: false, battalions: {} }] };
+    addGroup(s, ourDef, [shipInstance({ x: 300, y: 300, heading: 90 }), shipInstance({ x: 320, y: 300, heading: 90 })]);
+    for (let i = 0; i < 2; i++) addGroup(s, shipDef({ id: 'player2:hc' + i, side: 'player2', name: 'Heavy Cruiser', tonnage: 'H', thrust: 8, scan: 10,
+      weapons: [weapon({ arc: 'F/S', att: 4, lock: '3+', dmg: 2, type: 'E' })] }), [Object.assign(shipInstance({ x: 300 + i * 20, y: 360 }), { maxHull: 12, hull: 12 })]);
+    for (let i = 0; i < 2; i++) addGroup(s, shipDef({ id: 'player2:fr' + i, side: 'player2', name: 'Frigate', tonnage: 'L', thrust: 10, scan: 8,
+      weapons: [weapon({ arc: 'F/S', att: 3, lock: '4+', dmg: 1, type: 'K' })] }), [Object.assign(shipInstance({ x: 280 + i * 40, y: 370 }), { maxHull: 4, hull: 4 })]);
+    return s;
+  }
+  const reasons = (s, gid) => [...new Set(generateActivationOptions(s, 'player1').filter(o => o.groupId === gid).map(o => o.movePlan?.reason))];
+
+  it('an outgunned cruiser contests the objective instead of charging the gunline', () => {
+    const s = gunlineScenario(shipDef({ id: 'player1:med', side: 'player1', name: 'Madrid', role: 'Cruiser', tonnage: 'M', thrust: 8, scan: 8,
+      weapons: [weapon({ arc: 'F/S', att: 4, lock: '4+', dmg: 1, type: 'K' })] }));
+    const r = reasons(s, 'player1:med');
+    expect(r).toContain('vp');     // heads for the objective
+    expect(r).not.toContain('kill'); // does NOT charge the superior gunline
+  });
+
+  it('a strong battlecruiser still presses the attack', () => {
+    const s = gunlineScenario(shipDef({ id: 'player1:med', side: 'player1', name: 'BC', role: 'Battlecruiser', tonnage: 'H', thrust: 8, scan: 10,
+      weapons: [weapon({ arc: 'F/S', att: 4, lock: '3+', dmg: 2, type: 'K' }), weapon({ arc: 'F/S', att: 4, lock: '3+', dmg: 1, type: 'K' }), weapon({ arc: 'F/S/R', att: 6, lock: '3+', dmg: 1, type: 'K' })] }));
+    expect(reasons(s, 'player1:med')).toContain('kill'); // high firepower → still engages
+  });
+});
+
 describe('AI — Detector ability', () => {
   function detState(att) {
     const s = makeState(); s.activeSide = 'player1'; s.scenario = { objective: 'standard' }; s.scenarioData = { dropsites: [] };
