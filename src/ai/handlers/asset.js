@@ -42,6 +42,25 @@ function highestHpEnemy(state, aiSide) {
   return best;
 }
 
+// The enemy DROP ENGINE: a Mothership channelling battalions (gate_dropship) or any drop carrier —
+// the highest-value kill, since it keeps generating objective points. These ships hang back out of
+// the gunline's reach, so bombers (mobile, expendable) are the tool to hunt them. Nearest such
+// ship to the asset, or null.
+function dropEngineTarget(state, aiSide, asset) {
+  const enemySide = aiSide === 'player1' ? 'player2' : 'player1';
+  const isDropEngine = def => (def?.launch || []).some(l => /gate_dropship|bulk_lander|dropship|drop_pod/.test(l.type));
+  let best = null, bd = Infinity;
+  for (const grp of Object.values(state.groups)) {
+    if (grp.def?.side !== enemySide || !isDropEngine(grp.def)) continue;
+    for (const s of grp.ships) {
+      if (s.destroyed || s.offTable) continue;
+      const d = dist(asset.x, asset.y, s.x, s.y);
+      if (d < bd) { bd = d; best = s; }
+    }
+  }
+  return best;
+}
+
 function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
 
 function moveToward(asset, targetX, targetY, thrustPx, margin) {
@@ -82,11 +101,11 @@ export function handleAsset(state, aiSide, personality, applyFn) {
       if (kind === 'fighter') {
         const target = nearestEnemy(state, aiSide);
         if (target) dest = moveToward(asset, target.x, target.y, thrustPx, margin);
-      } else if (kind === 'bomber' || kind === 'fireship') {
-        const target = highestHpEnemy(state, aiSide);
-        if (target) dest = moveToward(asset, target.x, target.y, thrustPx, margin);
-      } else if (kind === 'torpedo') {
-        const target = highestHpEnemy(state, aiSide);
+      } else if (kind === 'bomber' || kind === 'fireship' || kind === 'torpedo') {
+        // Hunt the enemy drop engine (Mothership / drop carrier) first — it's the highest-value
+        // kill and hangs back out of the gunline, so these mobile assets are the way to reach it.
+        // Fall back to the highest-HP enemy when there's no drop engine left.
+        const target = dropEngineTarget(state, aiSide, asset) || highestHpEnemy(state, aiSide);
         if (target) dest = moveToward(asset, target.x, target.y, thrustPx, margin);
       }
 

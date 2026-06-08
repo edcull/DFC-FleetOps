@@ -690,6 +690,21 @@ describe('AI — secure multiple dropsites (spread, avoid lost causes)', () => {
     expect(picks).not.toContain('big');           // neither escalates the 30-battalion lost cause
   });
 
+  it('CONCENTRATES the droppers on one city when badly out-dropped by an enemy drop engine', () => {
+    function build2() {
+      const s = makeState(); s.activeSide = 'player1'; s.scenario = { objective: 'standard' };
+      s.scenarioData = { dropsites: [
+        { id: 'medA', type: 'medium_city', base: { layer: 'Atmosphere' }, x: 40, y: 16, destroyed: false, battalions: {} },
+        { id: 'medB', type: 'medium_city', base: { layer: 'Atmosphere' }, x: 12, y: 36, destroyed: false, battalions: {} },
+      ] };
+      for (let i = 0; i < 2; i++) addGroup(s, shipDef({ id: 'player1:sc' + i, side: 'player1', name: 'Strike Carrier', role: 'Strike Carrier', tonnage: 'L', thrust: 10, special: 'Descent', launch: [{ name: 'Dropships', n: 1, type: 'dropship' }], weapons: [] }), [shipInstance({ x: 288 + i * 20, y: 300, heading: 90, layer: 'orbit' })]);
+      for (let i = 0; i < 3; i++) addGroup(s, shipDef({ id: 'player2:em' + i, side: 'player2', name: 'Emerald Mothership', launch: [{ name: 'Dropships', n: 4, type: 'gate_dropship' }] }), [shipInstance({ x: 300, y: 60 })]); // big enemy drop engine
+      return s;
+    }
+    const picks = [0, 1].map(i => { const s = build2(); return dsAt(s, descentDropperPlan(s, 'player1:sc' + i, 'player1')); });
+    expect(new Set(picks).size).toBe(1);          // both carriers stack on ONE city to actually secure it
+  });
+
   it('targets the enemy drop engine (Mothership) over a higher-points combat ship', () => {
     const s = makeState(); s.activeSide = 'player1'; s.scenario = { objective: 'standard' }; s.scenarioData = { dropsites: [] };
     addGroup(s, shipDef({ id: 'player1:cr', side: 'player1', name: 'Cruiser', scan: 14, weapons: [weapon({ arc: 'F/S', att: 4, lock: '3+' })] }),
