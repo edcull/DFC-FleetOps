@@ -4,7 +4,7 @@
 import { INCH, ORDERS } from '../engine/constants.js';
 import { moveCone, dsEnemyBattalions, dsBattalions, connectedGateships, coherencyInches, outOfFormationSet, shipInNetwork } from '../engine/mutators.js';
 import { isLegal } from '../engine/gating.js';
-import { bestMoveToward, findBestTarget, baseDiameterPx, gateRunnerPlan, gateMotherPlan, corvettePlan } from './options.js';
+import { bestMoveToward, findBestTarget, baseDiameterPx, gateRunnerPlan, gateMotherPlan, corvettePlan, descentDropperPlan } from './options.js';
 
 // Ground-launch aura ranges + target constraints (mirrors the client's LAUNCH_TYPES /
 // tryGroundLaunch). Launch range isn't gated, so the AI must check it itself or it
@@ -315,9 +315,17 @@ export function buildActivation(state, rng, gid, order, movePlan, aiSide, applyF
       movePlan = { x: plan.x, y: plan.y, reason: 'kill', toggle: plan.toggle };
     }
   }
-  // (Normal bulk-lander/dropship droppers are intentionally NOT forced onto Course Change:
-  // their 6" launch range reaches dropsites from Orbit without the gate's tight 3"/same-layer
-  // constraint, so they already drop reliably; forcing CC's ½-Thrust cap only slows them.)
+  // Descent droppers (Strike Carrier, Colony Ship etc.): must be IN Atmosphere to drop on cities.
+  // Dropships require same-layer as the city (Atmosphere); loitering in Orbit next to a city can't
+  // drop (groundLaunchInRange blocks it) and leaves the ship in the firing line. Script them to
+  // descend when they can land on the target, closing in Orbit at full speed until then.
+  else if (descentDropperPlan(state, gid, aiSide)) {
+    const plan = descentDropperPlan(state, gid, aiSide);
+    if (plan && isLegal(state, { type: 'applyOrder', gid, order: plan.order }, aiSide)) {
+      order = plan.order;
+      movePlan = { x: plan.x, y: plan.y, reason: 'vp', toggle: plan.toggle };
+    }
+  }
 
   // Formation discipline for multi-ship combat groups. General Quarters forces a ≥½-Thrust
   // move AND allows a 45° turn, so it breaks tight formations two ways:

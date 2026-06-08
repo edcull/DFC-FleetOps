@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { gateRunnerPlan, gateMotherPlan, generateActivationOptions, corvettePlan } from '../../src/ai/options.js';
+import { gateRunnerPlan, gateMotherPlan, generateActivationOptions, corvettePlan, descentDropperPlan } from '../../src/ai/options.js';
 import { handleActivation } from '../../src/ai/handlers/activation.js';
 import { getPersonality } from '../../src/ai/personalities.js';
 import { handlePreGame } from '../../src/ai/handlers/pregame.js';
@@ -394,6 +394,59 @@ describe('UCM tactical rules — droppers, Max Thrust, corvettes', () => {
     expect(plan).toBeTruthy();
     expect(plan.order).toBe('MT');           // sprint to close the gap
     expect(plan.toggle).toBe(false);         // stays in Orbit — does NOT dive mid-field
+  });
+});
+
+describe('descentDropperPlan — Strike Carrier descends to Atmosphere to drop on cities', () => {
+  function strikeCarrierState(layer, shipX, shipY, dsLayer) {
+    const s = makeState(); s.activeSide = 'player1'; s.scenario = { objective: 'standard' };
+    s.scenarioData = { dropsites: [{ id: 'ds1', type: 'large_city', base: { layer: dsLayer }, x: 24, y: 24, destroyed: false, battalions: { ground: { player1: 0, player2: 2 } } }] };
+    addGroup(s, shipDef({ id: 'player1:sc', side: 'player1', name: 'New Orleans Strike Carrier', role: 'Strike Carrier', thrust: 10, special: 'Descent',
+      launch: [{ name: 'Dropships', n: 1, type: 'dropship' }], weapons: [] }),
+      [shipInstance({ x: shipX, y: shipY, heading: 90, layer })]);
+    return s;
+  }
+
+  it('plans to descend when within thrust of an atmosphere city', () => {
+    // thrust 10 → 120px; city at (24*12, 24*12) = (288, 288); ship at (288, 200) → dist 88px < 120px
+    const s = strikeCarrierState('orbit', 288, 200, 'Atmosphere');
+    const plan = descentDropperPlan(s, 'player1:sc', 'player1');
+    expect(plan).toBeTruthy();
+    expect(plan.toggle).toBe(true);   // descends to Atmosphere
+    expect(plan.order).toBe('GQ');    // general quarters to move + descend
+  });
+
+  it('closes in Orbit (no early dive) when city is beyond thrust range', () => {
+    // ship at (288, 30) → dist to city (288,288) is 258px; thrust 120px → beyond reach
+    const s = strikeCarrierState('orbit', 288, 30, 'Atmosphere');
+    const plan = descentDropperPlan(s, 'player1:sc', 'player1');
+    expect(plan).toBeTruthy();
+    expect(plan.toggle).toBe(false);  // stays in Orbit
+    expect(plan.order).toBe('GQ');    // advancing at speed
+  });
+
+  it('stays in Atmosphere on an orbit dropsite (no plan for orbit ships)', () => {
+    // No atmosphere dropsites → no plan (Orbit dropsite only)
+    const s = strikeCarrierState('orbit', 288, 200, 'Orbit');
+    const plan = descentDropperPlan(s, 'player1:sc', 'player1');
+    expect(plan).toBeNull();          // no atmosphere target → let normal dropper logic handle it
+  });
+
+  it('uses Course Change to park precisely once already within ½ thrust', () => {
+    // ship at (288, 260) → dist to (288,288) is 28px; ½ thrust = 60px → within ½ thrust → CC
+    const s = strikeCarrierState('orbit', 288, 260, 'Atmosphere');
+    const plan = descentDropperPlan(s, 'player1:sc', 'player1');
+    expect(plan).toBeTruthy();
+    expect(plan.toggle).toBe(true);   // descends
+    expect(plan.order).toBe('CC');    // parks precisely
+  });
+
+  it('already in Atmosphere: heads to city without toggling', () => {
+    const s = strikeCarrierState('atmosphere', 288, 200, 'Atmosphere');
+    const plan = descentDropperPlan(s, 'player1:sc', 'player1');
+    expect(plan).toBeTruthy();
+    expect(plan.toggle).toBe(false);  // already in atmosphere
+    expect(plan.order).toBe('GQ');
   });
 });
 

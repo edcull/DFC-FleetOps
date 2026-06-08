@@ -293,6 +293,42 @@ export function corvettePlan(state, gid, aiSide) {
   return { order: 'GQ', x: tgt.x, y: tgt.y, toggle: false };                          // close the gap in Orbit
 }
 
+// Guide a Descent-capable dropper (Strike Carrier, Colony Ship etc.) to land ON an atmosphere
+// dropsite. Descent ships are very hard to hit in Atmosphere and must be there to drop on cities.
+// Like gateRunnerPlan: stay in Orbit (fast) until within thrust, then descend on the landing move.
+// Returns { order, x, y, toggle } | null.  Only applies on scoring/extract missions.
+export function descentDropperPlan(state, gid, aiSide) {
+  const grp = state.groups[gid];
+  const def = grp?.def;
+  if (!defIsDropper(def) || !defIsDescent(def) || defIsCorvette(def)) return null;
+  if (!isDropMission(state)) return null;
+  const si = grp.ships.findIndex(s => !s.destroyed && !s.offTable);
+  if (si < 0) return null;
+  const ship = grp.ships[si];
+  const inAtmo = (ship.layer || 'orbit') === 'atmosphere';
+  // If already in atmosphere, head toward the nearest atmosphere dropsite and stay there.
+  const atmoDropsites = (state.scenarioData?.dropsites || [])
+    .filter(d => !d.destroyed && d.base?.layer === 'Atmosphere')
+    .sort((a, b) => dist2d(ship.x, ship.y, a.x * INCH, a.y * INCH) - dist2d(ship.x, ship.y, b.x * INCH, b.y * INCH));
+  const tgt = atmoDropsites[0];
+  if (!tgt) return null;
+  const ox = tgt.x * INCH, oy = tgt.y * INCH;
+  const dist = dist2d(ship.x, ship.y, ox, oy);
+  const thrustPx = (def.thrust || 8) * INCH;
+  const halfThrustPx = 0.5 * thrustPx;
+  if (inAtmo) {
+    // Already down: park on the dropsite precisely (CC within ½ thrust, GQ beyond).
+    const order = dist <= halfThrustPx + 1 ? 'CC' : 'GQ';
+    return { order, x: ox, y: oy, toggle: false };
+  }
+  // In Orbit: only descend when this move can actually reach the dropsite (landing on it),
+  // otherwise close the gap in Orbit at full speed — descending early strands the ship in
+  // Atmosphere at 2"/turn far from the city.
+  if (dist <= halfThrustPx + 1) return { order: 'CC', x: ox, y: oy, toggle: true };
+  if (dist <= thrustPx + 1)     return { order: 'GQ', x: ox, y: oy, toggle: true };
+  return { order: 'GQ', x: ox, y: oy, toggle: false };
+}
+
 // { li, dsId, count, type:'gate_dropship' } | null. The Mothership needn't move — it just
 // needs to stay in the 18" Voidgate network.
 function gateLaunchPlan(state, grp, ship, aiSide) {
@@ -313,20 +349,28 @@ function gateLaunchPlan(state, grp, ship, aiSide) {
   return null;
 }
 
-// Plan to drop battalions at the nearest contestable dropsite this group can reach
-// (launch range + a move's worth of slack). Returns { li, dsId, count, type } | null.
+// Plan to drop battalions at the nearest contestable dropsite the ship can reach AND land on.
+// Filters by matching orbital layer (dropships require same-layer; bulk landers can reach across
+// layers per the rules but must still be within range). Returns { li, dsId, count, type } | null.
 function dropLaunchPlan(state, grp, ship, aiSide) {
   if (!ship) return null;
   const launches = grp.def?.launch || [];
   const dropsites = state.scenarioData?.dropsites || [];
+  const shipLayer = ship.layer || 'orbit';
   for (let li = 0; li < launches.length; li++) {
     const l = launches[li];
     const r = LAUNCH_RANGE[l.type];
     if (r == null) continue;
     const rangePx = (r + 10) * INCH; // launch range + ~one move
+    // Dropships require the ship to be in the same orbital layer as the dropsite.
+    // Only plan a drop on a dropsite we can currently reach from this layer.
     const ds = dropsites
       .filter(d => !d.destroyed && dropsiteController(d) !== aiSide)
-      .filter(d => dist2d(ship.x, ship.y, d.x * INCH, d.y * INCH) <= rangePx)
+      .filter(d => {
+        const dsLayer = d.base?.layer === 'Atmosphere' ? 'atmosphere' : 'orbit';
+        if (l.type === 'dropship' && dsLayer !== shipLayer) return false;
+        return dist2d(ship.x, ship.y, d.x * INCH, d.y * INCH) <= rangePx;
+      })
       .sort((a, b) => dist2d(ship.x, ship.y, a.x * INCH, a.y * INCH) - dist2d(ship.x, ship.y, b.x * INCH, b.y * INCH))[0];
     if (ds) return { li, dsId: ds.id, count: l.n, type: l.type };
   }
