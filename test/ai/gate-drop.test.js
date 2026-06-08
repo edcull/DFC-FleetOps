@@ -533,6 +533,36 @@ describe('handleActivation — no re-firing (finish a group that already acted)'
   });
 });
 
+describe('buildActivation — obstacle-aware movement (no ending on occupied bases)', () => {
+  const ap = (s) => (i) => { if (!isLegal(s, i, 'player1')) return false; apply(s, i, fixedRng(3)); return true; };
+
+  it('a group advancing toward a crowded area stops short instead of stacking onto other ships', () => {
+    const s = makeState(); s.activeSide = 'player1'; s.scenario = { objective: 'standard' }; s.scenarioData = { dropsites: [] };
+    addGroup(s, shipDef({ id: 'player1:fr', side: 'player1', name: 'Frigate', role: 'Frigate', tonnage: 'L', thrust: 12,
+      weapons: [weapon({ arc: 'F', att: 3, lock: '3+' })] }),
+      [shipInstance({ x: 280, y: 400, heading: -90 }), shipInstance({ x: 300, y: 400, heading: -90 }), shipInstance({ x: 320, y: 400, heading: -90 })]);
+    // A cluster of other friendly ships occupying the path between the group and its target.
+    for (let i = 0; i < 5; i++) addGroup(s, shipDef({ id: 'player1:occ' + i, side: 'player1', name: 'Occ', tonnage: 'L' }),
+      [shipInstance({ x: 280 + i * 15, y: 330 })]);
+    addGroup(s, shipDef({ id: 'player2:e', side: 'player2', tonnage: 'M' }), [shipInstance({ x: 300, y: 200 })]); // target ahead
+
+    buildActivation(s, fixedRng(3), 'player1:fr', 'GQ', { x: 300, y: 200, reason: 'kill' }, 'player1', ap(s));
+
+    const r = (15 / 25.4) * INCH / 2; // L base radius
+    const ours = s.groups['player1:fr'].ships;
+    const others = [];
+    for (const gid in s.groups) { if (gid === 'player1:fr') continue; for (const sh of s.groups[gid].ships) if (!sh.destroyed && !sh.offTable) others.push(sh); }
+    let overlaps = 0;
+    for (const o of ours) for (const x of others) {
+      if ((o.layer || 'orbit') === (x.layer || 'orbit') && Math.hypot(o.x - x.x, o.y - x.y) < r + r - 1) overlaps++;
+    }
+    expect(overlaps).toBe(0);                       // never ends on an occupied base (no conga shove)
+    // and the group stays coherent (each ship within 3" of a group-mate)
+    const coh = 3 * INCH;
+    for (const a of ours) expect(ours.some(b => b !== a && Math.hypot(a.x - b.x, a.y - b.y) <= coh)).toBe(true);
+  });
+});
+
 describe('AI — threat-aware positioning (don\'t charge a superior gunline)', () => {
   function gunlineScenario(ourDef) {
     const s = makeState(); s.activeSide = 'player1'; s.scenario = { objective: 'standard' };
