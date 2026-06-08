@@ -4,7 +4,7 @@
 
 import { ORDERS, INCH, DEPLOYMENTS, OBJECTIVES } from '../engine/constants.js';
 import { isLegal } from '../engine/gating.js';
-import { moveCone, weaponCanTarget, dropsiteController, canDeployNow, isInZone, isInVanguardZone, coherencyInches, connectedGateships } from '../engine/mutators.js';
+import { moveCone, weaponCanTarget, dropsiteController, canDeployNow, isInZone, isInVanguardZone, coherencyInches, connectedGateships, dsEnemyBattalions, dsSideBattalions } from '../engine/mutators.js';
 
 const BOARD_PX = 48 * INCH;
 const TONNAGE_ORDER = { C: 0, H: 1, M: 2, L: 3 };
@@ -333,17 +333,17 @@ export function descentDropperPlan(state, gid, aiSide) {
   if (si < 0) return null;
   const ship = grp.ships[si];
   const inAtmo = (ship.layer || 'orbit') === 'atmosphere';
-  // Target the most VALUABLE contestable city (Large > Medium > Small), not just the nearest —
-  // and never a city we already control (that's why Strike Carriers used to idle on a Medium City
-  // they'd taken while the Large City went uncontested). Fall back to the nearest city only when
-  // there's nothing left to contest.
-  const cities = (state.scenarioData?.dropsites || [])
-    .filter(d => !d.destroyed && d.base?.layer === 'Atmosphere');
-  const valueOf = d => d.type === 'large_city' ? 3 : d.type === 'medium_city' ? 2 : 1;
-  const byValueThenDist = arr => arr.slice().sort((a, b) =>
-    valueOf(b) - valueOf(a) || dist2d(ship.x, ship.y, a.x * INCH, a.y * INCH) - dist2d(ship.x, ship.y, b.x * INCH, b.y * INCH));
-  const contestable = cities.filter(d => dropsiteController(d) !== aiSide);
-  const tgt = byValueThenDist(contestable)[0] || byValueThenDist(cities)[0];
+  // SPREAD across distinct cities and prefer ones we can actually SECURE: different Strike Carrier
+  // groups go to DIFFERENT atmosphere cities (not all piling on the Large City), and a city the
+  // enemy has overwhelmed is avoided in favour of a free/contested one. Fall back to the nearest
+  // atmosphere city only when there's nothing contestable left.
+  const isDescentDropper = d => defIsDropper(d) && defIsDescent(d) && !defIsCorvette(d);
+  let tgt = spreadDropsiteTarget(state, gid, aiSide, ship, isDescentDropper, { layer: 'atmosphere' });
+  if (!tgt) {
+    tgt = (state.scenarioData?.dropsites || [])
+      .filter(d => !d.destroyed && d.base?.layer === 'Atmosphere')
+      .sort((a, b) => dist2d(ship.x, ship.y, a.x * INCH, a.y * INCH) - dist2d(ship.x, ship.y, b.x * INCH, b.y * INCH))[0];
+  }
   if (!tgt) return null;
   const ox = tgt.x * INCH, oy = tgt.y * INCH;
   const dist = dist2d(ship.x, ship.y, ox, oy);
@@ -467,9 +467,13 @@ export function bestMoveToward(ship, mc, targetX, targetY) {
 // over all friendly groups matching `pool`: the best (group, dropsite) pairs are claimed first and
 // each dropsite is taken by one group until they run out, so groups split up. Distance is pulled
 // by dropsite value so the richest objective is always claimed. Returns this group's dropsite|null.
-function spreadDropsiteTarget(state, gid, aiSide, ship, pool) {
-  const contestable = (state.scenarioData?.dropsites || [])
+function spreadDropsiteTarget(state, gid, aiSide, ship, pool, opts = {}) {
+  let contestable = (state.scenarioData?.dropsites || [])
     .filter(ds => !ds.destroyed && dropsiteController(ds) !== aiSide);
+  if (opts.layer) {
+    const want = opts.layer;
+    contestable = contestable.filter(ds => (ds.base?.layer === 'Atmosphere' ? 'atmosphere' : 'orbit') === want);
+  }
   if (!contestable.length) return null;
   const groups = [];
   for (const [ogid, g] of Object.entries(state.groups)) {
@@ -477,8 +481,13 @@ function spreadDropsiteTarget(state, gid, aiSide, ship, pool) {
     const s = g.ships.find(x => !x.destroyed && !x.offTable);
     if (s) groups.push({ gid: ogid, x: s.x, y: s.y });
   }
-  const PULL = 8 * INCH;     // each value tier is worth ~8" of approach distance
-  const cost = (gp, ds) => dist2d(gp.x, gp.y, ds.x * INCH, ds.y * INCH) - dsVpValue(ds) * PULL;
+  const PULL = 8 * INCH;       // each value tier is worth ~8" of approach distance
+  const SECURE = 12 * INCH;    // each enemy battalion of lead beyond a couple = ~12" of cost
+  // A dropsite the enemy has overwhelmed is a LOST CAUSE — we can't win the battalion war there, so
+  // we'd rather go SECURE a free/contested one. Penalise by how far ahead the enemy is (over a small
+  // grace), so droppers spread to take uncontested objectives instead of escalating one big fight.
+  const lostCause = ds => Math.max(0, dsEnemyBattalions(ds, aiSide) - dsSideBattalions(ds, aiSide) - 2);
+  const cost = (gp, ds) => dist2d(gp.x, gp.y, ds.x * INCH, ds.y * INCH) - dsVpValue(ds) * PULL + lostCause(ds) * SECURE;
   if (!groups.length) return contestable.slice().sort((a, b) => cost({ x: ship.x, y: ship.y }, a) - cost({ x: ship.x, y: ship.y }, b))[0];
   // Greedy 1:1 assignment: claim the cheapest (group, dropsite) pairs first, one group per
   // dropsite until the dropsites are used up.
@@ -629,6 +638,9 @@ function computeFleetFocusTarget(state, aiSide) {
       const hull = ts.hull ?? ts.maxHull ?? 1;
       const score = attackers * 100 - hull * 8
         + (defIsPrimaryTarget(tg.def) ? 40 : 0)
+        // The enemy drop engine (Mothership channelling, or any dropper) is the priority kill —
+        // killing it stops their objective scoring outright.
+        + (defIsGateMother(tg.def) ? 180 : defIsDropper(tg.def) ? 90 : 0)
         + (hull < (ts.maxHull || hull) ? 25 : 0); // already wounded → finish it
       if (score > bestScore) { bestScore = score; best = { gid: tgid, si: tsi }; }
     }
@@ -709,7 +721,10 @@ function findBestTarget(state, gid, si, wi, aiSide) {
       const tAtmoDescent = defIsDescent(tgrp.def) && (tship.layer || 'orbit') === 'atmosphere';
       const score = (tgrp.def.pts || 0)
         + (tship.hull < (tship.maxHull || 1) / 2 ? 50 : 0)   // prefer crippled
-        + (defIsDropper(tgrp.def) ? 150 : 0)                 // prioritise enemy drop ships to stop landings
+        // Prioritise enemy drop ships to stop landings. A Mothership/Voidgate-network carrier
+        // (gate_dropship) channels MANY battalions a round — the highest-value kill of all — so it
+        // outranks ordinary bulk-lander/dropship carriers.
+        + (defIsGateMother(tgrp.def) ? 300 : defIsDropper(tgrp.def) ? 150 : 0)
         // Corvettes (Air-to-Air, ignore the atmosphere penalty) exist to hunt enemy Descent ships
         // landing in Atmosphere — make that their overriding target.
         + (defIsCorvette(def) && tAtmoDescent ? 400 : 0)

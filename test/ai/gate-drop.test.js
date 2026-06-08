@@ -563,6 +563,41 @@ describe('buildActivation — obstacle-aware movement (no ending on occupied bas
   });
 });
 
+describe('AI — secure multiple dropsites (spread, avoid lost causes)', () => {
+  function dsAt(s, t) { return s.scenarioData.dropsites.map(d => ({ id: d.id, dist: Math.hypot(d.x * INCH - t.x, d.y * INCH - t.y) })).sort((a, b) => a.dist - b.dist)[0].id; }
+  function build() {
+    const s = makeState(); s.activeSide = 'player1'; s.scenario = { objective: 'standard' };
+    s.scenarioData = { dropsites: [
+      { id: 'big', type: 'large_city', base: { layer: 'Atmosphere' }, x: 24, y: 24, destroyed: false, battalions: { ground: { player1: 0, player2: 30 } } }, // lost cause
+      { id: 'medA', type: 'medium_city', base: { layer: 'Atmosphere' }, x: 40, y: 16, destroyed: false, battalions: { ground: { player1: 0, player2: 0 } } },
+      { id: 'medB', type: 'medium_city', base: { layer: 'Atmosphere' }, x: 12, y: 36, destroyed: false, battalions: { ground: { player1: 0, player2: 0 } } },
+    ] };
+    for (let i = 0; i < 2; i++) addGroup(s, shipDef({ id: 'player1:sc' + i, side: 'player1', name: 'Strike Carrier', role: 'Strike Carrier', tonnage: 'L', thrust: 10, special: 'Descent',
+      launch: [{ name: 'Dropships', n: 1, type: 'dropship' }], weapons: [] }), [shipInstance({ x: 288 + i * 20, y: 300, heading: 90, layer: 'orbit' })]);
+    return s;
+  }
+
+  it('Strike Carriers spread to DIFFERENT cities and avoid a city the enemy has overwhelmed', () => {
+    const picks = [];
+    for (let i = 0; i < 2; i++) { const s = build(); picks.push(dsAt(s, descentDropperPlan(s, 'player1:sc' + i, 'player1'))); }
+    expect(new Set(picks).size).toBe(2);          // two different cities
+    expect(picks).not.toContain('big');           // neither escalates the 30-battalion lost cause
+  });
+
+  it('targets the enemy drop engine (Mothership) over a higher-points combat ship', () => {
+    const s = makeState(); s.activeSide = 'player1'; s.scenario = { objective: 'standard' }; s.scenarioData = { dropsites: [] };
+    addGroup(s, shipDef({ id: 'player1:cr', side: 'player1', name: 'Cruiser', scan: 14, weapons: [weapon({ arc: 'F/S', att: 4, lock: '3+' })] }),
+      [shipInstance({ x: 288, y: 200, heading: 90 })]);
+    addGroup(s, shipDef({ id: 'player2:moth', side: 'player2', name: 'Emerald Mothership', tonnage: 'M', pts: 115, launch: [{ name: 'Dropships', n: 4, type: 'gate_dropship' }] }),
+      [Object.assign(shipInstance({ x: 300, y: 240 }), { maxHull: 12, hull: 12 })]);
+    addGroup(s, shipDef({ id: 'player2:hc', side: 'player2', name: 'Heavy Cruiser', tonnage: 'H', pts: 125 }),
+      [Object.assign(shipInstance({ x: 280, y: 240 }), { maxHull: 14, hull: 14 })]);
+    const targets = generateActivationOptions(s, 'player1').filter(o => o.groupId === 'player1:cr').flatMap(o => o.weapTargets || []);
+    expect(targets.length).toBeGreaterThan(0);
+    expect(targets.every(t => t.targetGid === 'player2:moth')).toBe(true);
+  });
+});
+
 describe('AI — threat-aware positioning (don\'t charge a superior gunline)', () => {
   function gunlineScenario(ourDef) {
     const s = makeState(); s.activeSide = 'player1'; s.scenario = { objective: 'standard' };
