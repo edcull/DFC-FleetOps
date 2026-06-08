@@ -379,6 +379,22 @@ describe('UCM tactical rules — droppers, Max Thrust, corvettes', () => {
     expect(plan.toggle).toBe(true);          // descends to Atmosphere
     expect(plan.y).toBeCloseTo(288, -1);     // toward the enemy Descent ship
   });
+
+  it('a corvette too far to reach this turn closes in Orbit (no mid-field dive that strands it)', () => {
+    // Atmosphere caps movement at 2"/turn, so descending mid-flight leaves the corvette crawling
+    // with nothing in range. Beyond thrust it should sprint in ORBIT and only descend once it can
+    // land on the target. thrust 14 → 168px reach; target ~250px away (within 2× thrust).
+    const s = makeState(); s.activeSide = 'player1'; s.scenario = { objective: 'standard' };
+    s.scenarioData = { dropsites: [] };
+    addGroup(s, shipDef({ id: 'player1:cv', side: 'player1', name: 'Corvette', role: 'Corvette', special: 'Descent', thrust: 14, weapons: [weapon({ arc: 'F/S/R', special: 'Air to Air' })] }),
+      [shipInstance({ x: 288, y: 40, heading: 90, layer: 'orbit' })]);
+    addGroup(s, shipDef({ id: 'player2:sc', side: 'player2', name: 'Strike Carrier', role: 'Strike Carrier', special: 'Descent' }),
+      [Object.assign(shipInstance({ x: 288, y: 290 }), { layer: 'atmosphere' })]);
+    const plan = corvettePlan(s, 'player1:cv', 'player1');
+    expect(plan).toBeTruthy();
+    expect(plan.order).toBe('MT');           // sprint to close the gap
+    expect(plan.toggle).toBe(false);         // stays in Orbit — does NOT dive mid-field
+  });
 });
 
 describe('handleActivation — no re-firing (finish a group that already acted)', () => {
