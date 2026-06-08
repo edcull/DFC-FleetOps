@@ -299,7 +299,7 @@ describe('buildActivation — in-network Voidgate movement', () => {
 });
 
 describe('gateMotherPlan — Mothership hangs back (survivability)', () => {
-  it('positions the carrier behind the forward gate toward our own edge, not into the front', () => {
+  it('anchors ~15" behind the shared objective toward our own edge (not chasing a stray gate)', () => {
     const s = makeState();
     s.deployZone = { player1: 'south', player2: 'north' }; // player2 edge at y=0
     s.scenarioData = { dropsites: [{ id: 'ds1', type: 'small_station', base: { layer: 'Orbit' }, x: 24, y: 30, destroyed: false, battalions: { ground: { player1: 0, player2: 0 } } }] };
@@ -312,8 +312,29 @@ describe('gateMotherPlan — Mothership hangs back (survivability)', () => {
     const plan = gateMotherPlan(s, 'player2:em', 'player2');
     expect(plan).toBeTruthy();
     expect(plan.launch).toBeUndefined();        // no drop live yet → reposition
-    expect(plan.y).toBeLessThan(300);           // BACK toward our edge (north), not into the front
-    expect(plan.y).toBeCloseTo(300 - 15 * 12, -1); // ~15" behind the forward gate
+    // Objective (ds1) is at y=360px; hang back 15" (180px) toward our own edge (north) → y≈180.
+    expect(plan.y).toBeCloseTo(360 - 15 * 12, -1);
+    expect(plan.y).toBeLessThan(300);           // BACK toward our edge, behind the gate
+    // Still chained: within 16" of the forward gate (at y=300px) so it can channel.
+    expect(Math.hypot(plan.x - 288, plan.y - 300)).toBeLessThanOrEqual(16 * 12 + 1);
+  });
+
+  it('does not chase a stray gate into the corner — stays anchored on the objective', () => {
+    const s = makeState();
+    s.deployZone = { player1: 'south', player2: 'north' };
+    // Objective dropsite near the top-centre; a stray gate has wandered to the bottom-right corner.
+    s.scenarioData = { dropsites: [{ id: 'ds1', type: 'large_city', base: { layer: 'Orbit' }, x: 24, y: 12, destroyed: false, battalions: { ground: { player1: 0, player2: 0 } } }] };
+    const onObj = shipDef({ id: 'player2:vg1', side: 'player2', name: 'Voidgate', openNetwork: true, gateship: 2, thrust: 12, weapons: [] });
+    addGroup(s, onObj, [Object.assign(shipInstance({ x: 288, y: 150, layer: 'orbit' }), { deployedRound: 1 })]); // near the objective
+    const stray = shipDef({ id: 'player2:vg2', side: 'player2', name: 'Voidgate', openNetwork: true, gateship: 2, thrust: 12, weapons: [] });
+    addGroup(s, stray, [Object.assign(shipInstance({ x: 540, y: 510, layer: 'orbit' }), { deployedRound: 1 })]); // corner straggler
+    const mother = shipDef({ id: 'player2:em', side: 'player2', name: 'Emerald Mothership', thrust: 10, launch: [{ name: 'Dropships', n: 4, type: 'gate_dropship' }] });
+    addGroup(s, mother, [shipInstance({ x: 288, y: 120, layer: 'orbit' })]);
+
+    const plan = gateMotherPlan(s, 'player2:em', 'player2');
+    expect(plan).toBeTruthy();
+    // Anchored near the objective column (x≈288), NOT dragged toward the corner gate (x=540).
+    expect(plan.x).toBeLessThan(360);
   });
 });
 
@@ -461,6 +482,35 @@ describe('descentDropperPlan — Strike Carrier descends to Atmosphere to drop o
     const plan = descentDropperPlan(s, 'player1:sc', 'player1');
     expect(plan).toBeTruthy();
     expect(plan.toggle).toBe(false);  // already in atmosphere
+    expect(plan.order).toBe('GQ');
+  });
+
+  // Two cities: a Medium we already control (nearer) and an uncontested Large (further).
+  function twoCityState(layer, shipX, shipY) {
+    const s = makeState(); s.activeSide = 'player1'; s.scenario = { objective: 'standard' };
+    s.scenarioData = { dropsites: [
+      { id: 'med', type: 'medium_city', base: { layer: 'Atmosphere' }, x: 26, y: 18, destroyed: false, battalions: { ground: { player1: 2, player2: 0 } } }, // we control it
+      { id: 'lrg', type: 'large_city', base: { layer: 'Atmosphere' }, x: 24, y: 40, destroyed: false, battalions: { ground: { player1: 0, player2: 0 } } },     // uncontested
+    ] };
+    addGroup(s, shipDef({ id: 'player1:sc', side: 'player1', name: 'Strike Carrier', role: 'Strike Carrier', thrust: 10, special: 'Descent',
+      launch: [{ name: 'Dropships', n: 1, type: 'dropship' }], weapons: [] }),
+      [shipInstance({ x: shipX, y: shipY, heading: 90, layer })]);
+    return s;
+  }
+
+  it('redeploys to the contestable Large City instead of idling on a Medium it already controls', () => {
+    // Ship sits on the controlled Medium City (26,18 → 312,216). The plan should aim at the Large City.
+    const s = twoCityState('atmosphere', 312, 216);
+    const plan = descentDropperPlan(s, 'player1:sc', 'player1');
+    expect(plan).toBeTruthy();
+    expect(plan.y).toBeGreaterThan(216);   // heads down toward the Large City (24,40 → y=480), not held on the Medium
+  });
+
+  it('ascends to redeploy when the contestable city is far across the Atmosphere', () => {
+    // In Atmosphere on the Medium (312,216); Large City is ~22" away — too far to crawl at 2"/turn.
+    const s = twoCityState('atmosphere', 312, 216);
+    const plan = descentDropperPlan(s, 'player1:sc', 'player1');
+    expect(plan.toggle).toBe(true);        // ascend to Orbit to redeploy at full Thrust
     expect(plan.order).toBe('GQ');
   });
 });

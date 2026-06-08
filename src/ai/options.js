@@ -238,27 +238,53 @@ export function gateMotherPlan(state, gid, aiSide) {
   // cities included once a gate has descended) → hold position and launch.
   const launch = gateLaunchPlan(state, grp, ship, aiSide);
   if (launch) return { order: 'CC', x: ship.x, y: ship.y, launch };
-  // Otherwise: stay safe. Anchor on the forward gate (nearest connected gate to a contestable
-  // dropsite) but sit ~15" BEHIND it toward our own deployment edge — far enough back to keep
-  // the carrier out of the firefight while still holding the 18" chain so it can channel.
-  let fwd = null, fbest = Infinity;
+  // Otherwise: stay safe AND keep the channel. Anchor behind the SHARED objective (the whole
+  // network's target) rather than chasing the single nearest gate — when one Voidgate strays, the
+  // old code dragged every Mothership after it into a corner, out of channelling range. Sitting
+  // ~15" back from the objective toward our own edge clusters the Motherships in one safe spot
+  // behind the converging gates. If that point drifts out of the 18" chain to the nearest gate,
+  // pull it toward that gate so it can still channel.
+  const obj = gateObjective(state, aiSide);
+  let anchorX, anchorY;
+  if (obj) { anchorX = obj.x * INCH; anchorY = obj.y * INCH; }
+  else {
+    // No contestable objective — fall back to hanging behind the gate nearest a dropsite.
+    let fwd = null, fbest = Infinity;
+    for (const g of Object.values(state.groups)) {
+      if (g.def?.side !== aiSide || !g.def?.openNetwork) continue;
+      for (const s of g.ships) {
+        if (s.destroyed || s.offTable) continue;
+        const nd = Math.min(...dss.map(d => dist2d(s.x, s.y, d.x * INCH, d.y * INCH)));
+        if (nd < fbest) { fbest = nd; fwd = s; }
+      }
+    }
+    if (!fwd) return null;
+    anchorX = fwd.x; anchorY = fwd.y;
+  }
+  // Direction toward our own board edge (away from the enemy line).
+  const zone = state.deployZone?.[aiSide];
+  const edgeY = zone === 'north' ? 0 : zone === 'south' ? BOARD_PX : (aiSide === 'player1' ? BOARD_PX : 0);
+  const backDir = edgeY < anchorY ? -1 : 1;
+  const KEEP_PX = 15 * INCH;  // 15" behind the objective — inside the 18" chain with margin
+  const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+  let tx = clamp(anchorX, INCH * 2, BOARD_PX - INCH * 2);
+  let ty = clamp(anchorY + backDir * KEEP_PX, INCH * 2, BOARD_PX - INCH * 2);
+  // Stay chained: if the nearest own gate is beyond ~16" of this anchor, lerp toward it so the
+  // 18" channel holds (the gates are what actually do the dropping).
+  let ng = null, ngd = Infinity;
   for (const g of Object.values(state.groups)) {
     if (g.def?.side !== aiSide || !g.def?.openNetwork) continue;
     for (const s of g.ships) {
       if (s.destroyed || s.offTable) continue;
-      const nd = Math.min(...dss.map(d => dist2d(s.x, s.y, d.x * INCH, d.y * INCH)));
-      if (nd < fbest) { fbest = nd; fwd = s; }
+      const dd = dist2d(tx, ty, s.x, s.y);
+      if (dd < ngd) { ngd = dd; ng = s; }
     }
   }
-  if (!fwd) return null;
-  // Direction toward our own board edge (away from the enemy line).
-  const zone = state.deployZone?.[aiSide];
-  const edgeY = zone === 'north' ? 0 : zone === 'south' ? BOARD_PX : (aiSide === 'player1' ? BOARD_PX : 0);
-  const backDir = edgeY < fwd.y ? -1 : 1;
-  const KEEP_PX = 15 * INCH; // 15" behind the forward gate — inside the 18" chain with margin
-  const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
-  const tx = clamp(fwd.x, INCH * 2, BOARD_PX - INCH * 2);
-  const ty = clamp(fwd.y + backDir * KEEP_PX, INCH * 2, BOARD_PX - INCH * 2);
+  if (ng && ngd > 16 * INCH) {
+    const t = 1 - (16 * INCH) / ngd;       // fraction to slide toward the gate
+    tx = clamp(tx + (ng.x - tx) * t, INCH * 2, BOARD_PX - INCH * 2);
+    ty = clamp(ty + (ng.y - ty) * t, INCH * 2, BOARD_PX - INCH * 2);
+  }
   const d = dist2d(ship.x, ship.y, tx, ty);
   const order = d <= 0.5 * (def.thrust || 10) * INCH + 1 ? 'CC' : 'GQ';
   return { order, x: tx, y: ty };
@@ -307,20 +333,32 @@ export function descentDropperPlan(state, gid, aiSide) {
   if (si < 0) return null;
   const ship = grp.ships[si];
   const inAtmo = (ship.layer || 'orbit') === 'atmosphere';
-  // If already in atmosphere, head toward the nearest atmosphere dropsite and stay there.
-  const atmoDropsites = (state.scenarioData?.dropsites || [])
-    .filter(d => !d.destroyed && d.base?.layer === 'Atmosphere')
-    .sort((a, b) => dist2d(ship.x, ship.y, a.x * INCH, a.y * INCH) - dist2d(ship.x, ship.y, b.x * INCH, b.y * INCH));
-  const tgt = atmoDropsites[0];
+  // Target the most VALUABLE contestable city (Large > Medium > Small), not just the nearest —
+  // and never a city we already control (that's why Strike Carriers used to idle on a Medium City
+  // they'd taken while the Large City went uncontested). Fall back to the nearest city only when
+  // there's nothing left to contest.
+  const cities = (state.scenarioData?.dropsites || [])
+    .filter(d => !d.destroyed && d.base?.layer === 'Atmosphere');
+  const valueOf = d => d.type === 'large_city' ? 3 : d.type === 'medium_city' ? 2 : 1;
+  const byValueThenDist = arr => arr.slice().sort((a, b) =>
+    valueOf(b) - valueOf(a) || dist2d(ship.x, ship.y, a.x * INCH, a.y * INCH) - dist2d(ship.x, ship.y, b.x * INCH, b.y * INCH));
+  const contestable = cities.filter(d => dropsiteController(d) !== aiSide);
+  const tgt = byValueThenDist(contestable)[0] || byValueThenDist(cities)[0];
   if (!tgt) return null;
   const ox = tgt.x * INCH, oy = tgt.y * INCH;
   const dist = dist2d(ship.x, ship.y, ox, oy);
   const thrustPx = (def.thrust || 8) * INCH;
   const halfThrustPx = 0.5 * thrustPx;
   if (inAtmo) {
-    // Already down: park on the dropsite precisely (CC within ½ thrust, GQ beyond).
-    const order = dist <= halfThrustPx + 1 ? 'CC' : 'GQ';
-    return { order, x: ox, y: oy, toggle: false };
+    // Within reach: park on the dropsite precisely (CC within ½ thrust, GQ beyond, no layer change).
+    if (dist <= 2 * thrustPx + 1) {
+      const order = dist <= halfThrustPx + 1 ? 'CC' : 'GQ';
+      return { order, x: ox, y: oy, toggle: false };
+    }
+    // Target is far: Atmosphere movement is capped to ~2"/turn, so crawling there wastes the game.
+    // ASCEND to Orbit to redeploy at full Thrust; we'll descend again once above the new city. The
+    // battalions already dropped hold the old dropsite without the ship sitting on it.
+    return { order: 'GQ', x: ox, y: oy, toggle: true };
   }
   // In Orbit: only descend when this move can actually reach the dropsite (landing on it),
   // otherwise close the gap in Orbit at full speed — descending early strands the ship in
