@@ -255,6 +255,28 @@ export function baseSaveForType(td, ts, type, shieldUp) {
 export function hasShields(def) { return /Shield-?\d?/i.test(def.special || ''); }
 export function shieldSaveVal(def) { const m = (def.special||'').match(/Shield-?(\d)/i); return m ? parseInt(m[1]) : null; }
 
+/* Is `side` controlled by the AI (so it never declares Shields manually)? */
+export function aiControlsSide(state, side) {
+  const ai = state.aiSide;
+  return ai === 'both' || ai === side;
+}
+
+/* Should an AI defender raise its Shield against this weapon? A raised Shield replaces ES/KS,
+   ignores their modifiers (Scald/Burnthrough/Reave), and is the only save vs Core — for the cost
+   of +1 Spike. Raise it when it matches or beats the (modifier-worsened) armour save, or when the
+   weapon deals/【via Penetrator】can deal Core damage. */
+export function shieldsWorthRaising(td, ts, w) {
+  const shield = shieldSaveVal(td);
+  if (shield == null) return false;
+  const sp = parseWeaponSpecials(w);
+  if (w.type === 'C' || sp.penetrator) return true; // Core (or Penetrator crits) → Shield is the only save
+  const armor = w.type === 'E' ? saveVal(td.es) : w.type === 'K' ? saveVal(td.ks) : null;
+  if (armor == null) return true;
+  const worsened = Math.min(6, armor + (sp.scald || 0) + (sp.burnthrough || 0)
+    + ((ts.crippling && ts.crippling.includes('defence')) ? 1 : 0));
+  return shield <= worsened;
+}
+
 /* Find an enemy ship (relative to attackerSide) whose marker contains the point. */
 export function enemyShipAtPoint(state, attackerSide, pt) {
   let best = null, bestD = Infinity;
@@ -2258,6 +2280,11 @@ export function rollSaves(state, rng, M) {
   const sp = parseWeaponSpecials(s.w);
   const hr = M.hitResult;
   const k = targetKey(s.targetGid, s.targetSi);
+  // AI defenders never declare Shields through the UI, so raise them here when worthwhile (the +1
+  // Spike is applied below exactly as for a manual raise). Humans still choose manually.
+  if (!M.shieldsUp[k] && hasShields(td) && aiControlsSide(state, td.side) && shieldsWorthRaising(td, ts, s.w)) {
+    M.shieldsUp[k] = true;
+  }
   const shieldUp = !!M.shieldsUp[k];
   const boostedGid = shieldUp && M.shieldBooster && M.shieldBooster[k];
   const sat = M.saturation || 0;
