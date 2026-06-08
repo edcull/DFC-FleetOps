@@ -533,6 +533,35 @@ describe('handleActivation — no re-firing (finish a group that already acted)'
   });
 });
 
+describe('buildActivation — regroup a broken group instead of charging while out of formation', () => {
+  const ap = (s) => (i) => { if (!isLegal(s, i, 'player1')) return false; apply(s, i, fixedRng(3)); return true; };
+  const coh = 3 * INCH;
+  const inFormation = (ships) => { const live = ships.filter(s => !s.destroyed && !s.offTable); return live.every(a => live.some(b => b !== a && Math.hypot(a.x - b.x, a.y - b.y) <= coh)); };
+
+  it('a broken group closes up (Course Change) instead of charging the enemy', () => {
+    const s = makeState(); s.activeSide = 'player1'; s.scenario = { objective: 'standard' }; s.scenarioData = { dropsites: [] };
+    addGroup(s, shipDef({ id: 'player1:fr', side: 'player1', name: 'Frigate', role: 'Frigate', tonnage: 'L', thrust: 10, weapons: [weapon({ arc: 'F', att: 3, lock: '3+' })] }),
+      [shipInstance({ x: 240, y: 200, heading: 90 }), shipInstance({ x: 336, y: 200, heading: 90 })]); // 8" apart → broken
+    addGroup(s, shipDef({ id: 'player2:e', side: 'player2', tonnage: 'M' }), [shipInstance({ x: 288, y: 360 })]);
+    const before = Math.hypot(240 - 336, 0);
+    buildActivation(s, fixedRng(3), 'player1:fr', 'GQ', { x: 288, y: 360, reason: 'kill' }, 'player1', ap(s));
+    const fr = s.groups['player1:fr'].ships;
+    const after = Math.hypot(fr[0].x - fr[1].x, fr[0].y - fr[1].y);
+    expect(s.groups['player1:fr'].order).toBe('CC');  // regrouping, not charging
+    expect(after).toBeLessThan(before);               // the gap closed
+  });
+
+  it('a coherent group advancing toward a crowd stays in formation (holds rather than scattering)', () => {
+    const s = makeState(); s.activeSide = 'player1'; s.scenario = { objective: 'standard' }; s.scenarioData = { dropsites: [] };
+    addGroup(s, shipDef({ id: 'player1:g', side: 'player1', name: 'Frigate', role: 'Frigate', tonnage: 'L', thrust: 12, weapons: [weapon({ arc: 'F', att: 3, lock: '3+' })] }),
+      [shipInstance({ x: 282, y: 400, heading: -90 }), shipInstance({ x: 294, y: 400, heading: -90 }), shipInstance({ x: 306, y: 400, heading: -90 })]);
+    for (let i = 0; i < 6; i++) addGroup(s, shipDef({ id: 'player1:occ' + i, side: 'player1', tonnage: 'L' }), [shipInstance({ x: 270 + i * 12, y: 340 })]);
+    addGroup(s, shipDef({ id: 'player2:e', side: 'player2', tonnage: 'M' }), [shipInstance({ x: 294, y: 200 })]);
+    buildActivation(s, fixedRng(3), 'player1:g', 'GQ', { x: 294, y: 200, reason: 'kill' }, 'player1', ap(s));
+    expect(inFormation(s.groups['player1:g'].ships)).toBe(true);
+  });
+});
+
 describe('buildActivation — obstacle-aware movement (no ending on occupied bases)', () => {
   const ap = (s) => (i) => { if (!isLegal(s, i, 'player1')) return false; apply(s, i, fixedRng(3)); return true; };
 

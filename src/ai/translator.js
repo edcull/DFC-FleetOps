@@ -192,24 +192,22 @@ function moveGroupCoherent(state, rng, gid, movers, tx, ty, applyFn, toggle = fa
   };
 
   const obstOverlaps = dests => dests.reduce((n, d) => n + (clearOfObstacles(d.x, d.y, d.layer) ? 0 : 1), 0);
-  // Coherency of the group BEFORE this move — we must never end MORE broken than we started.
-  const startCoh = coherentCount(movers.map(({ s }) => ({ x: s.x, y: s.y, layer: s.layer })), cohPx, need);
+  // A move's "harm" = ships left out of formation + ships ending on another base (which the engine
+  // then shoves apart, ALSO breaking formation). Minimise harm; among equal-harm moves, advance most.
+  const harm = dests => (movers.length - coherentCount(dests, cohPx, need)) + obstOverlaps(dests);
 
   let chosen = null, bestCand = null, bestScore = -Infinity;
   for (const frac of [1, 0.85, 0.7, 0.55, 0.4, 0.25, 0.12, 0]) {
     const cand = planAt(Math.min(reach * frac, dC));
-    const obst = obstOverlaps(cand.dests);
-    if (formationOK(cand.dests, cohPx, need) && nonOverlapOK(cand.dests, diamPx) && obst === 0) { chosen = cand; break; }
-    // Best-effort: heavily penalise ending on another ship (the conga trigger), then prefer the
-    // move that keeps the most ships in formation, ties toward a larger advance.
-    const score = coherentCount(cand.dests, cohPx, need) * 10 - obst * 100 + frac * 0.001;
+    if (formationOK(cand.dests, cohPx, need) && nonOverlapOK(cand.dests, diamPx) && obstOverlaps(cand.dests) === 0) { chosen = cand; break; }
+    // Prefer the least-harmful move (fewest broken + overlapping ships); break ties toward advancing.
+    const score = -harm(cand.dests) * 100 + frac;
     if (score > bestScore) { bestScore = score; bestCand = cand; }
   }
-  if (!chosen) {
-    const hold = planAt(0);
-    const holdScore = coherentCount(hold.dests, cohPx, need) * 10 - obstOverlaps(hold.dests) * 100;
-    chosen = (bestCand && bestScore >= holdScore && bestScore >= startCoh * 10) ? bestCand : hold;
-  }
+  // frac 0 (hold near the current, coherent position) is always in the loop above, so bestCand
+  // already includes the option of not advancing into a crowd — i.e. holding formation over
+  // charging and being broken/shoved.
+  if (!chosen) chosen = bestCand || planAt(0);
   for (const { si } of movers) {
     const t = chosen.target[si];
     moveShipToward(state, rng, gid, si, t.x, t.y, applyFn, toggle);
@@ -368,12 +366,27 @@ export function buildActivation(state, rng, gid, order, movePlan, aiSide, applyF
   if (!grp) return;
   const def = grp.def;
 
+  // REGROUP FIRST (highest priority): a multi-ship group that's broken out of coherency tightens
+  // up before doing anything else. Course Change (0" minimum move + two 45° turns) lets it collapse
+  // onto its own centroid; advancing/diving while spread only strands ships further out of formation
+  // (and in Atmosphere they can't recover at the 2"/turn cap). This sits ABOVE the corvette/descent
+  // overrides so those groups regroup too, instead of charging while broken.
+  const liveShips = grp.ships.filter(s => !s.destroyed && !s.offTable);
+  const canRegroup = !def?.openNetwork && !def?.payload && liveShips.length >= 2
+    && outOfFormationSet(state, def).size > 0
+    && isLegal(state, { type: 'applyOrder', gid, order: 'CC' }, aiSide);
+  if (canRegroup) {
+    const cx = liveShips.reduce((a, s) => a + s.x, 0) / liveShips.length;
+    const cy = liveShips.reduce((a, s) => a + s.y, 0) / liveShips.length;
+    order = 'CC';
+    movePlan = { x: cx, y: cy, reason: 'regroup' };  // no toggle — stay on this layer to tighten up
+  }
   // Shaltari Voidgate: a weaponless positioning ship whose whole job is to park within 3"
   // of an Orbit dropsite for the Mothership to channel through. MCTS can't value that
   // multi-turn setup, so script it: General Quarters to close, Course Change to park (its
   // 0" minimum move lets a fast gate stop on target instead of overshooting). Overrides the
   // MCTS-chosen order/move for gates only.
-  if (def?.openNetwork && (def.gateship || 0) > 0) {
+  else if (def?.openNetwork && (def.gateship || 0) > 0) {
     const plan = gateRunnerPlan(state, gid, aiSide);
     if (plan && isLegal(state, { type: 'applyOrder', gid, order: plan.order }, aiSide)) {
       order = plan.order;
