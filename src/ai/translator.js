@@ -31,6 +31,13 @@ function groundLaunchInRange(type, ship, ds) {
 // groups of 4+, else 1). Groups of ≤1 are always coherent.
 function formationOK(pts, cohPx, need) {
   if (pts.length <= 1) return true;
+  return coherentCount(pts, cohPx, need) === pts.length;
+}
+
+// How many ships have ≥need same-layer group-mates within cohPx (i.e. are "in formation").
+function coherentCount(pts, cohPx, need) {
+  if (pts.length <= 1) return pts.length;
+  let ok = 0;
   for (let i = 0; i < pts.length; i++) {
     let neighbours = 0;
     for (let j = 0; j < pts.length; j++) {
@@ -38,9 +45,9 @@ function formationOK(pts, cohPx, need) {
       if ((pts[i].layer || 'orbit') !== (pts[j].layer || 'orbit')) continue;
       if (Math.hypot(pts[i].x - pts[j].x, pts[i].y - pts[j].y) <= cohPx) neighbours++;
     }
-    if (neighbours < need) return false;
+    if (neighbours >= need) ok++;
   }
-  return true;
+  return ok;
 }
 
 // N distinct target slots packed around (cx,cy) so the group's ships aim at *different* points.
@@ -124,12 +131,26 @@ function moveGroupCoherent(state, rng, gid, movers, tx, ty, applyFn, toggle = fa
     return { target, dests };
   };
 
-  let chosen = null;
+  // Coherency of the group BEFORE this move — we must never end MORE broken than we started.
+  const startCoh = coherentCount(movers.map(({ s }) => ({ x: s.x, y: s.y, layer: s.layer })), cohPx, need);
+
+  let chosen = null, bestCand = null, bestScore = -Infinity;
   for (const frac of [1, 0.85, 0.7, 0.55, 0.4, 0.25, 0.12, 0]) {
     const cand = planAt(Math.min(reach * frac, dC));
     if (formationOK(cand.dests, cohPx, need) && nonOverlapOK(cand.dests, diamPx)) { chosen = cand; break; }
+    // Best-effort fallback: prefer the reachable move that keeps the MOST ships in formation
+    // (ties broken toward a larger advance). This guarantees the group never finishes a move
+    // less coherent than holding would leave it.
+    const score = coherentCount(cand.dests, cohPx, need) + frac * 0.001;
+    if (score > bestScore) { bestScore = score; bestCand = cand; }
   }
-  if (!chosen) chosen = planAt(0); // converge on the centroid — least overlap available
+  if (!chosen) {
+    // If no advance keeps the group together, only move when it doesn't WORSEN coherency;
+    // otherwise hold (converge at frac 0) so a broken group can tighten up next turn.
+    const hold = planAt(0);
+    const holdCoh = coherentCount(hold.dests, cohPx, need);
+    chosen = (bestCand && Math.floor(bestScore) >= Math.max(startCoh, holdCoh)) ? bestCand : hold;
+  }
   for (const { si } of movers) {
     const t = chosen.target[si];
     moveShipToward(state, rng, gid, si, t.x, t.y, applyFn, toggle);

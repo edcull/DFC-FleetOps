@@ -4,7 +4,7 @@
 
 import { ORDERS, INCH, DEPLOYMENTS, OBJECTIVES } from '../engine/constants.js';
 import { isLegal } from '../engine/gating.js';
-import { moveCone, weaponCanTarget, dropsiteController, canDeployNow, isInZone, connectedGateships } from '../engine/mutators.js';
+import { moveCone, weaponCanTarget, dropsiteController, canDeployNow, isInZone, isInVanguardZone, coherencyInches, connectedGateships } from '../engine/mutators.js';
 
 const BOARD_PX = 48 * INCH;
 const TONNAGE_ORDER = { C: 0, H: 1, M: 2, L: 3 };
@@ -51,7 +51,7 @@ export function baseDiameterPx(def) { return (BASE_DIAM_IN[def?.tonnage] || 30 /
 // in-zone spot. The engine flags overlap when centre distance < rA + rB (sum of radii),
 // so clearance must be measured against EACH neighbour's own radius — a small ship placed
 // at its own diameter from a big ship still overlaps the big ship's larger base.
-export function placeNonOverlap(anchorX, anchorY, placed, diamPx, zone) {
+export function placeNonOverlap(anchorX, anchorY, placed, diamPx, zone, inZoneFn) {
   // Use a tiny board margin so candidates can reach right up to an edge-line zone (those
   // hug the table edge). A larger margin would push every candidate out of zone — the
   // engine/client treat a ship as in-zone by its CENTRE (isInZone, 0.6" tolerance) and
@@ -60,8 +60,9 @@ export function placeNonOverlap(anchorX, anchorY, placed, diamPx, zone) {
   const rNew = diamPx / 2;
   const cX = v => Math.max(m, Math.min(BOARD_PX - m, v));
   const cY = v => Math.max(m, Math.min(BOARD_PX - m, v));
-  // In-zone exactly as the game judges it: the ship's centre must satisfy isInZone.
-  const inZone = (x, y) => !zone || isInZone(x / INCH, y / INCH, zone);
+  // In-zone exactly as the game judges it: the ship's centre must satisfy isInZone. Callers
+  // may pass a custom predicate (px in) — e.g. to allow a Vanguard ship's forward halo.
+  const inZone = inZoneFn ? (x, y) => inZoneFn(x, y) : (x, y) => !zone || isInZone(x / INCH, y / INCH, zone);
   // Need centre-distance ≥ rNew + neighbour radius + a ~0.8" breathing gap (not just base
   // contact). Spreading ships out at deployment/arrival means that when they later advance their
   // destinations aren't blocked by group-mates, so the engine doesn't shove them back into a
@@ -766,26 +767,47 @@ export function generateDeployOptions(state, aiSide) {
     if (!isLegal(state, { type: 'deployShip', gid, si }, aiSide)) continue;
 
     const heading = deployZoneName === 'south' ? -90 : 90; // face north or south
-    const placed = grp.ships.filter(s => !s.destroyed && !s.offTable);
-    let anchorX, anchorY = edgeYpx;
-    if (placed.length) {
-      // Keep a group together near its own already-placed ships.
-      const c = centroid(grp.ships); anchorX = c.x; anchorY = c.y;
-    } else if (defIsDropper(grp.def) || defIsGateMother(grp.def) || defIsVoidgate(grp.def)) {
-      // Drop-capable groups start near a dropsite.
-      anchorX = nearDs ? nearDs.x * INCH : BOARD_PX / 2;
+    const def = grp.def;
+    const diamPx = baseDiameterPx(def);
+
+    // STABLE group anchor (same every call so the formation is consistent as ships are placed
+    // one at a time). Combat groups fan out across the zone by a deterministic hash; drop-capable
+    // groups start near a dropsite.
+    let baseX;
+    if (defIsDropper(def) || defIsGateMother(def) || defIsVoidgate(def)) {
+      baseX = nearDs ? nearDs.x * INCH : BOARD_PX / 2;
     } else {
-      // Combat groups spread across the zone width (deterministic per group) so the fleet
-      // fans out instead of piling onto one spot.
       const h = [...gid].reduce((a, c) => a + c.charCodeAt(0), 0);
-      anchorX = INCH * 3 + (h % 97) / 97 * (BOARD_PX - INCH * 6);
+      baseX = INCH * 3 + (h % 97) / 97 * (BOARD_PX - INCH * 6);
     }
-    const za = legalZonePosPx(zone, Math.max(INCH, Math.min(BOARD_PX - INCH, anchorX)),
-                                    Math.max(INCH, Math.min(BOARD_PX - INCH, anchorY)));
-    if (!za) continue;
+    // Vanguard-X ships may deploy up to X" forward of the normal zone — push the anchor toward
+    // the enemy edge so they grab early board presence instead of sitting on the back line.
+    let baseY = edgeYpx;
+    const vgInZone = def.vanguard
+      ? (xpx, ypx) => { const xi = xpx / INCH, yi = ypx / INCH; return isInZone(xi, yi, zone) || isInVanguardZone(state, xi, yi, def, zone); }
+      : null;
+    if (def.vanguard) {
+      const fwd = deployZoneName === 'south' ? -1 : 1;     // toward enemy edge
+      baseY = edgeYpx + fwd * def.vanguard * INCH;
+    }
+
+    // Deploy each ship of the group into a LINE-ABREAST slot centred on the anchor, spaced just
+    // inside coherency. Starting coherent (and side-by-side, not stacked) means the group advances
+    // forward in parallel — no vertical conga line, and it never starts a turn out of formation.
+    const total = grp.ships.filter(s => !s.destroyed).length;          // full group size (incl. off-table)
+    const idx   = grp.ships.filter(s => !s.destroyed && !s.offTable).length; // this ship's slot
+    const cohPx = coherencyInches(def) * INCH;
+    const spacing = Math.min(diamPx + 0.8 * INCH, Math.max(diamPx, cohPx - 0.6 * INCH));
+    const slotX = baseX + (idx - (total - 1) / 2) * spacing;
+
+    const za = legalZonePosPx(vgInZone ? null : zone,
+      Math.max(INCH, Math.min(BOARD_PX - INCH, slotX)),
+      Math.max(INCH, Math.min(BOARD_PX - INCH, baseY)));
+    const seedX = za ? za.x : Math.max(INCH, Math.min(BOARD_PX - INCH, slotX));
+    const seedY = za ? za.y : Math.max(INCH, Math.min(BOARD_PX - INCH, baseY));
     // Don't overlap THIS ship against the rest of its own group it'll deploy alongside,
     // nor any already-placed ship of any group.
-    const pos = placeNonOverlap(za.x, za.y, allPlaced, baseDiameterPx(grp.def), zone);
+    const pos = placeNonOverlap(seedX, seedY, allPlaced, diamPx, zone, vgInZone);
     opts.push({ id: `opt_dep_${gid}_${opts.length}`, gid, si, x: Math.round(pos.x), y: Math.round(pos.y), heading });
     break; // handle one group at a time; triggerAi will loop
   }
