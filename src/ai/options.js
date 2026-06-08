@@ -493,12 +493,29 @@ export function bestMoveToward(ship, mc, targetX, targetY) {
   return { x, y, heading: finalHeading };
 }
 
-// Pick a contestable dropsite for this group, SPREADING friendly groups across different
-// objectives so they fan out to contest multiple sites instead of all charging the nearest one
-// (mid-board bunching that concedes the other objectives). Uses a deterministic greedy assignment
-// over all friendly groups matching `pool`: the best (group, dropsite) pairs are claimed first and
-// each dropsite is taken by one group until they run out, so groups split up. Distance is pulled
-// by dropsite value so the richest objective is always claimed. Returns this group's dropsite|null.
+// Rough drop "engine" capacity of a side — battalions it can land per round. gate_dropship
+// (Mothership channelling through the whole Voidgate network) is weighted up; bulk/dropship/pod
+// scale with the number of carriers. Used to tell when one side is badly out-dropped.
+function dropCapacity(state, side) {
+  let cap = 0;
+  for (const g of Object.values(state.groups)) {
+    if (g.def?.side !== side) continue;
+    const ships = g.ships.filter(s => !s.destroyed && !s.offTable).length;
+    if (!ships) continue;
+    for (const l of (g.def.launch || [])) {
+      if (/gate_dropship/.test(l.type)) cap += (l.n || 0) * 3;                       // network channel
+      else if (/bulk_lander|dropship|drop_pod/.test(l.type)) cap += (l.n || 0) * ships;
+    }
+  }
+  return cap;
+}
+
+// Pick a contestable dropsite for this group. Normally SPREADS friendly groups across different
+// objectives (greedy 1:1 assignment, richest pulled hardest) so they fan out instead of bunching.
+// But it also (a) DEFENDS — prefers a contested site we already hold a stake in, to keep it; and
+// (b) CONCENTRATES when we're badly out-dropped — focuses the few droppers on the fewest winnable
+// sites so they actually secure them instead of dribbling one battalion across many and losing
+// every contest. Returns this group's dropsite | null.
 function spreadDropsiteTarget(state, gid, aiSide, ship, pool, opts = {}) {
   let contestable = (state.scenarioData?.dropsites || [])
     .filter(ds => !ds.destroyed && dropsiteController(ds) !== aiSide);
@@ -515,11 +532,24 @@ function spreadDropsiteTarget(state, gid, aiSide, ship, pool, opts = {}) {
   }
   const PULL = 8 * INCH;       // each value tier is worth ~8" of approach distance
   const SECURE = 12 * INCH;    // each enemy battalion of lead beyond a couple = ~12" of cost
+  const DEFEND = 16 * INCH;    // pull to keep dropping on a contested site we already hold a stake in
   // A dropsite the enemy has overwhelmed is a LOST CAUSE — we can't win the battalion war there, so
   // we'd rather go SECURE a free/contested one. Penalise by how far ahead the enemy is (over a small
   // grace), so droppers spread to take uncontested objectives instead of escalating one big fight.
   const lostCause = ds => Math.max(0, dsEnemyBattalions(ds, aiSide) - dsSideBattalions(ds, aiSide) - 2);
-  const cost = (gp, ds) => dist2d(gp.x, gp.y, ds.x * INCH, ds.y * INCH) - dsVpValue(ds) * PULL + lostCause(ds) * SECURE;
+  // DEFEND: a contested site (enemy present) we hold a winnable stake in — keep dropping to hold it.
+  const defend = ds => (dsSideBattalions(ds, aiSide) > 0 && dsEnemyBattalions(ds, aiSide) > 0 && lostCause(ds) === 0) ? DEFEND : 0;
+  const cost = (gp, ds) => dist2d(gp.x, gp.y, ds.x * INCH, ds.y * INCH) - dsVpValue(ds) * PULL + lostCause(ds) * SECURE - defend(ds);
+
+  // CONCENTRATE when badly out-dropped: focus the few droppers on the fewest most-winnable sites
+  // (so they stack and secure) rather than spreading thin across every contestable dropsite.
+  const enemySide = aiSide === 'player1' ? 'player2' : 'player1';
+  if (groups.length && dropCapacity(state, enemySide) > dropCapacity(state, aiSide) * 1.3 && contestable.length > 1) {
+    const rank = ds => -dsVpValue(ds) * PULL + lostCause(ds) * SECURE - defend(ds); // site quality, no per-group dist
+    const K = Math.max(1, Math.ceil(groups.length / 2));
+    contestable = contestable.slice().sort((a, b) => rank(a) - rank(b)).slice(0, K);
+  }
+
   if (!groups.length) return contestable.slice().sort((a, b) => cost({ x: ship.x, y: ship.y }, a) - cost({ x: ship.x, y: ship.y }, b))[0];
   // Greedy 1:1 assignment: claim the cheapest (group, dropsite) pairs first, one group per
   // dropsite until the dropsites are used up.
