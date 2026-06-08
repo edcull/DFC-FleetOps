@@ -171,6 +171,43 @@ describe('generateDeployOptions', () => {
     expect(distFromEdge).toBeGreaterThan(2);   // pushed forward into the 4" halo
     expect(distFromEdge).toBeLessThan(5);      // but still within the halo
   });
+
+  it('spreads multiple combat groups into distinct lanes (no two groups stacked in one column)', () => {
+    const s = makeState();
+    s.phase = 'deploy';
+    s.scenario = { deployment: 'line', approach: 'standoff', objective: 'standard' };
+    s.deployZone = { player1: 'south', player2: 'north' };
+    // Four single-ship cruisers — under the old hash anchor these could collide into one column.
+    for (let i = 1; i <= 4; i++) {
+      const def = shipDef({ id: `player1:c${i}`, side: 'player1', name: `Cruiser ${i}`, role: 'Cruiser', tonnage: 'M', thrust: 8 });
+      addGroup(s, def, [shipInstance({ offTable: true })]);
+      s.groups[`player1:c${i}`].ships.forEach(sh => { sh.offTable = true; sh.x = undefined; sh.y = undefined; });
+    }
+    runDeploy(s);
+    const xs = [1, 2, 3, 4].map(i => s.groups[`player1:c${i}`].ships[0].x / INCH).sort((a, b) => a - b);
+    for (let i = 1; i < xs.length; i++) expect(xs[i] - xs[i - 1]).toBeGreaterThan(4); // a clear lane each
+  });
+
+  it('sends drop-capable groups to DIFFERENT dropsites instead of stacking on one', () => {
+    const s = makeState();
+    s.phase = 'deploy';
+    s.scenario = { deployment: 'line', approach: 'standoff', objective: 'standard' };
+    s.deployZone = { player1: 'south', player2: 'north' };
+    s.scenarioData = { dropsites: [
+      { id: 'ds1', type: 'small_station', base: { layer: 'Orbit' }, x: 10, y: 40, destroyed: false, battalions: {} },
+      { id: 'ds2', type: 'medium_city', base: { layer: 'Atmosphere' }, x: 38, y: 38, destroyed: false, battalions: {} },
+    ] };
+    for (let i = 1; i <= 2; i++) {
+      const def = shipDef({ id: `player1:d${i}`, side: 'player1', name: `Troopship ${i}`, role: 'Troopship', tonnage: 'M', thrust: 8,
+        launch: [{ name: 'Bulk Landers', n: 4, type: 'bulk_lander' }] });
+      addGroup(s, def, [shipInstance({ offTable: true })]);
+      s.groups[`player1:d${i}`].ships.forEach(sh => { sh.offTable = true; sh.x = undefined; sh.y = undefined; });
+    }
+    runDeploy(s);
+    const x1 = s.groups['player1:d1'].ships[0].x / INCH;
+    const x2 = s.groups['player1:d2'].ships[0].x / INCH;
+    expect(Math.abs(x1 - x2)).toBeGreaterThan(10); // two droppers spread to the two dropsites, not one column
+  });
 });
 
 // ─── generateDropsiteOptions ──────────────────────────────────────────────────

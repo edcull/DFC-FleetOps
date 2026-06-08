@@ -795,6 +795,30 @@ export function generateDeployOptions(state, aiSide) {
     for (const s of g.ships) if (!s.destroyed && !s.offTable) allPlaced.push({ x: s.x, y: s.y, r: gr });
   }
 
+  // Assign every group a DISTINCT lane so the fleet fans out instead of several groups stacking
+  // into one column (the old hash collided, and every dropper shared the single nearest-dropsite
+  // column). Combat groups get evenly-spaced lanes across the zone width; drop-capable groups are
+  // spread across the available dropsites (round-robin) so they head for DIFFERENT objectives.
+  const sideGroupIds = Object.keys(state.groups).filter(gid => state.groups[gid].def?.side === aiSide);
+  const isDropperish = g => defIsDropper(g.def) || defIsGateMother(g.def) || defIsVoidgate(g.def);
+  const combatIds  = sideGroupIds.filter(gid => !isDropperish(state.groups[gid]));
+  const dropperIds = sideGroupIds.filter(gid =>  isDropperish(state.groups[gid]));
+  // Dropsites a dropper might want, ordered by closeness to our edge (nearest first).
+  const myDropsites = dropsites.filter(d => !d.destroyed)
+    .sort((a, b) => Math.abs(a.y * INCH - edgeYpx) - Math.abs(b.y * INCH - edgeYpx));
+  const usableW = BOARD_PX - INCH * 6;
+  const laneXFor = (gid) => {
+    const g = state.groups[gid];
+    if (isDropperish(g)) {
+      const di = dropperIds.indexOf(gid);
+      const ds = myDropsites.length ? myDropsites[di % myDropsites.length] : null;
+      return ds ? ds.x * INCH : BOARD_PX / 2;
+    }
+    const ci = combatIds.indexOf(gid);
+    const n = Math.max(1, combatIds.length);
+    return INCH * 3 + (ci + 0.5) / n * usableW;       // evenly spaced across the width
+  };
+
   for (const [gid, grp] of Object.entries(state.groups)) {
     if (grp.def?.side !== aiSide) continue;
     // Only deploy ships that are eligible now (vanguard or directly_deploy approach).
@@ -809,15 +833,9 @@ export function generateDeployOptions(state, aiSide) {
     const diamPx = baseDiameterPx(def);
 
     // STABLE group anchor (same every call so the formation is consistent as ships are placed
-    // one at a time). Combat groups fan out across the zone by a deterministic hash; drop-capable
-    // groups start near a dropsite.
-    let baseX;
-    if (defIsDropper(def) || defIsGateMother(def) || defIsVoidgate(def)) {
-      baseX = nearDs ? nearDs.x * INCH : BOARD_PX / 2;
-    } else {
-      const h = [...gid].reduce((a, c) => a + c.charCodeAt(0), 0);
-      baseX = INCH * 3 + (h % 97) / 97 * (BOARD_PX - INCH * 6);
-    }
+    // one at a time). Each group has its own distinct lane (combat groups spread across the width,
+    // droppers spread across different dropsites) so groups never stack into one column.
+    const baseX = laneXFor(gid);
     // Vanguard-X ships may deploy up to X" forward of the normal zone — push the anchor toward
     // the enemy edge so they grab early board presence instead of sitting on the back line.
     let baseY = edgeYpx;
