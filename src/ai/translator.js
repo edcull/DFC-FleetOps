@@ -125,6 +125,7 @@ function moveGroupCoherent(state, rng, gid, movers, tx, ty, applyFn, toggle = fa
   const cohPx = coherencyInches(def) * INCH;
   const need = movers.length >= 4 ? 2 : 1;
   const diamPx = baseDiameterPx(def);
+  const rNew = diamPx / 2;
 
   const cones = {};
   let reach = Infinity;
@@ -135,55 +136,79 @@ function moveGroupCoherent(state, rng, gid, movers, tx, ty, applyFn, toggle = fa
   }
   if (!isFinite(reach)) reach = 0;
 
+  // Every OTHER on-table ship (all groups, both sides) the movers must not land on — ending a move
+  // on an occupied base makes the engine shove the bases apart into a conga line / out of formation.
+  // The destination LAYER matters (a ship in Atmosphere doesn't block one in Orbit).
+  const moverSi = new Set(movers.map(m => m.si));
+  const obstacles = [];
+  for (const [ogid, g] of Object.entries(state.groups)) {
+    const r = baseDiameterPx(g.def) / 2;
+    g.ships.forEach((s, i) => {
+      if (s.destroyed || s.offTable) return;
+      if (ogid === gid && moverSi.has(i)) return;
+      obstacles.push({ x: s.x, y: s.y, r, layer: s.layer || 'orbit' });
+    });
+  }
+  const clearOfObstacles = (x, y, layer) => obstacles.every(o =>
+    o.layer !== (layer || 'orbit') || Math.hypot(x - o.x, y - o.y) >= rNew + o.r - 1);
+
   const cx = movers.reduce((a, o) => a + o.s.x, 0) / movers.length;
   const cy = movers.reduce((a, o) => a + o.s.y, 0) / movers.length;
   const dC = Math.hypot(tx - cx, ty - cy) || 1;
   const ux = (tx - cx) / dC, uy = (ty - cy) / dC;
 
-  // For an advance: pack distinct slots around the waypoint, give each ship its nearest
-  // free slot, and simulate each ship's reachable move toward it.
+  const reachDest = (s, si, sx, sy) => {
+    const mc = cones[si];
+    if (!mc.o || mc.o.moveMax <= 0) return { x: s.x, y: s.y };
+    return bestMoveToward(s, mc, sx, sy);
+  };
+
+  // For an advance: pack distinct slots around the waypoint, then give each ship the nearest slot
+  // whose REACHABLE destination is clear of board obstacles AND of the slots already taken by
+  // group-mates. Extra slots are packed so a ship can skip a blocked one rather than stack up.
   const planAt = (adv) => {
     const wx = cx + ux * adv, wy = cy + uy * adv;
-    const slots = packSlots(wx, wy, movers.length, diamPx);
+    const slots = packSlots(wx, wy, movers.length + 4, diamPx);
     const used = new Array(slots.length).fill(false);
-    const target = {};
+    const target = {}, dests = [], placed = [];
     for (const { s, si } of movers) {
-      let bi = 0, bd = Infinity;
+      let bi = -1, bd = Infinity, biClear = -1, bdClear = Infinity;
       for (let k = 0; k < slots.length; k++) {
         if (used[k]) continue;
         const d = (s.x - slots[k].x) ** 2 + (s.y - slots[k].y) ** 2;
         if (d < bd) { bd = d; bi = k; }
+        const rd = reachDest(s, si, slots[k].x, slots[k].y);
+        const clear = clearOfObstacles(rd.x, rd.y, s.layer)
+          && placed.every(p => Math.hypot(rd.x - p.x, rd.y - p.y) >= diamPx - 1);
+        if (clear && d < bdClear) { bdClear = d; biClear = k; }
       }
-      used[bi] = true; target[si] = slots[bi];
+      const k = biClear >= 0 ? biClear : (bi >= 0 ? bi : 0);
+      used[k] = true; target[si] = slots[k];
+      const rd = reachDest(s, si, slots[k].x, slots[k].y);
+      placed.push(rd);
+      dests.push({ x: rd.x, y: rd.y, layer: s.layer });
     }
-    const dests = movers.map(({ s, si }) => {
-      const mc = cones[si];
-      if (!mc.o || mc.o.moveMax <= 0) return { x: s.x, y: s.y, layer: s.layer };
-      const d = bestMoveToward(s, mc, target[si].x, target[si].y);
-      return { x: d.x, y: d.y, layer: s.layer };
-    });
     return { target, dests };
   };
 
+  const obstOverlaps = dests => dests.reduce((n, d) => n + (clearOfObstacles(d.x, d.y, d.layer) ? 0 : 1), 0);
   // Coherency of the group BEFORE this move — we must never end MORE broken than we started.
   const startCoh = coherentCount(movers.map(({ s }) => ({ x: s.x, y: s.y, layer: s.layer })), cohPx, need);
 
   let chosen = null, bestCand = null, bestScore = -Infinity;
   for (const frac of [1, 0.85, 0.7, 0.55, 0.4, 0.25, 0.12, 0]) {
     const cand = planAt(Math.min(reach * frac, dC));
-    if (formationOK(cand.dests, cohPx, need) && nonOverlapOK(cand.dests, diamPx)) { chosen = cand; break; }
-    // Best-effort fallback: prefer the reachable move that keeps the MOST ships in formation
-    // (ties broken toward a larger advance). This guarantees the group never finishes a move
-    // less coherent than holding would leave it.
-    const score = coherentCount(cand.dests, cohPx, need) + frac * 0.001;
+    const obst = obstOverlaps(cand.dests);
+    if (formationOK(cand.dests, cohPx, need) && nonOverlapOK(cand.dests, diamPx) && obst === 0) { chosen = cand; break; }
+    // Best-effort: heavily penalise ending on another ship (the conga trigger), then prefer the
+    // move that keeps the most ships in formation, ties toward a larger advance.
+    const score = coherentCount(cand.dests, cohPx, need) * 10 - obst * 100 + frac * 0.001;
     if (score > bestScore) { bestScore = score; bestCand = cand; }
   }
   if (!chosen) {
-    // If no advance keeps the group together, only move when it doesn't WORSEN coherency;
-    // otherwise hold (converge at frac 0) so a broken group can tighten up next turn.
     const hold = planAt(0);
-    const holdCoh = coherentCount(hold.dests, cohPx, need);
-    chosen = (bestCand && Math.floor(bestScore) >= Math.max(startCoh, holdCoh)) ? bestCand : hold;
+    const holdScore = coherentCount(hold.dests, cohPx, need) * 10 - obstOverlaps(hold.dests) * 100;
+    chosen = (bestCand && bestScore >= holdScore && bestScore >= startCoh * 10) ? bestCand : hold;
   }
   for (const { si } of movers) {
     const t = chosen.target[si];
