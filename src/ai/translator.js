@@ -212,17 +212,21 @@ function massDriverScore(state, gid) {
   return s6400 * 1e6 + s4200 * 1e3 + sOther;
 }
 
-// Use Mass Driver Volley on `gid` only when the side can afford it (≥2 AP) and no other
-// still-unactivated friendly Group has a higher Mass Driver score — so the AI saves its AP for
-// its strongest volley instead of spending it on the first Mass Driver group that fires.
+// Use Mass Driver Volley on `gid` only when the side can afford it (≥2 AP) AND this is the best
+// Mass Driver platform the side still has — i.e. no ALIVE friendly Group has a higher Mass Driver
+// score (6400 > 4200 > other). Comparing against all alive Groups (not just unactivated ones)
+// guarantees the buff is reserved for the strongest volley: a 4200-only ship will never burn the
+// AP while a 6400 ship is still on the board, even if that 6400 already activated this round
+// without firing it. (Trade-off: if the best platform has no target this round the buff may go
+// unused — acceptable, since MDV is premium and the side's priority is its biggest volley.)
 function shouldUseMassDriverVolley(state, gid, aiSide) {
   if (!state.planning || (state.planning.ap?.[aiSide] || 0) < 2) return false;
   const myScore = massDriverScore(state, gid);
   if (myScore <= 0) return false;
   for (const [ogid, g] of Object.entries(state.groups)) {
-    if (ogid === gid || g.def?.side !== aiSide || g.activated) continue;
+    if (ogid === gid || g.def?.side !== aiSide) continue;
     if (!g.ships.some(s => !s.destroyed && !s.offTable)) continue;
-    if (massDriverScore(state, ogid) > myScore) return false; // a better volley is still to come
+    if (massDriverScore(state, ogid) > myScore) return false; // a stronger Mass Driver platform exists
   }
   return true;
 }

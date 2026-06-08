@@ -260,6 +260,21 @@ describe('AI — Mass Driver Volley usage', () => {
     buildActivation(s, fixedRng(2), 'player1:small', 'WF', null, 'player1', ap(s));
     expect(s.planning.ap.player1).toBe(2); // held for the better volley
   });
+
+  it('does NOT give the volley to the weaker 4200 group even after the 6400 group has activated (still alive)', () => {
+    const s = mdState();
+    s.planning.ap.player1 = 3;
+    s.groups['player1:big'].activated = true;  // 6400 ship already had its turn but is still on the board
+    buildActivation(s, fixedRng(2), 'player1:small', 'WF', null, 'player1', ap(s));
+    expect(s.planning.ap.player1).toBe(3);     // reserved for the 6400 platform, not burned on the 4200
+  });
+
+  it('lets the 4200 group use the volley once the better 6400 platform is destroyed', () => {
+    const s = mdState();
+    s.groups['player1:big'].ships.forEach(sh => { sh.destroyed = true; }); // 6400 ship gone
+    buildActivation(s, fixedRng(2), 'player1:small', 'WF', null, 'player1', ap(s));
+    expect(s.planning.ap.player1).toBe(0);     // now the 4200 group is the best remaining platform
+  });
 });
 
 describe('buildActivation — in-network Voidgate movement', () => {
