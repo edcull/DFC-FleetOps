@@ -533,6 +533,34 @@ describe('handleActivation — no re-firing (finish a group that already acted)'
   });
 });
 
+describe('AI — Detector ability', () => {
+  function detState(att) {
+    const s = makeState(); s.activeSide = 'player1'; s.scenario = { objective: 'standard' }; s.scenarioData = { dropsites: [] };
+    addGroup(s, shipDef({ id: 'player1:det', side: 'player1', name: 'Lima', role: 'Detector Frigate', tonnage: 'L', scan: 8, thrust: 10,
+      special: 'Detector', weapons: [weapon({ name: 'UF-2200 Mass Driver Turret', arc: 'F/S', att, lock: '4+', dmg: 1, type: 'K' })] }),
+      [shipInstance({ x: 240, y: 200, heading: 90 })]);
+    addGroup(s, shipDef({ id: 'player1:cr', side: 'player1', name: 'Cruiser', scan: 10, weapons: [weapon({ arc: 'F', att: 4, lock: '3+' })] }),
+      [shipInstance({ x: 260, y: 200, heading: 90 })]);
+    addGroup(s, shipDef({ id: 'player2:vg', side: 'player2', name: 'Voidgate', tonnage: 'L', gateship: 2, special: 'Gateship-2' }),
+      [Object.assign(shipInstance({ x: 250, y: 235 }), { maxHull: 3, hull: 3 })]);
+    return s;
+  }
+  const ap = (s) => (i) => { if (!isLegal(s, i, 'player1')) return false; apply(s, i, fixedRng(3)); return true; };
+  const usedDetector = (s) => s.eventLog.some(e => /used Detector/.test(e.text));
+
+  it('a weak Detector ship spikes a high-value enemy instead of firing its puny gun', () => {
+    const s = detState(1);
+    buildActivation(s, fixedRng(3), 'player1:det', 'GQ', { x: 240, y: 202, reason: 'kill' }, 'player1', ap(s));
+    expect(usedDetector(s)).toBe(true);
+  });
+
+  it('a strong Detector ship fires its weapons rather than spending the shot on Detector', () => {
+    const s = detState(4);
+    buildActivation(s, fixedRng(3), 'player1:det', 'GQ', { x: 240, y: 202, reason: 'kill' }, 'player1', ap(s));
+    expect(usedDetector(s)).toBe(false);
+  });
+});
+
 describe('AI — movement spread (fan out across objectives)', () => {
   it('three combat groups clustered near one dropsite fan out to three different dropsites', () => {
     function build() {
