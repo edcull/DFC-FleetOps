@@ -461,6 +461,43 @@ export function bestMoveToward(ship, mc, targetX, targetY) {
   return { x, y, heading: finalHeading };
 }
 
+// Pick a contestable dropsite for this group, SPREADING friendly groups across different
+// objectives so they fan out to contest multiple sites instead of all charging the nearest one
+// (mid-board bunching that concedes the other objectives). Uses a deterministic greedy assignment
+// over all friendly groups matching `pool`: the best (group, dropsite) pairs are claimed first and
+// each dropsite is taken by one group until they run out, so groups split up. Distance is pulled
+// by dropsite value so the richest objective is always claimed. Returns this group's dropsite|null.
+function spreadDropsiteTarget(state, gid, aiSide, ship, pool) {
+  const contestable = (state.scenarioData?.dropsites || [])
+    .filter(ds => !ds.destroyed && dropsiteController(ds) !== aiSide);
+  if (!contestable.length) return null;
+  const groups = [];
+  for (const [ogid, g] of Object.entries(state.groups)) {
+    if (g.def?.side !== aiSide || !pool(g.def)) continue;
+    const s = g.ships.find(x => !x.destroyed && !x.offTable);
+    if (s) groups.push({ gid: ogid, x: s.x, y: s.y });
+  }
+  const PULL = 8 * INCH;     // each value tier is worth ~8" of approach distance
+  const cost = (gp, ds) => dist2d(gp.x, gp.y, ds.x * INCH, ds.y * INCH) - dsVpValue(ds) * PULL;
+  if (!groups.length) return contestable.slice().sort((a, b) => cost({ x: ship.x, y: ship.y }, a) - cost({ x: ship.x, y: ship.y }, b))[0];
+  // Greedy 1:1 assignment: claim the cheapest (group, dropsite) pairs first, one group per
+  // dropsite until the dropsites are used up.
+  const pairs = [];
+  for (const gp of groups) for (const ds of contestable) pairs.push({ gp, ds, c: cost(gp, ds) });
+  pairs.sort((a, b) => a.c - b.c);
+  const assigned = {}; const used = new Set();
+  for (const { gp, ds } of pairs) {
+    if (assigned[gp.gid] || used.has(ds.id)) continue;
+    assigned[gp.gid] = ds; used.add(ds.id);
+    if (used.size === contestable.length) break;
+  }
+  // More groups than dropsites: the leftovers double up on their own cheapest dropsite.
+  for (const gp of groups) if (!assigned[gp.gid]) {
+    assigned[gp.gid] = contestable.slice().sort((a, b) => cost(gp, a) - cost(gp, b))[0];
+  }
+  return assigned[gid] || null;
+}
+
 // Candidate move targets for (group, order): toward dropsites, enemies, or hold.
 function candidateTargets(state, gid, aiSide) {
   const grp = state.groups[gid];
@@ -495,19 +532,23 @@ function candidateTargets(state, gid, aiSide) {
   // Drop-capable ships on a scoring/extract mission ALWAYS head for a dropsite to land
   // battalions — shooting is opportunistic (buildActivation still fires after the move). Chasing
   // enemy groups instead is what loses the objective game (UCM left every city to the enemy).
+  // Spread droppers across DIFFERENT dropsites so they don't all pile on one city and concede
+  // the rest.
   if (defIsDropper(grp.def) && isDropMission(state)) {
-    if (contestable.length) return [{ x: contestable[0].x * INCH, y: contestable[0].y * INCH, reason: 'vp' }];
+    const ds = spreadDropsiteTarget(state, gid, aiSide, ship, defIsDropper) || contestable[0];
+    if (ds) return [{ x: ds.x * INCH, y: ds.y * INCH, reason: 'vp' }];
     return [{ x: ship.x, y: ship.y, reason: 'hold' }];
   }
 
   const targets = [];
 
-  // 1. Nearest uncontrolled or enemy-controlled dropsite
-  const vpDs = dropsites
-    .filter(ds => !ds.destroyed && dropsiteController(ds) !== aiSide)
-    .sort((a, b) => dist2d(ship.x, ship.y, a.x * INCH, a.y * INCH) - dist2d(ship.x, ship.y, b.x * INCH, b.y * INCH));
-  if (vpDs.length) {
-    targets.push({ x: vpDs[0].x * INCH, y: vpDs[0].y * INCH, reason: 'vp' });
+  // 1. A contestable dropsite — spread across the fleet so combat groups fan out to screen/
+  //    contest DIFFERENT objectives instead of all converging on the nearest one (mid-board
+  //    bunching). A combat group counts other combat groups as peers for crowding.
+  const isCombat = d => !defIsDropper(d) && !defIsGateMother(d) && !defIsVoidgate(d);
+  const vpDs = spreadDropsiteTarget(state, gid, aiSide, ship, isCombat);
+  if (vpDs) {
+    targets.push({ x: vpDs.x * INCH, y: vpDs.y * INCH, reason: 'vp' });
   }
 
   // 2. Nearest enemy group

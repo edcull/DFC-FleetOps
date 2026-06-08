@@ -533,6 +533,37 @@ describe('handleActivation — no re-firing (finish a group that already acted)'
   });
 });
 
+describe('AI — movement spread (fan out across objectives)', () => {
+  it('three combat groups clustered near one dropsite fan out to three different dropsites', () => {
+    function build() {
+      const s = makeState(); s.activeSide = 'player1'; s.scenario = { objective: 'standard' };
+      s.scenarioData = { dropsites: [
+        { id: 'ds1', type: 'large_city', base: { layer: 'Orbit' }, x: 24, y: 18, destroyed: false, battalions: {} },
+        { id: 'ds2', type: 'medium_city', base: { layer: 'Orbit' }, x: 40, y: 18, destroyed: false, battalions: {} },
+        { id: 'ds3', type: 'small_station', base: { layer: 'Orbit' }, x: 8, y: 18, destroyed: false, battalions: {} },
+      ] };
+      for (let i = 0; i < 3; i++) {
+        addGroup(s, shipDef({ id: 'player1:c' + i, side: 'player1', name: 'Cruiser' + i, role: 'Cruiser', tonnage: 'M', scan: 8, thrust: 8,
+          weapons: [weapon({ arc: 'F', att: 4, lock: '3+' })] }), [shipInstance({ x: 280 + i * 20, y: 380, heading: -90 })]);
+      }
+      addGroup(s, shipDef({ id: 'player2:e', side: 'player2', tonnage: 'M' }), [shipInstance({ x: 300, y: 60 })]); // far enemy
+      return s;
+    }
+    const dsAt = (s, t) => s.scenarioData.dropsites
+      .map(d => ({ id: d.id, dist: Math.hypot(d.x * 12 - t.x, d.y * 12 - t.y) }))
+      .sort((a, b) => a.dist - b.dist)[0].id;
+    const picks = [];
+    for (let i = 0; i < 3; i++) {
+      const s = build();
+      for (let j = 0; j < 3; j++) if (j !== i) s.groups['player1:c' + j].activated = true; // focus the generator on c{i}
+      const o = generateActivationOptions(s, 'player1').filter(o => o.groupId === 'player1:c' + i && o.movePlan?.reason === 'vp')[0];
+      expect(o).toBeTruthy();
+      picks.push(dsAt(s, o.movePlan));
+    }
+    expect(new Set(picks).size).toBe(3); // three distinct objectives, not all on the nearest
+  });
+});
+
 describe('AI — focus fire', () => {
   it('concentrates the fleet on one killable target instead of spreading fire', () => {
     const s = makeState(); s.activeSide = 'player1'; s.scenario = { objective: 'standard' }; s.scenarioData = { dropsites: [] };
