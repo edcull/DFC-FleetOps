@@ -655,6 +655,21 @@ describe('buildActivation — obstacle-aware movement (no ending on occupied bas
 });
 
 describe('AI — secure multiple dropsites (spread, avoid lost causes)', () => {
+  it('a bulk-lander dropper skips a lost-cause city to secure a free dropsite at full strength', () => {
+    const s = makeState(); s.activeSide = 'player1'; s.scenario = { objective: 'standard' };
+    s.scenarioData = { dropsites: [
+      { id: 'big', type: 'large_city', base: { layer: 'Orbit' }, x: 24, y: 22, destroyed: false, battalions: { ground: { player1: 0, player2: 24 } } }, // enemy 24-0 → lost cause
+      { id: 'free', type: 'small_station', base: { layer: 'Orbit' }, x: 30, y: 24, destroyed: false, battalions: { ground: { player1: 0, player2: 0 } } },
+    ] };
+    addGroup(s, shipDef({ id: 'player1:tp', side: 'player1', name: 'San Francisco Troopship', role: 'Troopship', tonnage: 'M', scan: 6, thrust: 8,
+      launch: [{ name: 'Bulk Landers', n: 4, type: 'bulk_lander' }], weapons: [weapon({ arc: 'F/S', att: 4, lock: '4+' })] }),
+      [shipInstance({ x: 288, y: 288, heading: -90 })]); // sitting right by the lost-cause city
+    const o = generateActivationOptions(s, 'player1').filter(x => x.groupId === 'player1:tp' && x.launchPlan)[0];
+    expect(o).toBeTruthy();
+    expect(o.launchPlan.dsId).toBe('free');   // secures the free station, not the 24-battalion lost cause
+    expect(o.launchPlan.count).toBe(4);       // full commitment (no contested halving on a free site)
+  });
+
   function dsAt(s, t) { return s.scenarioData.dropsites.map(d => ({ id: d.id, dist: Math.hypot(d.x * INCH - t.x, d.y * INCH - t.y) })).sort((a, b) => a.dist - b.dist)[0].id; }
   function build() {
     const s = makeState(); s.activeSide = 'player1'; s.scenario = { objective: 'standard' };
