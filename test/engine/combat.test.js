@@ -423,3 +423,44 @@ describe('rollSaves - Close Action', () => {
     expect(M.saveResult.unsaved).toBe(1);
   });
 });
+
+// ---------------------------------------------------------------------------
+// AI defender auto-raises Shields when beneficial
+// ---------------------------------------------------------------------------
+
+describe('AI Shield auto-raise', () => {
+  it('raises a Shield that beats the armour save vs Energy, and uses the Shield value', () => {
+    const { state, M } = setup({
+      defenderSpec: { es: '5+', ks: '4+', special: 'Shield-4+' }, // Shield-4+ beats ES 5+
+      weaponSpec: { att: 3, lock: '3+', type: 'E', special: '' },
+    });
+    state.aiSide = 'both'; // AI-controlled defender
+    rollHits(state, seqRng(3, 4, 5), M); // 3 hits
+    rollSaves(state, seqRng(3, 3, 3), M); // all 3 → fail at 4+
+    expect(Object.values(M.shieldsUp).some(Boolean)).toBe(true);      // Shield raised
+    expect(M.saveResult.hitsList.every(h => h.sv === 4)).toBe(true);  // used Shield 4+, not ES 5+
+  });
+
+  it('does NOT raise a Shield that is worse than the armour save (keeps the better save)', () => {
+    const { state, M } = setup({
+      defenderSpec: { es: '5+', ks: '4+', special: 'Shield-5+' }, // Shield-5+ worse than KS 4+
+      weaponSpec: { att: 3, lock: '3+', type: 'K', special: '' },
+    });
+    state.aiSide = 'both';
+    rollHits(state, seqRng(3, 4, 5), M);
+    rollSaves(state, seqRng(3, 3, 3), M);
+    expect(Object.values(M.shieldsUp).some(Boolean)).toBe(false);     // not raised
+    expect(M.saveResult.hitsList.every(h => h.sv === 4)).toBe(true);  // still uses KS 4+
+  });
+
+  it('does not auto-raise for a human-controlled defender', () => {
+    const { state, M } = setup({
+      defenderSpec: { es: '5+', ks: '4+', special: 'Shield-4+' },
+      weaponSpec: { att: 3, lock: '3+', type: 'E', special: '' },
+    });
+    // no state.aiSide → human
+    rollHits(state, seqRng(3, 4, 5), M);
+    rollSaves(state, seqRng(3, 3, 3), M);
+    expect(Object.values(M.shieldsUp).some(Boolean)).toBe(false);
+  });
+});

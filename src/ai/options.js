@@ -441,6 +441,46 @@ function candidateTargets(state, gid, aiSide) {
   return targets.slice(0, 3);
 }
 
+// Fleet focus-fire: pick ONE enemy ship for the whole side to concentrate fire on, so combined
+// damage overwhelms the target's saves/shields instead of each ship spraying a different target
+// and everything getting saved (UCM dealt 0 KP a whole game doing exactly that vs Shaltari
+// shields). Choose a ship that 2+ of our shooters can currently bear on, preferring the lowest-
+// hull / most-killable one. Committed (cached) until that ship dies, then re-pick the next.
+function computeFleetFocusTarget(state, aiSide) {
+  const enemySide = aiSide === 'player1' ? 'player2' : 'player1';
+  const shooters = [];
+  for (const g of Object.values(state.groups)) {
+    if (g.def?.side !== aiSide || !g.def?.weapons?.length) continue;
+    for (const s of g.ships) if (!s.destroyed && !s.offTable) shooters.push({ def: g.def, ship: s });
+  }
+  if (shooters.length < 2) return null;
+  let best = null, bestScore = -Infinity;
+  for (const [tgid, tg] of Object.entries(state.groups)) {
+    if (tg.def?.side !== enemySide) continue;
+    for (let tsi = 0; tsi < tg.ships.length; tsi++) {
+      const ts = tg.ships[tsi];
+      if (ts.destroyed || ts.offTable || ts.attachedTo) continue;
+      let attackers = 0;
+      for (const sh of shooters) {
+        if (sh.def.weapons.some(w => weaponCanTarget(state, sh.def, sh.ship, w, tg.def, ts, tg))) attackers++;
+      }
+      if (attackers < 2) continue; // focus only where concentration is actually possible
+      const hull = ts.hull ?? ts.maxHull ?? 1;
+      const score = attackers * 100 - hull * 8
+        + (defIsPrimaryTarget(tg.def) ? 40 : 0)
+        + (hull < (ts.maxHull || hull) ? 25 : 0); // already wounded → finish it
+      if (score > bestScore) { bestScore = score; best = { gid: tgid, si: tsi }; }
+    }
+  }
+  return best;
+}
+function fleetFocusTarget(state, aiSide) {
+  const cache = state._aiFocus || (state._aiFocus = {});
+  const c = cache[aiSide];
+  if (c) { const tg = state.groups[c.gid]; const ts = tg && tg.ships[c.si]; if (ts && !ts.destroyed && !ts.offTable) return c; }
+  return (cache[aiSide] = computeFleetFocusTarget(state, aiSide));
+}
+
 // Find the best weapon target for weapon wi on ship si of group gid from current position.
 function findBestTarget(state, gid, si, wi, aiSide) {
   const grp = state.groups[gid];
@@ -450,6 +490,7 @@ function findBestTarget(state, gid, si, wi, aiSide) {
   const ship = grp.ships[si];
   if (!ship || ship.destroyed || ship.offTable) return null;
   const enemySide = aiSide === 'player1' ? 'player2' : 'player1';
+  const focus = fleetFocusTarget(state, aiSide);
 
   let best = null, bestScore = -1;
   for (const [targetGid, tgrp] of Object.entries(state.groups)) {
@@ -464,7 +505,9 @@ function findBestTarget(state, gid, si, wi, aiSide) {
         + (defIsDropper(tgrp.def) ? 150 : 0)                 // prioritise enemy drop ships to stop landings
         // Corvettes (Air-to-Air, ignore the atmosphere penalty) exist to hunt enemy Descent ships
         // landing in Atmosphere — make that their overriding target.
-        + (defIsCorvette(def) && tAtmoDescent ? 400 : 0);
+        + (defIsCorvette(def) && tAtmoDescent ? 400 : 0)
+        // Concentrate fire on the fleet's focus target when this weapon can reach it.
+        + (focus && targetGid === focus.gid && tsi === focus.si ? 1000 : 0);
       if (score > bestScore) { bestScore = score; best = { gid: targetGid, si: tsi }; }
     }
   }
