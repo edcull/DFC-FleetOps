@@ -399,6 +399,23 @@ describe('handleActivation — no re-firing (finish a group that already acted)'
   });
 });
 
+describe('AI — focus fire', () => {
+  it('concentrates the fleet on one killable target instead of spreading fire', () => {
+    const s = makeState(); s.activeSide = 'player1'; s.scenario = { objective: 'standard' }; s.scenarioData = { dropsites: [] };
+    // three of our cruisers, all able to hit both enemies
+    for (let i = 0; i < 3; i++) {
+      addGroup(s, shipDef({ id: 'player1:c' + i, side: 'player1', scan: 14, weapons: [weapon({ arc: 'F', att: 4, lock: '3+' })] }),
+        [shipInstance({ x: 260 + i * 20, y: 200, heading: 90 })]);
+    }
+    // a wounded frigate (cheaper) and a fresh higher-points cruiser, both in range
+    addGroup(s, shipDef({ id: 'player2:fr', side: 'player2', name: 'Frigate', pts: 50, tonnage: 'L' }), [Object.assign(shipInstance({ x: 280, y: 260 }), { maxHull: 4, hull: 1 })]);
+    addGroup(s, shipDef({ id: 'player2:cr', side: 'player2', name: 'Cruiser', pts: 100, tonnage: 'M' }), [Object.assign(shipInstance({ x: 300, y: 260 }), { maxHull: 10, hull: 10 })]);
+    const targets = new Set(generateActivationOptions(s, 'player1').filter(o => o.groupId)
+      .flatMap(o => (o.weapTargets || []).map(t => t.targetGid)));
+    expect([...targets]).toEqual(['player2:fr']); // all fire on the wounded frigate, not the pricier cruiser
+  });
+});
+
 describe('evaluate — personality weighting', () => {
   // State where we wiped half the opponent while staying at full hull.
   function killState() {
