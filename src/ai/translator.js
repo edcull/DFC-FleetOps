@@ -81,6 +81,40 @@ function nonOverlapOK(pts, diamPx) {
   return true;
 }
 
+// Total enemy "air" strength that could contest our fighters/bombers: launch capacity for
+// fighter/bomber/fighter_bomber across the enemy fleet, plus any enemy air already on the table.
+function enemyAirStrength(state, aiSide) {
+  const enemySide = aiSide === 'player1' ? 'player2' : 'player1';
+  let air = 0;
+  for (const g of Object.values(state.groups)) {
+    if (g.def?.side !== enemySide) continue;
+    const live = g.ships.some(s => !s.destroyed && !s.offTable);
+    if (!live) continue;
+    for (const l of (g.def.launch || [])) {
+      if (/fighter|bomber/i.test(l.type)) air += l.n || 0;
+    }
+  }
+  for (const a of (state.launchedAssets || [])) {
+    if (a.side === enemySide && /fighter/i.test(a.kind || '')) air += a.count || 0;
+  }
+  return air;
+}
+
+// Nearest live enemy ship (point) to (x,y), or null.
+function nearestEnemyShipPt(state, aiSide, x, y) {
+  const enemySide = aiSide === 'player1' ? 'player2' : 'player1';
+  let best = null, bd = Infinity;
+  for (const g of Object.values(state.groups)) {
+    if (g.def?.side !== enemySide) continue;
+    for (const s of g.ships) {
+      if (s.destroyed || s.offTable) continue;
+      const d = Math.hypot(s.x - x, s.y - y);
+      if (d < bd) { bd = d; best = { x: s.x, y: s.y }; }
+    }
+  }
+  return best;
+}
+
 // Move a group toward (tx,ty) without breaking coherency and without stacking ships. The
 // formation centroid advances toward the target; each ship is then sent to its own slot in
 // a non-overlapping cluster around that waypoint (nearest slot, greedily). We pick the
@@ -407,15 +441,29 @@ export function buildActivation(state, rng, gid, order, movePlan, aiSide, applyF
     const launchShipIdx = grp.ships.findIndex(s => !s.destroyed && !s.offTable);
     if (launchShipIdx >= 0) {
       const launchShip = grp.ships[launchShipIdx];
+      // fighter_bomber can launch as EITHER: bombers strike ships, fighters win the air. When the
+      // enemy has no air to intercept, launch bombers to actually damage ships; otherwise launch
+      // fighters to contest the air / screen our ships from enemy bombers.
+      const enemyAir = enemyAirStrength(state, aiSide);
+      // Place the asset up to 6" toward the nearest enemy ship (a head start to strike/intercept)
+      // rather than sitting on the carrier where it does nothing this round.
+      const tgt = nearestEnemyShipPt(state, aiSide, launchShip.x, launchShip.y);
+      let lx = launchShip.x, ly = launchShip.y;
+      if (tgt) {
+        const d = Math.hypot(tgt.x - launchShip.x, tgt.y - launchShip.y) || 1;
+        const step = Math.min(6 * INCH, d);
+        lx = launchShip.x + (tgt.x - launchShip.x) / d * step;
+        ly = launchShip.y + (tgt.y - launchShip.y) / d * step;
+      }
       def.launch.forEach((l, li) => {
         if (l.type !== 'fighter_bomber' && l.type !== 'bomber') return;
         const capacity = l.n || 1;
         const alreadyLaunched = launchShip.launchedThisRound || 0;
         if (alreadyLaunched >= capacity) return;
         const count = capacity - alreadyLaunched;
-        const kind  = l.type === 'bomber' ? 'bomber' : 'fighter';
-        applyFn({ type: 'launchAsset', gid, si: launchShipIdx, li, kind, count,
-                  x: launchShip.x, y: launchShip.y });
+        const kind  = l.type === 'bomber' ? 'bomber'
+                    : (enemyAir === 0 ? 'bomber' : 'fighter');
+        applyFn({ type: 'launchAsset', gid, si: launchShipIdx, li, kind, count, x: Math.round(lx), y: Math.round(ly) });
       });
     }
   }
