@@ -109,6 +109,20 @@ describe('apply — cancelOrder', () => {
     expect(s.groups['player1:a'].spikes).toBe(3);
     expect(s.groups['player1:a'].order).toBeNull();
   });
+
+  it('restores justArrived so a just-deployed Group can be UNDO-DEPLOYED again', () => {
+    const s = game();
+    const grp = s.groups['player1:a'];
+    // Simulate a freshly deployed Group still inside the deploy-adjust window.
+    grp.ships.forEach(sh => { sh.justArrived = true; });
+    dispatch(s, { type: 'applyOrder', gid: 'player1:a', order: 'GQ' }, 'player1');
+    // Taking an order closes the deploy-adjust window.
+    expect(grp.ships.every(sh => sh.justArrived === false)).toBe(true);
+
+    dispatch(s, { type: 'cancelOrder', gid: 'player1:a' }, 'player1');
+    expect(grp.order).toBeNull();
+    expect(grp.ships.every(sh => sh.justArrived === true)).toBe(true);
+  });
 });
 
 // ---------------------------------------------------------------------------
