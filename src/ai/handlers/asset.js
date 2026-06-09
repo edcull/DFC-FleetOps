@@ -9,6 +9,7 @@
 // assetMove triggers afterAssetMove() which auto-advances the stage internally.
 
 import { INCH } from '../../engine/constants.js';
+import { kindsForAssetType } from '../../engine/mutators.js';
 
 const BOARD_PX = 48 * INCH;
 
@@ -80,11 +81,12 @@ export function handleAsset(state, aiSide, personality, applyFn) {
 
   if (state.assetActiveSide === aiSide && ap.assetType) {
     const stageType = ap.assetType;
+    // Only this stage's asset kinds — moving a wrong-type asset is rejected and wastes the loop.
+    const kinds = kindsForAssetType(stageType);
     const assets = (state.launchedAssets || []).filter(a =>
-      a.side === aiSide && !a.moved && a.count > 0 && a.kind !== 'mine'
+      a.side === aiSide && !a.moved && a.count > 0 && kinds.includes(a.kind)
     );
 
-    let movedAny = false;
     for (const asset of assets) {
       const kind = asset.kind; // 'fighter', 'bomber', 'torpedo', 'fireship', etc.
       let dest = { x: asset.x, y: asset.y }; // default: hold
@@ -109,13 +111,15 @@ export function handleAsset(state, aiSide, personality, applyFn) {
         if (target) dest = moveToward(asset, target.x, target.y, thrustPx, margin);
       }
 
-      if (applyFn({ type: 'assetMove', assetId: asset.id, x: Math.round(dest.x), y: Math.round(dest.y) })) movedAny = true;
+      applyFn({ type: 'assetMove', assetId: asset.id, x: Math.round(dest.x), y: Math.round(dest.y) });
       // assetMove may auto-advance the stage mid-loop — stop if it has.
       if (state.assetActiveSide !== aiSide || state.assetPhase?.assetType !== stageType) return;
     }
-    // Nothing productive to move (only mines left, or moves rejected) — force the
-    // stage to advance so the asset phase can't stall.
-    if (!movedAny) applyFn({ type: 'assetStageDone', side: aiSide, assetType: stageType });
+    // Still on this stage (no assets, or an asset's move was rejected and left it unmoved so the
+    // auto-advance never fired) — force the stage to finish so the asset phase can never stall.
+    if (state.assetActiveSide === aiSide && state.assetPhase?.assetType === stageType) {
+      applyFn({ type: 'assetStageDone', side: aiSide, assetType: stageType });
+    }
     return;
   }
 
