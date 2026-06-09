@@ -3339,6 +3339,10 @@ export function applyCancelOrder(state, gid) {
       s.hull = ss.hull;
       s.dcRepaired = ss.dcRepaired;
       s.dcThisRound = ss.dcThisRound;
+      // Restore the deploy-adjust window so a just-deployed Group can be UNDO-DEPLOYED again
+      // (applyOrder clears justArrived/sigSilent; cancelling the activation must put them back).
+      s.justArrived = ss.justArrived;
+      s.sigSilent = ss.sigSilent;
     });
     grp._cancelSnapshot = null;
   }
@@ -3354,7 +3358,7 @@ export function applyOrder(state, rng, gid, order) {
   const def = getDef(state, gid);
   grp._cancelSnapshot = {
     spikes: grp.spikes,
-    ships: grp.ships.map(s => ({ hull: s.hull, dcRepaired: s.dcRepaired, dcThisRound: s.dcThisRound })),
+    ships: grp.ships.map(s => ({ hull: s.hull, dcRepaired: s.dcRepaired, dcThisRound: s.dcThisRound, justArrived: s.justArrived, sigSilent: s.sigSilent })),
   };
   grp.order = order;
   logEvent(state, `${def.name} → ${ORDERS[order].label}`);
