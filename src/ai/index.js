@@ -64,6 +64,11 @@ export function shouldAiAct(state, side) {
 
   if (state.assetPhase) {
     if (state.assetPhase.step !== 'assets') return false;
+    // Pending bomber/torpedo attacks are resolved by an external driver — the client
+    // attack modal in solo, _resolvePendingBomberBoth in AI-vs-AI — not by the asset
+    // handler. Returning true here would spin the AI re-forcing assetStageDone, which
+    // just re-creates the pending resolve (an infinite loop).
+    if (state.assetPhase._pendingBomberResolve) return false;
     if (state.assetActiveSide === side) return true;
     // When all asset stages are done (assetActiveSide is null), confirm if not yet done
     if (!state.assetActiveSide) {

@@ -192,6 +192,57 @@ function gateGroupObjective(state, gid, aiSide) {
   return spreadDropsiteTarget(state, gid, aiSide, ship, defIsVoidgate) || gateObjective(state, aiSide);
 }
 
+// Voidgates carry `openNetwork`, which makes them EXEMPT from coherency — so a single gate GROUP's
+// ships can legally spread far apart. Treat every individual gate SHIP as an independent "prong" and
+// assign each one its OWN distinct contestable dropsite (greedy global 1:1 across ALL gate groups),
+// so the network covers as many objectives as possible instead of stacking every prong on one site.
+// Leftover prongs (more gates than sites) double up on their cheapest. Returns a Map `${gid}:${si}`→ds.
+function gateProngAssignments(state, aiSide) {
+  const dss = (state.scenarioData?.dropsites || [])
+    .filter(ds => !ds.destroyed && dropsiteController(ds) !== aiSide);
+  const prongs = [];
+  for (const [pgid, g] of Object.entries(state.groups)) {
+    if (g.def?.side !== aiSide || !defIsVoidgate(g.def)) continue;
+    g.ships.forEach((s, si) => { if (!s.destroyed && !s.offTable) prongs.push({ gid: pgid, si, x: s.x, y: s.y }); });
+  }
+  const map = new Map();
+  if (!dss.length || !prongs.length) return map;
+  const PULL = 8 * INCH, SECURE = 12 * INCH, DEFEND = 16 * INCH;
+  const lostCause = ds => Math.max(0, dsEnemyBattalions(ds, aiSide) - dsSideBattalions(ds, aiSide) - 2);
+  const defend = ds => (dsSideBattalions(ds, aiSide) > 0 && dsEnemyBattalions(ds, aiSide) > 0 && lostCause(ds) === 0) ? DEFEND : 0;
+  const cost = (p, ds) => dist2d(p.x, p.y, ds.x * INCH, ds.y * INCH) - dsVpValue(ds) * PULL + lostCause(ds) * SECURE - defend(ds);
+  const pairs = [];
+  for (const p of prongs) for (const ds of dss) pairs.push({ p, ds, c: cost(p, ds) });
+  pairs.sort((a, b) => a.c - b.c);
+  const used = new Set();
+  for (const { p, ds } of pairs) {
+    const key = `${p.gid}:${p.si}`;
+    if (map.has(key) || used.has(ds.id)) continue;
+    map.set(key, ds); used.add(ds.id);
+    if (used.size === dss.length) break;
+  }
+  for (const p of prongs) {
+    const key = `${p.gid}:${p.si}`;
+    if (!map.has(key)) map.set(key, dss.slice().sort((a, b) => cost(p, a) - cost(p, b))[0]);
+  }
+  return map;
+}
+
+// Per-ship gate targets for one group: each alive prong's assigned dropsite (px) and its layer.
+// [{ si, x, y, atmosphere }] — used by the translator to spread the group across distinct objectives.
+export function gateShipTargets(state, gid, aiSide) {
+  const grp = state.groups[gid];
+  if (!grp || !defIsVoidgate(grp.def)) return [];
+  const map = gateProngAssignments(state, aiSide);
+  const out = [];
+  grp.ships.forEach((s, si) => {
+    if (s.destroyed || s.offTable) return;
+    const ds = map.get(`${gid}:${si}`);
+    if (ds) out.push({ si, x: ds.x * INCH, y: ds.y * INCH, atmosphere: ds.base?.layer === 'Atmosphere' });
+  });
+  return out;
+}
+
 // The objective of the Voidgate group nearest (px) a point — used so each Mothership shadows the
 // prong it's closest to, distributing the carriers across the spread network.
 function nearestVoidgateProngObjective(state, aiSide, fromShip) {
@@ -221,29 +272,40 @@ export function gateRunnerPlan(state, gid, aiSide) {
   const grp = state.groups[gid];
   const def = grp?.def;
   if (!def || !def.openNetwork || !(def.gateship > 0)) return null;
-  const si = grp.ships.findIndex(s => !s.destroyed && !s.offTable);
-  if (si < 0) return null;
-  const ship = grp.ships[si];
-  const obj = gateGroupObjective(state, gid, aiSide);
-  if (!obj) return null;
-  const ox = obj.x * INCH, oy = obj.y * INCH;
-  const objLayer = obj.base?.layer === 'Atmosphere' ? 'atmosphere' : 'orbit';
-  const curLayer = ship.layer || 'orbit';
-  const dist = dist2d(ship.x, ship.y, ox, oy);
+  // Each prong heads to its OWN distinct dropsite (gates ignore coherency). The actual per-ship
+  // moves and descents are issued by the translator from gateShipTargets; this plan just picks the
+  // GROUP order: General Quarters while ANY prong must still close (beyond Course-Change ½-Thrust
+  // reach), Course Change once every prong is on station so they park precisely (CC min move 0).
+  const targets = gateShipTargets(state, gid, aiSide);
   const thrustPx = (def.thrust || 12) * INCH;
   const halfThrustPx = 0.5 * thrustPx;
-  const needDescend = curLayer === 'orbit' && objLayer === 'atmosphere';
-  const needAscend  = curLayer === 'atmosphere' && objLayer === 'orbit';
-
-  // On station (within Course-Change reach, ½ Thrust) → park precisely on the dropsite
-  // (min move 0 lands on target and holds on later rounds). Match the dropsite's layer on
-  // this final move if we aren't already there.
-  if (dist <= halfThrustPx + 1) return { order: 'CC', x: ox, y: oy, toggle: needDescend || needAscend };
-  // Closing the gap → General Quarters covers up to full Thrust toward the dropsite. Only
-  // descend on the move that can actually reach the city, so the gate isn't stranded in
-  // Atmosphere (capped to 2"/turn) far from its objective; stay fast in Orbit until then.
-  const descendNow = needDescend && dist <= thrustPx + 1;
-  return { order: 'GQ', x: ox, y: oy, toggle: descendNow };
+  if (!targets.length) {
+    // No prong assignment (no contestable dropsites) — fall back to the group objective so a lone
+    // gate still advances toward something rather than freezing.
+    const obj = gateGroupObjective(state, gid, aiSide);
+    if (!obj) return null;
+    const si0 = grp.ships.findIndex(s => !s.destroyed && !s.offTable);
+    if (si0 < 0) return null;
+    const ship0 = grp.ships[si0];
+    const ox = obj.x * INCH, oy = obj.y * INCH;
+    const objLayer = obj.base?.layer === 'Atmosphere' ? 'atmosphere' : 'orbit';
+    const needDescend = (ship0.layer || 'orbit') === 'orbit' && objLayer === 'atmosphere';
+    const dist0 = dist2d(ship0.x, ship0.y, ox, oy);
+    if (dist0 <= halfThrustPx + 1) return { order: 'CC', x: ox, y: oy, toggle: needDescend };
+    return { order: 'GQ', x: ox, y: oy, toggle: needDescend && dist0 <= thrustPx + 1 };
+  }
+  let anyApproach = false;
+  for (const t of targets) {
+    const s = grp.ships[t.si];
+    if (dist2d(s.x, s.y, t.x, t.y) > halfThrustPx + 1) { anyApproach = true; break; }
+  }
+  const first = targets[0];
+  const fs = grp.ships[first.si];
+  // Representative descend flag for the lead prong (the per-ship descents are issued by the
+  // translator; this keeps the plan informative): descend only when this prong can reach its city.
+  const ftoggle = first.atmosphere && (fs.layer || 'orbit') === 'orbit'
+    && dist2d(fs.x, fs.y, first.x, first.y) <= thrustPx + 1;
+  return { order: anyApproach ? 'GQ' : 'CC', x: first.x, y: first.y, toggle: ftoggle };
 }
 
 // Drive a Mothership to keep the 18" channel to the forward gate and CHANNEL a drop the

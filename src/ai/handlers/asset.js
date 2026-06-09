@@ -78,6 +78,9 @@ function moveToward(asset, targetX, targetY, thrustPx, margin) {
 export function handleAsset(state, aiSide, personality, applyFn) {
   const ap = state.assetPhase;
   if (!ap || ap.step !== 'assets') return;
+  // Pending bomber/torpedo attacks await an external driver (client modal / resolver).
+  // Forcing assetStageDone here would only re-create the pending resolve and spin.
+  if (ap._pendingBomberResolve) return;
 
   if (state.assetActiveSide === aiSide && ap.assetType) {
     const stageType = ap.assetType;
