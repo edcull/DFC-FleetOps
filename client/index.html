@@ -6427,7 +6427,7 @@ function commitDeployment() {
   ['player1', 'player2'].forEach(side => {
     const stat = directDeploymentStatus(side);
     if (stat && stat.placed < stat.required) {
-      warnings.push(`${playerNameForSide(side)} (${side === 'player1' ? 'Red' : 'Blue'}) has ${stat.placed}/${stat.required} required Direct Groups deployed`);
+      warnings.push(`${playerNameForSide(side)} (${(state.deployZone && state.deployZone[side]) === 'north' ? 'Blue' : 'Red'}) has ${stat.placed}/${stat.required} required Direct Groups deployed`);
     }
   });
   if (warnings.length) {
@@ -8723,7 +8723,7 @@ function renderSetupOverlay() {
   // Build a summary line per option for each table — what shows in the picker list.
   const summarisers = {
     deployment: (k, v) => v.short || v.desc,
-    approach:   (k, v) => `${playerNameForSide('player2')}: ${APPROACH_BEHAVIOURS[v.blue].short} · ${playerNameForSide('player1')}: ${APPROACH_BEHAVIOURS[v.red].short}`,
+    approach:   (k, v) => `Blue: ${APPROACH_BEHAVIOURS[v.north].short} · Red: ${APPROACH_BEHAVIOURS[v.south].short}`,
     layout:     (k, v) => `${v.dropsites.length} dropsites · ${v.scenery.micrometeor} micrometeor · ${v.scenery.dense} dense${v.rings.length?' · '+v.rings.length+' ring'+(v.rings.length>1?'s':''):''}${v.largeObjects.length?' · '+v.largeObjects.length+' large obj':''}`,
     variant:    (k, v) => v.short || '',
     objective:  (k, v) => v.short || ''
@@ -8732,7 +8732,17 @@ function renderSetupOverlay() {
   // Card-summary functions (the small text shown on the card's collapsed view)
   const cardSummary = {
     deployment: () => { if (!scen.deployment) return ''; const d = DEPLOYMENTS[scen.deployment]; return d.short || d.desc; },
-    approach:   () => { if (!scen.approach) return ''; const a = APPROACHES[scen.approach]; const dz = state.deployZone || { player1:'south', player2:'north' }; return `<b style="color:var(--shal)">Red:</b> ${APPROACH_BEHAVIOURS[a[dz.player2]].short} · <b style="color:var(--ucm)">Blue:</b> ${APPROACH_BEHAVIOURS[a[dz.player1]].short}`; },
+    approach:   () => {
+      if (!scen.approach) return '';
+      const a = APPROACHES[scen.approach];
+      // Approach behaviours are fixed per ROLE (Blue = North zone, Red = South zone); only WHICH
+      // player holds each role changes with the deployment-sides choice. So Blue always shows the
+      // North behaviour (e.g. Delayed Response: Blue is always Distant) — only the name swaps.
+      const dz = state.deployZone || { player1: 'south', player2: 'north' };
+      const bluePlayer = dz.player1 === 'north' ? 'player1' : 'player2';
+      const redPlayer  = bluePlayer === 'player1' ? 'player2' : 'player1';
+      return `<b style="color:${PLAYER_COLORS.blue.hex}">Blue</b> (${playerNameForSide(bluePlayer)}): ${APPROACH_BEHAVIOURS[a.north].short} · <b style="color:${PLAYER_COLORS.red.hex}">Red</b> (${playerNameForSide(redPlayer)}): ${APPROACH_BEHAVIOURS[a.south].short}`;
+    },
     layout:     () => { if (!scen.layout) return ''; const l = LAYOUTS[scen.layout]; return summarisers.layout('', l); },
     variant:    () => vrn ? (vrn.short || '') : '',
     objective:  () => obj ? `${obj.short}${obj.bonus?'<br><span style="color:var(--text-mute)">'+obj.bonus+'</span>':''}` : ''
@@ -9066,7 +9076,7 @@ function renderSetupOverlay() {
           `}</div>
         </div>
         <div class="setup-pane" data-pane="scen">
-        <div style="font-size:9px;color:var(--text-mute);margin:-4px 0 10px;text-align:center;">Red and Blue deployment sides are assigned randomly when you confirm.</div>
+        <div style="font-size:9px;color:var(--text-mute);margin:-4px 0 10px;text-align:center;">Blue &amp; Red deployment sides — set them under <b>Deployment Sides</b> below, or leave Random.</div>
         ${(() => {
           const ms = state.moonswipe;
           if (!ms) return '';
