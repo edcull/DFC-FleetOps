@@ -163,10 +163,30 @@ function moveGroupCoherent(state, rng, gid, movers, tx, ty, applyFn, toggle = fa
     return bestMoveToward(s, mc, sx, sy);
   };
 
-  // For an advance: pack distinct slots around the waypoint, then give each ship the nearest slot
-  // whose REACHABLE destination is clear of board obstacles AND of the slots already taken by
-  // group-mates. Extra slots are packed so a ship can skip a blocked one rather than stack up.
-  const planAt = (adv) => {
+  const need2 = need;
+  const startCoh = coherentCount(movers.map(({ s }) => ({ x: s.x, y: s.y, layer: s.layer })), cohPx, need2);
+  const startCoherent = startCoh === movers.length;
+
+  // RIGID move (for an already-coherent group): every ship aims at a point the SAME distance along
+  // the SHARED group bearing from its OWN position, so they all turn to and hold a COMMON heading
+  // and translate together. Keeping facings aligned is what lets the group keep advancing on General
+  // Quarters instead of being forced onto Course Change every turn just to re-aim (and it preserves
+  // the existing spacing, so no overlap is introduced among group-mates).
+  const planRigid = (adv) => {
+    const target = {}, dests = [];
+    for (const { s, si } of movers) {
+      const aimX = s.x + ux * adv, aimY = s.y + uy * adv;
+      target[si] = { x: aimX, y: aimY };
+      const rd = reachDest(s, si, aimX, aimY);
+      dests.push({ x: rd.x, y: rd.y, layer: s.layer });
+    }
+    return { target, dests };
+  };
+
+  // For an advance/regroup of a BROKEN group: pack distinct slots around the waypoint, then give each
+  // ship the nearest slot whose REACHABLE destination is clear of board obstacles AND of the slots
+  // already taken by group-mates. Extra slots are packed so a ship can skip a blocked one.
+  const planPacked = (adv) => {
     const wx = cx + ux * adv, wy = cy + uy * adv;
     const slots = packSlots(wx, wy, movers.length + 4, diamPx);
     const used = new Array(slots.length).fill(false);
@@ -190,6 +210,14 @@ function moveGroupCoherent(state, rng, gid, movers, tx, ty, applyFn, toggle = fa
     }
     return { target, dests };
   };
+
+  // Coherent AND already roughly aligned → move rigidly (shared heading) to KEEP them aligned.
+  // A broken or misaligned group packs/converges instead (rigid aiming can't re-align ships whose
+  // headings are far apart in one move). Once aligned, rigid keeps them aligned thereafter.
+  const angDiff = (a, b) => { const d = Math.abs((((a - b) % 360) + 360) % 360); return d > 180 ? 360 - d : d; };
+  let headingSpread = 0;
+  for (let i = 0; i < movers.length; i++) for (let j = i + 1; j < movers.length; j++) headingSpread = Math.max(headingSpread, angDiff(movers[i].s.heading || 0, movers[j].s.heading || 0));
+  const planAt = (startCoherent && headingSpread <= 30) ? planRigid : planPacked;
 
   const obstOverlaps = dests => dests.reduce((n, d) => n + (clearOfObstacles(d.x, d.y, d.layer) ? 0 : 1), 0);
   // A move's "harm" = ships left out of formation + ships ending on another base (which the engine
