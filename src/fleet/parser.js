@@ -203,9 +203,18 @@ export function parseNewRecruit(text) {
         if (nextLine && (nextLine.startsWith('•') || nextLine.startsWith('·') || nextLine.match(/^\d+x\s/))) {
           // Multi-ship group — bullets will be parsed next iterations
         } else {
-          // Single-ship group
-          const { cleanName, options } = extractParenOptions(rawName);
-          groups.push({ name: cleanName, count: 1, pts: groupPts, options: options.length ? options : undefined });
+          // Single-ship group — use parseShipLine so INLINE options after "[pts]: ..." are
+          // captured too (e.g. "Delhi Battleship [275 pts]: ..., Drive Refit [45 pts], ..."),
+          // not just parenthetical ones. (The header path previously dropped inline options, so
+          // upgrades like Drive Refit never applied.)
+          const parsedShip = parseShipLine(trimmed);
+          if (parsedShip) {
+            groups.push({ name: parsedShip.name, count: 1, pts: groupPts,
+              options: parsedShip.options.length ? parsedShip.options : undefined });
+          } else {
+            const { cleanName, options } = extractParenOptions(rawName);
+            groups.push({ name: cleanName, count: 1, pts: groupPts, options: options.length ? options : undefined });
+          }
         }
         continue;
       }
