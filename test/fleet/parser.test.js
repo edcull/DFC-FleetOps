@@ -78,6 +78,13 @@ describe('parseNewRecruit — single-ship groups', () => {
     expect(r.groups[0].options ?? []).toHaveLength(0);
   });
 
+  it('captures INLINE options after a single-ship group header (e.g. Drive Refit)', () => {
+    const r = parseNewRecruit(BASE + 'Delhi Battleship [275 pts]: UF-6400 Mass Driver Turrets, Bulk Landers, Drop Pods, Boarding Pods, Drive Refit [45 pts], UF-4200 Mass Driver Turrets (2x UF-4200 Mass Driver Turrets)');
+    expect(r.groups[0].name).toBe('Delhi Battleship');
+    expect(r.groups[0].pts).toBe(275);
+    expect(r.groups[0].options).toContain('Drive Refit');
+  });
+
   it('marks valid when faction and groups present', () => {
     const r = parseNewRecruit(BASE + 'Rio Cruiser [85 pts]');
     expect(r.valid).toBe(true);
