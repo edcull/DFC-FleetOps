@@ -141,6 +141,26 @@ describe('shouldAiAct — attackModal save step', () => {
     expect(shouldAiAct(s, 'player1')).toBe(true);
     expect(shouldAiAct(s, 'player2')).toBe(false);
   });
+
+  it('returns true for the ATTACKER at a non-save step so it resumes after the save', () => {
+    // After the defender drives the save, the modal advances to a non-save attacker step
+    // (e.g. 'done'/'select'); the attacker (here player1) must resume and finish the attack,
+    // otherwise the game stalls on "ATTACK RESOLVED" waiting for the AI.
+    const s = playState({ activeSide: 'player1' });
+    for (const step of ['done', 'select', 'crippling', 'explosion']) {
+      s.attackModal = { step, saveResult: null, bomberSide: null };
+      expect(shouldAiAct(s, 'player1')).toBe(true);  // attacker resumes
+      expect(shouldAiAct(s, 'player2')).toBe(false); // defender idle
+    }
+  });
+
+  it('derives the attacker from attackerGid when activeSide is null', () => {
+    const s = playState({ activeSide: null });
+    addGroup(s, shipDef({ id: 'player2:atk', side: 'player2' }), [shipInstance({ x: 200, y: 200 })]);
+    s.attackModal = { step: 'done', saveResult: null, bomberSide: null, attackerGid: 'player2:atk' };
+    expect(shouldAiAct(s, 'player2')).toBe(true);  // orphaned modal — attacker still finishes
+    expect(shouldAiAct(s, 'player1')).toBe(false);
+  });
 });
 
 describe('shouldAiAct — repairPhase', () => {
