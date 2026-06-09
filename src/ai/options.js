@@ -1061,20 +1061,29 @@ export function generateDeployOptions(state, aiSide) {
       baseY = edgeYpx + fwd * def.vanguard * INCH;
     }
 
-    // Deploy each ship of the group into a LINE-ABREAST slot centred on the anchor, spaced just
-    // inside coherency. Starting coherent (and side-by-side, not stacked) means the group advances
-    // forward in parallel — no vertical conga line, and it never starts a turn out of formation.
-    const total = grp.ships.filter(s => !s.destroyed).length;          // full group size (incl. off-table)
-    const idx   = grp.ships.filter(s => !s.destroyed && !s.offTable).length; // this ship's slot
+    // Deploy each ship of the group into a tight, coherent cluster. The FIRST ship anchors on the
+    // group's lane (and, for Vanguard, pushed forward into the halo). FOLLOW-ON ships seed right
+    // BESIDE an already-placed group-mate — never at an absolute slot — so even when the zone (or
+    // the Vanguard halo) is a constrained polygon, placeNonOverlap's nearest-clear search stays
+    // local to the group and the ships don't scatter out of coherency (which is what put Vanguard
+    // ships out of formation on deploy). They start coherent and side-by-side, not stacked.
     const cohPx = coherencyInches(def) * INCH;
     const spacing = Math.min(diamPx + 0.8 * INCH, Math.max(diamPx, cohPx - 0.6 * INCH));
-    const slotX = baseX + (idx - (total - 1) / 2) * spacing;
-
-    const za = legalZonePosPx(vgInZone ? null : zone,
-      Math.max(INCH, Math.min(BOARD_PX - INCH, slotX)),
-      Math.max(INCH, Math.min(BOARD_PX - INCH, baseY)));
-    const seedX = za ? za.x : Math.max(INCH, Math.min(BOARD_PX - INCH, slotX));
-    const seedY = za ? za.y : Math.max(INCH, Math.min(BOARD_PX - INCH, baseY));
+    const placed = grp.ships.filter(s => !s.destroyed && !s.offTable);
+    let seedX, seedY;
+    if (placed.length) {
+      // Beside the placed group-mates (lateral offset from their centroid), kept on the same row.
+      const cx = placed.reduce((a, s) => a + s.x, 0) / placed.length;
+      const cy = placed.reduce((a, s) => a + s.y, 0) / placed.length;
+      seedX = Math.max(INCH, Math.min(BOARD_PX - INCH, cx + spacing));
+      seedY = Math.max(INCH, Math.min(BOARD_PX - INCH, cy));
+    } else {
+      const za = legalZonePosPx(vgInZone ? null : zone,
+        Math.max(INCH, Math.min(BOARD_PX - INCH, baseX)),
+        Math.max(INCH, Math.min(BOARD_PX - INCH, baseY)));
+      seedX = za ? za.x : Math.max(INCH, Math.min(BOARD_PX - INCH, baseX));
+      seedY = za ? za.y : Math.max(INCH, Math.min(BOARD_PX - INCH, baseY));
+    }
     // Don't overlap THIS ship against the rest of its own group it'll deploy alongside,
     // nor any already-placed ship of any group.
     const pos = placeNonOverlap(seedX, seedY, allPlaced, diamPx, zone, vgInZone);
