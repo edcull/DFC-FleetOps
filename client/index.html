@@ -1570,6 +1570,19 @@ const FACTION_COLORS = {
   bioficer:   'red',
 };
 
+// <option>s for a fleet slot's colour <select>: an unset placeholder, a Random choice (resolved
+// to a distinct colour at game start), then the six colours (the one taken by the other slot is
+// disabled so the two sides stay distinct). Used by every setup mode (single/hotseat/online/AI-vs-AI).
+function colourOptionsHtml(slot) {
+  const other = slot === 'f1' ? 'f2' : 'f1';
+  const cur = state.playerColors && state.playerColors[slot];
+  const otherCol = state.playerColors && state.playerColors[other];
+  return `<option value="" ${!cur ? 'selected' : ''}>— colour —</option>` +
+    `<option value="random" ${cur === 'random' ? 'selected' : ''}>🎲 Random</option>` +
+    Object.entries(PLAYER_COLORS).map(([k, c]) =>
+      `<option value="${k}" ${cur === k ? 'selected' : ''} ${k === otherCol ? 'disabled' : ''}>${c.label}</option>`).join('');
+}
+
 // Resolve the live colour objects for each side from state.sideColors.
 function player1Color() { return PLAYER_COLORS[(state.sideColors && state.sideColors.player1) || 'blue']; }
 function player2Color() { return PLAYER_COLORS[(state.sideColors && state.sideColors.player2) || 'red'];  }
@@ -6773,9 +6786,9 @@ function openFleetImport(slot, onApply) {
     if (parsed.admiralLevel > 0) state.admiralChoice[slot] = parsed.admiralLevel;
     // Sync secondaries if any were found
     if (parsed.secondaries.length) state.secondaryChoice[slot] = parsed.secondaries.slice(0, 2);
-    // Auto-set faction colour on import
-    if (parsed.faction && FACTION_COLORS[parsed.faction]) {
-      state.playerColors = state.playerColors || { f1: null, f2: null };
+    // Auto-set faction colour on import (only when the slot has no explicit colour/Random choice).
+    state.playerColors = state.playerColors || { f1: null, f2: null };
+    if (parsed.faction && FACTION_COLORS[parsed.faction] && !state.playerColors[slot]) {
       const other = slot === 'f1' ? 'f2' : 'f1';
       const preferred = FACTION_COLORS[parsed.faction];
       const otherCol = state.playerColors[other]; // null if unassigned — preferred always wins
@@ -8611,6 +8624,7 @@ function aiVsColumnHtml(slot) {
   const secPickers = `<div style="${lbl}">SECONDARY 1</div><select class="fleet-dropdown" id="aivs-sec0-${slot}" style="font-size:10px;">${secOpts(C.sec1)}</select>
     <div style="${lbl}">SECONDARY 2</div><select class="fleet-dropdown" id="aivs-sec1-${slot}" style="font-size:10px;">${secOpts(C.sec2)}</select>`;
   const persSelect = `<div style="${lbl}">PERSONALITY</div><select class="fleet-dropdown" id="aivs-personality-${slot}" style="font-size:10px;">${persOpts}</select>`;
+  const colourSelect = `<div style="${lbl}">COLOUR</div><select class="fleet-dropdown" data-color-choice="${slot}" style="font-size:10px;">${colourOptionsHtml(slot)}</select>`;
   const viewBtn = state.importedFleets?.[slot]
     ? `<button class="btn" data-view-fleet="${slot}" style="width:100%;margin-top:5px;font-size:10px;">👁 VIEW FLEET (${_fleetTotalPts(state.importedFleets[slot])} pts)</button>` : '';
   const modeDropdown = `<div style="${lbl}">FLEET SOURCE</div><select class="fleet-dropdown" id="aivs-mode-${slot}" style="font-size:10px;margin-bottom:4px;">
@@ -8628,7 +8642,7 @@ function aiVsColumnHtml(slot) {
     modeControls = `<div style="${lbl}">AI FACTION</div><select class="fleet-dropdown" disabled style="font-size:10px;"><option>${C.importFaction ? (FACTIONS[C.importFaction]?.name || C.importFaction) : '— import list first —'}</option></select>${secPickers}${persSelect}${llmToggle}
       <button class="btn" id="aivs-import-${slot}" style="width:100%;margin-top:8px;font-size:10px;">${C.importFaction ? '✏ Edit Import' : '≡ Import List'}</button>${C.importFaction ? viewBtn : ''}`;
   }
-  return `<div class="faction-lbl" style="color:${color}">${title}${ready ? ' <span style="color:var(--hull-good);font-size:9px;">✓ READY</span>' : ''}</div>${modeDropdown}${modeControls}`;
+  return `<div class="faction-lbl" style="color:${color}">${title}${ready ? ' <span style="color:var(--hull-good);font-size:9px;">✓ READY</span>' : ''}</div>${modeDropdown}${modeControls}${colourSelect}`;
 }
 
 // Build both AI fleets from their setup configs, then start the AI-vs-AI game and switch to the
@@ -8926,8 +8940,7 @@ function renderSetupOverlay() {
             </select>
             <div style="font-size:9px;letter-spacing:0.08em;color:var(--text-mute);font-family:var(--mono);margin:6px 0 3px;">COLOUR</div>
             <select class="fleet-dropdown" data-color-choice="f1" style="font-size:10px;" ${f1Lock ? 'disabled' : ''}>
-              <option value="" ${!(state.playerColors&&state.playerColors.f1)?'selected':''}>— colour —</option>
-              ${Object.entries(PLAYER_COLORS).map(([k,c]) => { const taken = k === (state.playerColors&&state.playerColors.f2); return `<option value="${k}" ${(state.playerColors&&state.playerColors.f1)===k?'selected':''} ${taken?'disabled':''}>${c.label}</option>`; }).join('')}
+              ${colourOptionsHtml('f1')}
             </select>
             ${secondaryPickers('f1', true)}
             ${(state.scenario && state.scenario.layout === 'se1_moonguard') ? `
@@ -8960,8 +8973,7 @@ function renderSetupOverlay() {
               </label>` : '';
               const colourPicker = `<div style="${lbl}">COLOUR</div>
                 <select class="fleet-dropdown" data-color-choice="f2" style="margin-top:0;font-size:10px;" ${f2Lock ? 'disabled' : ''}>
-                  <option value="" ${!(state.playerColors&&state.playerColors.f2)?'selected':''}>— colour —</option>
-                  ${Object.entries(PLAYER_COLORS).map(([k,c]) => { const taken = k === (state.playerColors&&state.playerColors.f1); return `<option value="${k}" ${(state.playerColors&&state.playerColors.f2)===k?'selected':''} ${taken?'disabled':''}>${c.label}</option>`; }).join('')}
+                  ${colourOptionsHtml('f2')}
                 </select>`;
               const secPickers = `<div style="${lbl}">SECONDARY 1</div>
                 <select class="fleet-dropdown" id="ai-sec-0" style="font-size:10px;">${secOpts(_aiSec1)}</select>
@@ -9016,8 +9028,7 @@ function renderSetupOverlay() {
               ${Object.keys(FACTIONS).map(fk => `<option value="${fk}" ${state.fleetChoices.f2===fk?'selected':''}>${FACTIONS[fk].name}</option>`).join('')}
             </select>` : ''}
             ${!state.aiOpponent ? `<select class="fleet-dropdown" data-color-choice="f2" style="margin-top:5px;font-size:10px;" ${f2Lock ? 'disabled' : ''}>
-              <option value="" ${!(state.playerColors&&state.playerColors.f2)?'selected':''}>— colour —</option>
-              ${Object.entries(PLAYER_COLORS).map(([k,c]) => { const taken = k === (state.playerColors&&state.playerColors.f1); return `<option value="${k}" ${(state.playerColors&&state.playerColors.f2)===k?'selected':''} ${taken?'disabled':''}>${c.label}</option>`; }).join('')}
+              ${colourOptionsHtml('f2')}
             </select>` : ''}
             ${!state.aiOpponent ? secondaryPickers('f2') : ''}
             ${!state.aiOpponent && (state.scenario && state.scenario.layout === 'se1_moonguard') ? `
@@ -9250,9 +9261,10 @@ function renderSetupOverlay() {
       }
       // Rebuild fleets so groups and activeFleets reflect the new faction immediately.
       rebuildFleets();
-      // Auto-set colour to faction default when a fleet is chosen; pick random free colour if default is taken.
-      if (sel.value && FACTION_COLORS[sel.value]) {
-        state.playerColors = state.playerColors || { f1: null, f2: null };
+      // Auto-set colour to faction default when a fleet is chosen — but never override an explicit
+      // colour/Random the player already picked. Pick a random free colour if the default is taken.
+      state.playerColors = state.playerColors || { f1: null, f2: null };
+      if (sel.value && FACTION_COLORS[sel.value] && !state.playerColors[which]) {
         const other = which === 'f1' ? 'f2' : 'f1';
         const preferred = FACTION_COLORS[sel.value];
         const otherCol = state.playerColors[other];
@@ -9388,11 +9400,12 @@ function renderSetupOverlay() {
             });
             const data = await res.json();
             if (!data.ok) { flashLaunchMsg(data.error || 'Fleet build failed'); btn.disabled = false; return; }
-            if (mode !== 'fastplay' && data.faction && FACTION_COLORS[data.faction]) {
-              state.playerColors = state.playerColors || { f1: null, f2: null };
+            state.playerColors = state.playerColors || { f1: null, f2: null };
+            if (mode !== 'fastplay' && data.faction && FACTION_COLORS[data.faction] && !state.playerColors[slot]) {
               const preferred = FACTION_COLORS[data.faction];
-              const taken = state.playerColors.f1;
-              state.playerColors.f2 = (preferred !== taken) ? preferred : (Object.keys(PLAYER_COLORS).find(k => k !== taken) || preferred);
+              const other = slot === 'f1' ? 'f2' : 'f1';
+              const taken = state.playerColors[other];
+              state.playerColors[slot] = (preferred !== taken) ? preferred : (Object.keys(PLAYER_COLORS).find(k => k !== taken) || preferred);
               netRelaySetup();
             }
           } catch { flashLaunchMsg('Could not reach server'); btn.disabled = false; return; }
@@ -9434,10 +9447,10 @@ function renderSetupOverlay() {
   }
   // Wire AI config controls — persist to module vars so they survive re-renders.
   if (state.aiOpponent) {
-    // Helper: auto-apply faction colour to f2
+    // Helper: auto-apply faction colour to f2 (never override an explicit colour/Random choice)
     const applyAiColour = (faction) => {
-      if (!faction || !FACTION_COLORS[faction]) return;
       state.playerColors = state.playerColors || { f1: null, f2: null };
+      if (!faction || !FACTION_COLORS[faction] || state.playerColors.f2) return;
       const preferred = FACTION_COLORS[faction];
       const takenCol  = state.playerColors.f1;
       const free = Object.keys(PLAYER_COLORS).filter(k => k !== takenCol);

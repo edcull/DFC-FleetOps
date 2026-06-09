@@ -3809,11 +3809,17 @@ function applyCommitScenario(state, rng) {
   } else {
     state.deployZone = { player1: 'north', player2: 'south' };
   }
-  // Carry player colour choices through to side assignments.
-  state.sideColors = {
-    player1: (state.playerColors && state.playerColors.f1) || 'blue',
-    player2: (state.playerColors && state.playerColors.f2) || 'red',
-  };
+  // Carry player colour choices through to side assignments. An explicit colour is kept; a
+  // 'random' choice (or an unset slot) is resolved here with the seeded RNG so it's deterministic
+  // and consistent online. f1 defaults to blue and f2 to red when simply unset (legacy behaviour);
+  // only an explicit 'random' actually randomises.
+  const COLOR_KEYS = ['green', 'purple', 'yellow', 'orange', 'blue', 'red'];
+  const pc = state.playerColors || {};
+  const pickColor = (exclude) => { const free = COLOR_KEYS.filter(k => k !== exclude); return free[Math.floor(rng() * free.length)]; };
+  let c1 = pc.f1 === 'random' ? pickColor(null) : (pc.f1 || 'blue');
+  let c2 = pc.f2 === 'random' ? pickColor(c1)   : (pc.f2 || 'red');
+  if (c1 === c2) c2 = pickColor(c1); // keep the two sides visually distinct
+  state.sideColors = { player1: c1, player2: c2 };
   rebuildFleets(state);
   // Apply stored Payload→Porter links to the rebuilt ship objects.
   ['player1', 'player2'].forEach(side => {
