@@ -8898,10 +8898,30 @@ function renderSetupOverlay() {
       ${expansionSummary()}
     </div>`;
 
+  // Deployment-sides control: choose which fleet deploys North vs South, or roll for it (default).
+  // player1 = Red, player2 = Blue (slot convention). Coloured with each side's chosen colour.
+  const _dChoice = state.deployChoice || 'random';
+  const _redTag = `<b style="color:${PLAYER_COLORS.red.hex}">Red</b>`, _blueTag = `<b style="color:${PLAYER_COLORS.blue.hex}">Blue</b>`;
+  const deploySidesRow = `<div class="scen-row">
+      <div class="scen-roll none">⚐</div>
+      <div class="scen-label">Deployment Sides</div>
+      <div class="scen-helper">Which fleet starts North vs South (or roll for it).</div>
+      <div class="scen-name">${_dChoice === 'random' ? 'Random' : _dChoice === 'red_north' ? 'Red North' : 'Red South'}</div>
+      <div class="scen-short">${_dChoice === 'red_north' ? `${_redTag} North · ${_blueTag} South` : _dChoice === 'red_south' ? `${_redTag} South · ${_blueTag} North` : 'Rolled randomly at start'}</div>
+      <div class="scen-controls">
+        <select class="scen-dropdown" data-deploy-side style="flex:1 1 100%;" ${lockAttr}>
+          <option value="random" ${_dChoice === 'random' ? 'selected' : ''}>🎲 Random</option>
+          <option value="red_north" ${_dChoice === 'red_north' ? 'selected' : ''}>Red North · Blue South</option>
+          <option value="red_south" ${_dChoice === 'red_south' ? 'selected' : ''}>Red South · Blue North</option>
+        </select>
+      </div>
+    </div>`;
+
   // Custom tab: the full generation grid + RANDOMISE ALL.
   const customTab = `<div style="${lockStyle}">
       <div class="setup-grid">
         ${makeCard('deployment','Deployment Type', DEPLOYMENTS, scen.deployment)}
+        ${deploySidesRow}
         ${makeCard('approach',  'Approach',        APPROACHES,  scen.approach)}
         ${makeCard('layout',    'Layout',          LAYOUTS,     scen.layout)}
         ${makeCard('variant',   'Variant',         VARIANTS,    scen.variant)}
@@ -9210,6 +9230,17 @@ function renderSetupOverlay() {
       const key = sel.dataset.scenSelect;
       state.scenario = { ...state.scenario, [key]: sel.value || null };
       renderAll();
+    });
+  });
+  // Deployment-sides dropdown — choose which fleet deploys North/South, or roll for it.
+  overlay.querySelectorAll('[data-deploy-side]').forEach(sel => {
+    sel.addEventListener('change', () => {
+      state.deployChoice = sel.value || 'random';
+      // Reflect an explicit choice in the live deployZone preview (Random is rolled at game start).
+      if (state.deployChoice === 'red_north') state.deployZone = { player1: 'north', player2: 'south' };
+      else if (state.deployChoice === 'red_south') state.deployZone = { player1: 'south', player2: 'north' };
+      renderAll();
+      netRelaySetup();
     });
   });
   // Asymmetric-scoring toggle: switch between a single shared objective and per-side ones.

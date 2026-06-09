@@ -274,6 +274,7 @@ export function createState() {
     playerNames: { f1: 'Player 1', f2: 'Player 2' }, // editable display names per fleet slot
     playerColors: { f1: null, f2: null },            // chosen colour key per fleet slot (null = unassigned)
     sideColors: null,                                 // { player1: colorKey, player2: colorKey } — set at commitScenario
+    deployChoice: 'random',                           // 'random' | 'red_north' | 'red_south' — pins deploy sides at commit (player1=Red)
     deployZone: null,                                 // { player1: 'north'|'south', player2: 'south'|'north' } — set at commitScenario
     slotForSide: null,                                // { player1: 'f1'|'f2', player2: 'f1'|'f2' } — set at commitScenario
     fleetChoices: { f1: null, f2: null }, // picker selections (randomised to slots at commit)
