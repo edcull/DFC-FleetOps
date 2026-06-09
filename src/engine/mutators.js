@@ -3803,12 +3803,13 @@ function applyCommitScenario(state, rng) {
   state.factions.player2 = state.fleetChoices.f2;
   const slotForSide = { player1: 'f1', player2: 'f2' };
   state.slotForSide = slotForSide;
-  // Assign north/south deployment zones. The player can pin the sides (player1 = Red, player2 =
-  // Blue) via state.deployChoice; 'random' (the default) rolls with the seeded RNG.
+  // Assign deployment zones. The player can pin the rulebook's Blue/Red sides via
+  // state.deployChoice (Blue = North zone, Red = South zone); 'random' (default) rolls with the
+  // seeded RNG. 'p1blue' = player1 takes Blue/North; 'p2blue' = player2 takes Blue/North.
   const dChoice = state.deployChoice;
-  if (dChoice === 'red_north') {
+  if (dChoice === 'p1blue') {
     state.deployZone = { player1: 'north', player2: 'south' };
-  } else if (dChoice === 'red_south') {
+  } else if (dChoice === 'p2blue') {
     state.deployZone = { player1: 'south', player2: 'north' };
   } else if (rng() < 0.5) {
     state.deployZone = { player1: 'south', player2: 'north' };

@@ -8898,21 +8898,25 @@ function renderSetupOverlay() {
       ${expansionSummary()}
     </div>`;
 
-  // Deployment-sides control: choose which fleet deploys North vs South, or roll for it (default).
-  // player1 = Red, player2 = Blue (slot convention). Coloured with each side's chosen colour.
+  // Deployment-sides control: assign the rulebook's Blue and Red deployment zones to each fleet,
+  // or roll for it (default). Blue = North zone, Red = South zone (DFC convention).
   const _dChoice = state.deployChoice || 'random';
-  const _redTag = `<b style="color:${PLAYER_COLORS.red.hex}">Red</b>`, _blueTag = `<b style="color:${PLAYER_COLORS.blue.hex}">Blue</b>`;
+  const _p1 = playerNameForSide('player1'), _p2 = playerNameForSide('player2');
+  const _B = `<b style="color:${PLAYER_COLORS.blue.hex}">Blue</b>`, _R = `<b style="color:${PLAYER_COLORS.red.hex}">Red</b>`;
+  const _dSummary = _dChoice === 'p1blue' ? `${_B}: ${_p1} · ${_R}: ${_p2}`
+                  : _dChoice === 'p2blue' ? `${_B}: ${_p2} · ${_R}: ${_p1}`
+                  : 'Rolled randomly at start';
   const deploySidesRow = `<div class="scen-row">
       <div class="scen-roll none">⚐</div>
       <div class="scen-label">Deployment Sides</div>
-      <div class="scen-helper">Which fleet starts North vs South (or roll for it).</div>
-      <div class="scen-name">${_dChoice === 'random' ? 'Random' : _dChoice === 'red_north' ? 'Red North' : 'Red South'}</div>
-      <div class="scen-short">${_dChoice === 'red_north' ? `${_redTag} North · ${_blueTag} South` : _dChoice === 'red_south' ? `${_redTag} South · ${_blueTag} North` : 'Rolled randomly at start'}</div>
+      <div class="scen-helper">Assign the Blue &amp; Red deployment sides (or roll for it).</div>
+      <div class="scen-name">${_dChoice === 'random' ? 'Random' : 'Set'}</div>
+      <div class="scen-short">${_dSummary}</div>
       <div class="scen-controls">
         <select class="scen-dropdown" data-deploy-side style="flex:1 1 100%;" ${lockAttr}>
           <option value="random" ${_dChoice === 'random' ? 'selected' : ''}>🎲 Random</option>
-          <option value="red_north" ${_dChoice === 'red_north' ? 'selected' : ''}>Red North · Blue South</option>
-          <option value="red_south" ${_dChoice === 'red_south' ? 'selected' : ''}>Red South · Blue North</option>
+          <option value="p1blue" ${_dChoice === 'p1blue' ? 'selected' : ''}>Blue: ${_p1} · Red: ${_p2}</option>
+          <option value="p2blue" ${_dChoice === 'p2blue' ? 'selected' : ''}>Blue: ${_p2} · Red: ${_p1}</option>
         </select>
       </div>
     </div>`;
@@ -9237,8 +9241,9 @@ function renderSetupOverlay() {
     sel.addEventListener('change', () => {
       state.deployChoice = sel.value || 'random';
       // Reflect an explicit choice in the live deployZone preview (Random is rolled at game start).
-      if (state.deployChoice === 'red_north') state.deployZone = { player1: 'north', player2: 'south' };
-      else if (state.deployChoice === 'red_south') state.deployZone = { player1: 'south', player2: 'north' };
+      // Blue = North zone, Red = South zone.
+      if (state.deployChoice === 'p1blue') state.deployZone = { player1: 'north', player2: 'south' };
+      else if (state.deployChoice === 'p2blue') state.deployZone = { player1: 'south', player2: 'north' };
       renderAll();
       netRelaySetup();
     });
