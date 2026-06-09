@@ -86,6 +86,13 @@ function _resolveAttackModalBoth(room) {
     const M = room.state.attackModal;
     let to = null;
     switch (M.step) {
+      case 'select': {
+        // Multi-shot attack: fire the next unresolved shot (attacker picks the order).
+        const next = M.shots.findIndex((_, i) => !(M.resolvedShots || []).includes(i));
+        if (next < 0) { to = null; break; }
+        if (!_applyAnySide(room, { type: 'attackSelectShot', shotIdx: next })) return;
+        continue;
+      }
       case 'intro': to = 'hit'; break;
       case 'hit': to = M.hitResult ? 'save' : 'hit'; break;
       case 'save': {

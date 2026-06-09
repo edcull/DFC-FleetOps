@@ -301,13 +301,24 @@ function findBestBombardmentTarget(state, aiSide, ship, scan) {
 // Resolve an attack modal (AI as attacker) by sequencing the correct 'to' transitions.
 // Defensive declarations (shields, brace, contain) are skipped — not cost-effective in
 // Phase A and the defender (human) would normally make these choices themselves.
-function resolveAttackModal(state, rng, applyFn) {
+//
+// The DEFENDER owns the save step, so this yields there: against a human the client drives
+// the save; in AI-vs-AI the server's _resolveAttackModalBoth drives it. The attacker resumes
+// (re-entering this function) once the modal advances past 'save' — see triggerAi.
+export function resolveAttackModal(state, rng, applyFn) {
   let guard = 80;
   while (state.attackModal && guard-- > 0) {
     const M = state.attackModal;
     let to = null;
 
     switch (M.step) {
+      case 'select': {
+        // Multi-shot attack: pick the next unresolved shot to fire (attacker's choice of order).
+        const next = M.shots.findIndex((_, i) => !(M.resolvedShots || []).includes(i));
+        if (next < 0) { to = null; break; }            // nothing left — finish the attack
+        if (!applyFn({ type: 'attackSelectShot', shotIdx: next })) return;
+        continue;                                        // now at 'intro' for that shot
+      }
       case 'intro':
         to = 'hit';
         break;
@@ -316,12 +327,10 @@ function resolveAttackModal(state, rng, applyFn) {
         else to = 'hit';                  // shouldn't happen; retry
         break;
       case 'save': {
-        if (!M.saveResult) { to = 'save'; break; }
-        const sr = M.saveResult;
-        const needBackup = !sr.backupRolled && sr.hitsList &&
-          sr.hitsList.some(h => !h.saved && h.sv != null) && sr.backupVal != null;
-        to = needBackup ? 'rollbackup' : 'apply';
-        break;
+        if (!M.saveResult) { to = 'save'; break; }  // roll the primary saves
+        // Saves are rolled — the DEFENDER decides re-rolls / shields / apply. Yield so the
+        // human (or the AI-vs-AI both-loop) drives it; the attacker resumes afterwards.
+        return;
       }
       case 'crippling': {
         const c = M.crippleQueue && M.crippleQueue[0];

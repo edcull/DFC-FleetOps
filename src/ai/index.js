@@ -5,6 +5,7 @@ import { apply } from '../engine/mutators.js';
 import { deploySideAllowed, undeployedDeployableCount, sideHasPendingActivation } from '../engine/mutators.js';
 import { getPersonality } from './personalities.js';
 import { handleActivation } from './handlers/activation.js';
+import { resolveAttackModal } from './translator.js';
 import { handlePlanning } from './handlers/planning.js';
 import { handleDeploy } from './handlers/deploy.js';
 import { handleDropsite } from './handlers/dropsite.js';
@@ -45,16 +46,17 @@ export function shouldAiAct(state, side) {
   if (state.atmoDamage) return state.atmoDamage.side === side;
 
   // An open attack modal must be resolved before the active side can do anything else
-  // (finishActivation is now gated on it). The defender drives the save step; the
-  // attacker's own steps are already resolved inside buildActivation, so the attacker
-  // must wait here rather than spin trying to finish a still-open activation.
+  // (finishActivation is now gated on it). The defender drives the save step; every other
+  // open step is attacker-driven — the attacker (AI) must RESUME and finish the attack after
+  // a defender's save interrupted it (in solo the human drives the save, then the AI attacker
+  // has to close the modal, or the game stalls on "ATTACK RESOLVED" waiting for the AI).
   if (state.attackModal) {
-    if (state.attackModal.step === 'save') {
-      const atkSide = state.attackModal.bomberSide || state.activeSide;
-      const defSide = atkSide === 'player1' ? 'player2' : 'player1';
-      return side === defSide;
-    }
-    return false;
+    const M = state.attackModal;
+    const atkSide = M.bomberSide || state.activeSide
+      || (M.attackerGid && state.groups[M.attackerGid]?.def?.side) || null;
+    const defSide = atkSide === 'player1' ? 'player2' : atkSide === 'player2' ? 'player1' : null;
+    if (M.step === 'save') return side === defSide;
+    return side === atkSide;
   }
 
   if (state.repairPhase) return false; // repair is handled client-side
@@ -146,6 +148,16 @@ export async function triggerAi(room, onRecord = null) {
       }
       return;
     }
+  }
+
+  // Attacker resume: an attack modal left open at an attacker-driven step (e.g. the defender
+  // just drove the save, advancing it to 'done'/'select'/'crippling'…). Finish it so the
+  // activation can complete — otherwise solo games stall on "ATTACK RESOLVED" waiting for the AI.
+  if (state.attackModal && state.attackModal.step !== 'save') {
+    const M = state.attackModal;
+    const atkSide = M.bomberSide || state.activeSide
+      || (M.attackerGid && state.groups[M.attackerGid]?.def?.side) || null;
+    if (aiSide === atkSide) { resolveAttackModal(state, rng, applyFn); return; }
   }
 
   if (state.repairPhase) {
