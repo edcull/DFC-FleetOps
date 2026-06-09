@@ -604,6 +604,20 @@ describe('buildActivation — regroup a broken group instead of charging while o
     expect(Math.hypot(t[0].x - t[1].x, t[0].y - t[1].y)).toBeLessThanOrEqual(3.6 * INCH); // still coherent
   });
 
+  it('an aligned group advancing keeps a COMMON heading (no facing divergence)', () => {
+    const s = makeState(); s.activeSide = 'player1'; s.scenario = { objective: 'standard' }; s.scenarioData = { dropsites: [] };
+    addGroup(s, shipDef({ id: 'player1:fr', side: 'player1', name: 'Frigate', role: 'Frigate', tonnage: 'L', thrust: 12, weapons: [weapon({ arc: 'F', att: 3, lock: '3+' })] }),
+      [shipInstance({ x: 280, y: 200, heading: 90 }), shipInstance({ x: 294, y: 200, heading: 90 }), shipInstance({ x: 308, y: 200, heading: 90 })]);
+    addGroup(s, shipDef({ id: 'player2:e', side: 'player2', tonnage: 'M' }), [shipInstance({ x: 300, y: 520 })]); // far down-field
+    buildActivation(s, fixedRng(3), 'player1:fr', 'GQ', { x: 300, y: 520, reason: 'kill' }, 'player1', ap(s));
+    const sh = s.groups['player1:fr'].ships;
+    const heads = sh.map(x => x.heading);
+    const spread = Math.max(...heads) - Math.min(...heads);
+    expect(spread).toBeLessThanOrEqual(2);   // all ships still face the same way
+    let mg = 0; for (let i = 0; i < 3; i++) for (let j = i + 1; j < 3; j++) mg = Math.max(mg, Math.hypot(sh[i].x - sh[j].x, sh[i].y - sh[j].y));
+    expect(mg).toBeLessThanOrEqual(3.6 * INCH); // and stay coherent
+  });
+
   it('a Corvette with divergent headings uses Course Change so its dive does not scatter', () => {
     const s = makeState(); s.activeSide = 'player1'; s.scenario = { objective: 'standard' }; s.scenarioData = { dropsites: [] };
     addGroup(s, shipDef({ id: 'player1:cv', side: 'player1', name: 'Santiago', role: 'Corvette', tonnage: 'L', thrust: 14, special: 'Descent', weapons: [weapon({ arc: 'F/S/R', att: 3, lock: '3+', special: 'Air to Air' })] }),
