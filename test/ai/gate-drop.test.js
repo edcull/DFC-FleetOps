@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { gateRunnerPlan, gateMotherPlan, generateActivationOptions, corvettePlan, descentDropperPlan } from '../../src/ai/options.js';
+import { gateRunnerPlan, gateMotherPlan, generateActivationOptions, corvettePlan, descentDropperPlan, gateShipTargets } from '../../src/ai/options.js';
 import { handleActivation } from '../../src/ai/handlers/activation.js';
 import { getPersonality } from '../../src/ai/personalities.js';
 import { handlePreGame } from '../../src/ai/handlers/pregame.js';
@@ -57,7 +57,9 @@ describe('gateRunnerPlan — descent to cities', () => {
     expect(plan.toggle).toBe(false);
   });
 
-  it('spreads the Voidgate GROUPS across DIFFERENT dropsites (network secures several objectives)', () => {
+  it('spreads the Voidgate PRONGS across DIFFERENT dropsites (network secures several objectives)', () => {
+    // Voidgates ignore coherency, so each individual gate SHIP (prong) is steered to its own
+    // distinct dropsite. Three single-prong groups + three sites → every site gets covered.
     const s = makeState(); s.activeSide = 'player2'; s.scenario = { objective: 'standard' };
     s.deployZone = { player1: 'north', player2: 'south' };
     s.scenarioData = { dropsites: [
@@ -67,11 +69,22 @@ describe('gateRunnerPlan — descent to cities', () => {
     ] };
     for (let i = 0; i < 3; i++) {
       const def = shipDef({ id: 'player2:vg' + i, side: 'player2', name: 'Voidgate', tonnage: 'L', thrust: 12, openNetwork: true, gateship: 2, weapons: [], special: 'Descent, Gateship-2, Open Net' });
-      addGroup(s, def, [shipInstance({ x: 280 + i * 30, y: 500, heading: -90, layer: 'orbit' }), shipInstance({ x: 292 + i * 30, y: 500, heading: -90, layer: 'orbit' }), shipInstance({ x: 304 + i * 30, y: 500, heading: -90, layer: 'orbit' })]);
+      addGroup(s, def, [shipInstance({ x: 280 + i * 30, y: 500, heading: -90, layer: 'orbit' })]);
     }
-    const dsAt = (p) => s.scenarioData.dropsites.map(d => ({ id: d.id, dist: Math.hypot(d.x * INCH - p.x, d.y * INCH - p.y) })).sort((a, b) => a.dist - b.dist)[0].id;
-    const picks = [0, 1, 2].map(i => dsAt(gateRunnerPlan(s, 'player2:vg' + i, 'player2')));
-    expect(new Set(picks).size).toBe(3); // three prongs → three different dropsites
+    const dsAt = (px, py) => s.scenarioData.dropsites.map(d => ({ id: d.id, dist: Math.hypot(d.x * INCH - px, d.y * INCH - py) })).sort((a, b) => a.dist - b.dist)[0].id;
+    // Collect every prong's assigned dropsite across all gate groups.
+    const picks = [];
+    for (let i = 0; i < 3; i++) for (const t of gateShipTargets(s, 'player2:vg' + i, 'player2')) picks.push(dsAt(t.x, t.y));
+    expect(new Set(picks).size).toBe(3); // the network covers all three objectives
+
+    // And a SINGLE group whose three prongs spread across the three sites (coherency-exempt).
+    const s2 = makeState(); s2.activeSide = 'player2';
+    s2.deployZone = { player1: 'north', player2: 'south' };
+    s2.scenarioData = structuredClone(s.scenarioData);
+    const def2 = shipDef({ id: 'player2:multi', side: 'player2', name: 'Voidgate', tonnage: 'L', thrust: 12, openNetwork: true, gateship: 2, weapons: [], special: 'Open Net' });
+    addGroup(s2, def2, [shipInstance({ x: 280, y: 500, heading: -90, layer: 'orbit' }), shipInstance({ x: 292, y: 500, heading: -90, layer: 'orbit' }), shipInstance({ x: 304, y: 500, heading: -90, layer: 'orbit' })]);
+    const picks2 = gateShipTargets(s2, 'player2:multi', 'player2').map(t => dsAt(t.x, t.y));
+    expect(new Set(picks2).size).toBe(3); // one group, three prongs, three distinct dropsites
   });
 });
 

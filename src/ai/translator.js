@@ -4,7 +4,7 @@
 import { INCH, ORDERS } from '../engine/constants.js';
 import { moveCone, dsEnemyBattalions, dsBattalions, connectedGateships, coherencyInches, outOfFormationSet, shipInNetwork } from '../engine/mutators.js';
 import { isLegal } from '../engine/gating.js';
-import { bestMoveToward, findBestTarget, baseDiameterPx, gateRunnerPlan, gateMotherPlan, corvettePlan, descentDropperPlan, detectorPlan } from './options.js';
+import { bestMoveToward, findBestTarget, baseDiameterPx, gateRunnerPlan, gateMotherPlan, corvettePlan, descentDropperPlan, detectorPlan, gateShipTargets } from './options.js';
 
 // Ground-launch aura ranges + target constraints (mirrors the client's LAUNCH_TYPES /
 // tryGroundLaunch). Launch range isn't gated, so the AI must check it itself or it
@@ -521,10 +521,21 @@ export function buildActivation(state, rng, gid, order, movePlan, aiSide, applyF
   // order, not the group order — effectiveOrder() returns ship.order for in-network ships. The
   // group applyOrder above leaves ship.order null, which zeroes their move cone (they freeze in
   // place from round 2 on). Set each in-network gate's own order so it can actually move.
+  // Voidgates ignore coherency, so each prong is steered to its OWN distinct dropsite. Compute the
+  // per-ship targets once and reuse them for both per-ship orders and per-ship moves below.
+  const gateSpread = def?.openNetwork && (def.gateship || 0) > 0;
+  const gateTargets = gateSpread ? gateShipTargets(state, gid, aiSide) : [];
+  const gateBySi = new Map(gateTargets.map(t => [t.si, t]));
+  const gateThrustPx = (def?.thrust || 12) * INCH;
+
   if (def?.openNetwork) {
     grp.ships.forEach((s, si) => {
       if (!s.destroyed && !s.offTable && shipInNetwork(state, def, s)) {
-        applyFn({ type: 'applyShipOrder', gid, si, order });
+        // Give each established gate its OWN order so a parked prong holds (Course Change, min move 0)
+        // while prongs still approaching their own dropsite advance (General Quarters, full Thrust).
+        const t = gateBySi.get(si);
+        const sOrder = t ? (Math.hypot(t.x - s.x, t.y - s.y) <= 0.5 * gateThrustPx + 1 ? 'CC' : 'GQ') : order;
+        applyFn({ type: 'applyShipOrder', gid, si, order: sOrder });
       }
     });
   }
@@ -537,7 +548,18 @@ export function buildActivation(state, rng, gid, order, movePlan, aiSide, applyF
   const movers = grp.ships
     .map((s, si) => ({ s, si }))
     .filter(o => !o.s.destroyed && !o.s.offTable && !o.s.movedThisRound);
-  if (tx !== null && movers.length) {
+  if (gateSpread && movers.length && gateTargets.length) {
+    // Spread each prong to its own assigned dropsite, descending onto a city (Atmosphere) only on
+    // the move that can actually reach it so it isn't stranded crawling at the 2"/turn Atmo cap.
+    for (const { s, si } of movers) {
+      const t = gateBySi.get(si);
+      if (!t) continue;
+      const inOrbit = (s.layer || 'orbit') === 'orbit';
+      const dist = Math.hypot(t.x - s.x, t.y - s.y);
+      const descend = t.atmosphere && inOrbit && dist <= gateThrustPx + 1;
+      moveShipToward(state, rng, gid, si, t.x, t.y, applyFn, descend);
+    }
+  } else if (tx !== null && movers.length) {
     moveGroupCoherent(state, rng, gid, movers, tx, ty, applyFn, movePlan?.toggle ?? false);
   }
 

@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { handleAsset } from '../../src/ai/handlers/asset.js';
+import { shouldAiAct } from '../../src/ai/index.js';
 import { makeState, shipDef, shipInstance, addGroup } from '../engine/helpers.js';
 
 // Build an asset-phase state with one player1 bomber stage active and a player2 target.
@@ -44,5 +45,21 @@ describe('handleAsset — never stalls the asset phase', () => {
     const applyFn = (i) => { intents.push(i.type); return true; };
     handleAsset(s, 'player1', null, applyFn);
     expect(intents).toContain('assetPhaseDone');
+  });
+
+  it('does NOT re-force assetStageDone while a bomber attack is pending (would spin forever)', () => {
+    // After a bomber stage auto-locks a target, the engine flags _pendingBomberResolve; the attack
+    // is resolved by an external driver (client modal / _resolvePendingBomberBoth), not the handler.
+    const s = bomberStage();
+    s.assetPhase.assetType = 'bomber';
+    s.assetPhase._pendingBomberResolve = { side: 'player1', type: 'bomber' };
+    const intents = [];
+    const applyFn = (i) => { intents.push(i.type); return true; };
+    handleAsset(s, 'player1', null, applyFn);
+    expect(intents).toEqual([]); // handler yields — no assetStageDone, no assetMove
+
+    // shouldAiAct must also yield so the solo AI loop doesn't busy-spin re-creating the resolve.
+    s.phase = 'play';
+    expect(shouldAiAct(s, 'player1')).toBe(false);
   });
 });
