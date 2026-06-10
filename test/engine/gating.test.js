@@ -1987,13 +1987,50 @@ describe('isLegal — extractRecon (happy path)', () => {
   it('legal for a transport ship within 6" of a dropsite with reconOps', () => {
     expect(isLegal(reconState(), { type: 'extractRecon', gid: 'player1:trans', si: 0, dsId: 'ds1' }, 'player1')).toBe(true);
   });
-  it('surveySite uses the same gate — also legal', () => {
-    expect(isLegal(reconState(), { type: 'surveySite', gid: 'player1:trans', si: 0, dsId: 'ds1' }, 'player1')).toBe(true);
+  it('surveySite requires a capital ship — illegal for a non-capital transport', () => {
+    expect(isLegal(reconState(), { type: 'surveySite', gid: 'player1:trans', si: 0, dsId: 'ds1' }, 'player1')).toBe(false);
   });
   it('illegal for a ship with no transport capacity', () => {
     const s = reconState();
     s.activeFleets.player1[0].launch = []; // no lander slots
     expect(isLegal(s, { type: 'extractRecon', gid: 'player1:trans', si: 0, dsId: 'ds1' }, 'player1')).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// surveySite — happy path
+// ---------------------------------------------------------------------------
+
+describe('isLegal — surveySite', () => {
+  function surveyState() {
+    const s = makeState();
+    s.phase = 'play';
+    s.activeSide = 'player1';
+    const def = shipDef({ id: 'player1:cap', side: 'player1', tonnage: 'H' });
+    addGroup(s, def, [shipInstance({ x: 120, y: 120 })]);
+    s.scenarioData = {
+      dropsites: [{ id: 'ds1', x: 10, y: 10, damage: 0, destroyed: false }],
+    };
+    return s;
+  }
+  it('legal for a capital ship within 6" of an unsurveyed dropsite', () => {
+    expect(isLegal(surveyState(), { type: 'surveySite', gid: 'player1:cap', si: 0, dsId: 'ds1' }, 'player1')).toBe(true);
+  });
+  it('illegal when dropsite already surveyed by this side', () => {
+    const s = surveyState();
+    s.scenarioData.dropsites[0].surveyedBy = ['player1'];
+    expect(isLegal(s, { type: 'surveySite', gid: 'player1:cap', si: 0, dsId: 'ds1' }, 'player1')).toBe(false);
+  });
+  it('illegal for a non-capital ship (tonnage L)', () => {
+    const s = surveyState();
+    const def2 = shipDef({ id: 'player1:light', side: 'player1', tonnage: 'L' });
+    addGroup(s, def2, [shipInstance({ x: 120, y: 120 })]);
+    expect(isLegal(s, { type: 'surveySite', gid: 'player1:light', si: 0, dsId: 'ds1' }, 'player1')).toBe(false);
+  });
+  it('illegal when ship has already fired this activation', () => {
+    const s = surveyState();
+    s.groups['player1:cap'].ships[0].firedThisActivation = true;
+    expect(isLegal(s, { type: 'surveySite', gid: 'player1:cap', si: 0, dsId: 'ds1' }, 'player1')).toBe(false);
   });
 });
 
