@@ -528,7 +528,7 @@ export function computeFocalPointsScoring(state) {
 export function runScoring(state, rng, round) {
   const log = [];
   state.lastScoring = null; // set below for the R4/R6 standard-scoring modal
-  if ((round === 4 || round === 6) && !state.scoredRounds.includes(round) && !objAny(state, 'demolish') && !objAny(state, 'focal_points')) {
+  if ((round === 4 || round === 6) && !state.scoredRounds.includes(round) && !objAny(state, 'demolish') && !objAny(state, 'focal_points') && !objAny(state, 'extract')) {
     state.scoredRounds.push(round);
     const std = computeStandardScoring(state);
     const l1 = awardVP(state, 'player1', std.player1, `Standard Scoring R${round}`, round);
