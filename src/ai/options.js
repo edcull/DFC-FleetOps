@@ -992,7 +992,7 @@ export function generateActivationOptions(state, aiSide) {
       && dropsiteController(d) !== aiSide
       && (dsEnemyBattalions(d, aiSide) - dsSideBattalions(d, aiSide)) < 5);
     let orderPool = validOrders;
-    if ((dropper || gateMother) && isDropMission(state) && securableDs) {
+    if ((dropper || gateMother || defIsVoidgate(grp.def)) && isDropMission(state) && securableDs) {
       const dropOrders = validOrders.filter(o => o === 'GQ' || o === 'CC');
       if (dropOrders.length) orderPool = dropOrders;
     }

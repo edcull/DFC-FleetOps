@@ -16537,6 +16537,23 @@ board.addEventListener('click', (e) => {
     }
     if (el.dataset && el.dataset.dropsite) {
       const did = el.dataset.dropsite;
+      // SURVEY: if in survey-targeting mode, survey this Dropsite (capital ship within 6").
+      if (state.surveying) {
+        const svGrp = state.groups[state.surveying.gid];
+        const svShip = svGrp && svGrp.ships[state.surveying.si];
+        const svDef = getDef(state.surveying.gid);
+        const svDs = state.scenarioData.dropsites.find(d => d.id === did);
+        if (svShip && svDs) {
+          if (svDs.destroyed) { flashLaunchMsg('That Dropsite is destroyed'); return; }
+          if (svDs.surveyedBy && svDs.surveyedBy.includes(svDef.side)) { flashLaunchMsg('Already surveyed this dropsite'); return; }
+          if (Math.hypot(svShip.x - inchToPx(svDs.x), svShip.y - inchToPx(svDs.y)) > 6 * INCH) { flashLaunchMsg('Dropsite out of range (6")'); return; }
+          const { gid: svGid, si: svSi } = state.surveying;
+          state.surveying = null;
+          dispatch({ type: 'surveySite', gid: svGid, si: svSi, dsId: did });
+          renderAll(); return;
+        }
+        state.surveying = null;
+      }
       // EXTRACT: if this ship is in extract-targeting mode, take Recon Operatives aboard
       // from this Dropsite (within 6", up to the ship's transport value).
       if (state.extracting) {
