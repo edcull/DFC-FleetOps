@@ -3610,21 +3610,20 @@ function renderDetail() {
   {
     const surveyActive = objectiveForSide(def.side) === 'survey' || (state.secondaries && state.secondaries[def.side] && state.secondaries[def.side].includes('gather_intel'));
     const selShip = state.selectedShipIdx !== null ? grp.ships[state.selectedShipIdx] : null;
-    if (surveyActive && selShip && !selShip.destroyed && !selShip.offTable && isCapital(def) && state.phase === 'play' && !isOpponent) {
-      const near = surveyableDropsite(selShip, def.side);
-      if (near) {
-        const surveyMoveOk = selShip.movedThisRound || !(ORDERS[effectiveOrder(def, grp, state.selectedShipIdx)] || {}).moveMax;
-        const surveyFiredLocked = !!(selShip.firedThisActivation || selShip.detectorUsed || (selShip.launchedThisRound > 0));
-        const surveyOk = surveyMoveOk && !surveyFiredLocked;
-        let surveyHint = 'Forgoes attacking/launching this round.';
-        if (!surveyMoveOk) surveyHint = 'Move first.';
-        else if (surveyFiredLocked) surveyHint = 'Already fired, detected, or launched this activation.';
-        surveyHTML = `<div class="panel-section">
-          <div class="panel-title">Survey</div>
-          <button class="btn-finish-act" ${surveyOk ? `data-survey="${state.selectedGroupId}|${state.selectedShipIdx}|${near.id}" style="background:linear-gradient(180deg,#3a7a8a 0%,#2a5a68 100%);border-color:#4a8a9a;color:#fff;"` : 'disabled style="opacity:0.5;"'}>⌖ SURVEY ${near.base.name}</button>
-          <div class="weapon-special" style="color:var(--text-mute)">${surveyHint}</div>
-        </div>`;
-      }
+    if (surveyActive && selShip && !selShip.destroyed && !selShip.offTable && isCapital(def) && state.phase === 'play' && !isOpponent && activeGroupIdForSide(def.side) === def.id) {
+      const isSurveying = state.surveying && state.surveying.gid === state.selectedGroupId && state.surveying.si === state.selectedShipIdx;
+      const acted = selShip.firedThisActivation || (selShip.launchedThisRound > 0);
+      const moveOk = selShip.movedThisRound || !(ORDERS[effectiveOrder(def, grp, state.selectedShipIdx)] || {}).moveMax;
+      const canSurvey = !acted && moveOk;
+      surveyHTML = `<div class="panel-section">
+        <div class="panel-title">Survey</div>
+        <div class="weapon-row" ${canSurvey ? `data-survey-start="${state.selectedGroupId}|${state.selectedShipIdx}" style="cursor:pointer;${isSurveying ? 'border-left:3px solid #3a9aaa;background:rgba(58,154,170,0.08);' : ''}"` : 'style="opacity:0.5;"'}>
+          <div class="weapon-name">⌖ Survey Dropsite</div>
+          <div class="weapon-stats">Capital Ship · 6" range · forgoes attacking/launching</div>
+          ${canSurvey ? `<div class="weapon-special" style="color:var(--text-mute)">${isSurveying ? 'Click a Dropsite within 6" · right-click cancels' : 'Click, then target a Dropsite within 6".'}</div>`
+            : `<div class="weapon-special" style="color:var(--text-mute)">${acted ? 'Ship has already acted this activation.' : 'Move first.'}</div>`}
+        </div>
+      </div>`;
     }
   }
 
@@ -4526,6 +4525,17 @@ function renderBoard() {
       const rPx = 6 * INCH;
       html += `<circle cx="${es.x}" cy="${es.y}" r="${rPx}" fill="rgba(181,154,214,0.06)" stroke="#b59ad6" stroke-width="1" stroke-dasharray="5 3"/>
         <text x="${es.x}" y="${es.y - rPx - 4}" font-family="var(--mono)" font-size="8" font-weight="700" fill="#b59ad6" text-anchor="middle" stroke="var(--bg)" stroke-width="2" paint-order="stroke" pointer-events="none">EXTRACT 6"</text>`;
+    }
+  }
+
+  // Survey range aura: ship in survey-targeting mode shows its 6" reach.
+  if (state.surveying) {
+    const svg = state.groups[state.surveying.gid];
+    const svsShip = svg && svg.ships[state.surveying.si];
+    if (svsShip && !svsShip.destroyed && !svsShip.offTable) {
+      const rPx = 6 * INCH;
+      html += `<circle cx="${svsShip.x}" cy="${svsShip.y}" r="${rPx}" fill="rgba(58,154,170,0.06)" stroke="#3a9aaa" stroke-width="1" stroke-dasharray="5 3"/>
+        <text x="${svsShip.x}" y="${svsShip.y - rPx - 4}" font-family="var(--mono)" font-size="8" font-weight="700" fill="#3a9aaa" text-anchor="middle" stroke="var(--bg)" stroke-width="2" paint-order="stroke" pointer-events="none">SURVEY 6"</text>`;
     }
   }
 
@@ -8152,13 +8162,103 @@ function _repName(R, side) {
   const slot = side === 'player1' ? 'f1' : 'f2';
   return (R.playerNames && R.playerNames[slot]) || (side === 'player1' ? 'Player 1' : 'Player 2');
 }
+function _repObjectives(R, p1, p2) {
+  const sides = ['player1', 'player2'];
+  const names = { player1: p1, player2: p2 };
+  const sc = R.score || { player1: { vp: 0, kp: 0 }, player2: { vp: 0, kp: 0 } };
+  const cols = { player1: 'var(--ucm)', player2: 'var(--shal)' };
+  const _dropsiteController = (ds) => {
+    const p1c = Object.values(ds.battalions || {}).reduce((s, loc) => s + (typeof loc === 'object' ? (loc.player1 || 0) : 0), 0);
+    const p2c = Object.values(ds.battalions || {}).reduce((s, loc) => s + (typeof loc === 'object' ? (loc.player2 || 0) : 0), 0);
+    if (p1c > 0 && p2c === 0) return 'player1';
+    if (p2c > 0 && p1c === 0) return 'player2';
+    return null;
+  };
+  let html = '';
+
+  sides.forEach(side => {
+    const col = cols[side];
+    const obj = (R.scenario && R.scenario.objective) || 'standard';
+    const chosen = (R.secondaries && R.secondaries[side]) || [];
+    const noms = (R.secondaryNominations && R.secondaryNominations[side]) || {};
+    const dropsites = (R.scenarioData && R.scenarioData.dropsites) || [];
+    const admiralKilled = R.admiralKilled || {};
+    const enemy = side === 'player1' ? 'player2' : 'player1';
+
+    let rows = '';
+
+    if (obj === 'survey') {
+      const surveyed = dropsites.filter(ds => ds.surveyedBy && ds.surveyedBy.includes(side));
+      const vp = surveyed.length;
+      rows += `<div class="rep-act-line" style="color:${col};">⌖ Survey · ${vp} VP — surveyed: ${surveyed.length ? surveyed.map(ds => _repEsc(ds.base && ds.base.name || ds.id)).join(', ') : 'none'}</div>`;
+    } else if (obj === 'extract') {
+      const reconOps = R.shipReconOps || {};
+      const total = Object.entries(reconOps).reduce((s, [k, v]) => {
+        const gid = k.split('#')[0];
+        const g = R.groups && R.groups[gid];
+        if (g && g.def && g.def.side === side) return s + v;
+        return s;
+      }, 0);
+      const kills = (R.reconKills && R.reconKills[side]) || 0;
+      rows += `<div class="rep-act-line" style="color:${col};">⬆ Extract · ${total * 2 + kills} VP — ${total} Operative${total !== 1 ? 's' : ''} aboard · ${kills} carrier kill${kills !== 1 ? 's' : ''}</div>`;
+    }
+
+    chosen.forEach(key => {
+      let line = '';
+      if (key === 'gather_intel') {
+        const surveyed = dropsites.filter(ds => ds.surveyedBy && ds.surveyedBy.includes(side));
+        const vp = Math.min(2, surveyed.length);
+        line = `⌖ Gather Intel · ${vp}/2 VP — surveyed: ${surveyed.length ? surveyed.map(ds => _repEsc(ds.base && ds.base.name || ds.id)).join(', ') : 'none'}`;
+      } else if (key === 'annihilate') {
+        const kp = sc[side].kp || 0;
+        const vp = Math.min(3, Math.floor(kp / 500));
+        line = `💀 Annihilate · ${vp}/3 VP — ${kp} KP destroyed`;
+      } else if (key === 'take_prizes') {
+        const cap = (R.captured && R.captured[side]) || 0;
+        const vp = Math.min(3, Math.floor(cap / 100));
+        line = `🏴 Take Prizes · ${vp}/3 VP — ${cap} pts captured`;
+      } else if (key === 'decapitate') {
+        const killed = !!(admiralKilled[enemy]);
+        const vp = killed ? 2 : 0;
+        line = `🎯 Decapitate · ${vp}/2 VP — enemy admiral ${killed ? 'killed ✓' : 'alive'}`;
+      } else if (key === 'key_site') {
+        const nom = noms[key];
+        const ds = nom && dropsites.find(d => d.id === nom.dsId);
+        const ctrl = ds && _dropsiteController(ds);
+        const vp = ctrl === side ? (nom.double ? 3 : 2) : 0;
+        line = `📍 Key Site · ${vp} VP — ${ds ? _repEsc(ds.base && ds.base.name || ds.id) : 'not nominated'} ${ctrl === side ? '(controlled ✓)' : ctrl ? '(enemy-held)' : '(uncontrolled)'}`;
+      } else if (key === 'priority_target') {
+        const nom = noms[key];
+        const ds = nom && dropsites.find(d => d.id === nom.dsId);
+        const levelled = ds && ds.levelled;
+        const vp = levelled ? (nom.double ? 3 : 2) : 0;
+        line = `💥 Priority Target · ${vp} VP — ${ds ? _repEsc(ds.base && ds.base.name || ds.id) : 'not nominated'} ${levelled ? '(levelled ✓)' : '(standing)'}`;
+      } else if (key === 'long_shot') {
+        const nom = noms[key];
+        line = `🎲 Long Shot — ${nom ? _repEsc(nom.label || 'nominated') : 'not nominated'} (adjudicate manually)`;
+      } else if (key === 'objectives_beyond') {
+        const nom = noms[key];
+        line = `🚀 Objectives Beyond — ${nom ? _repEsc(nom.shipId || 'nominated') : 'not nominated'} (adjudicate manually)`;
+      }
+      if (line) rows += `<div class="rep-act-line">${line}</div>`;
+    });
+
+    if (!rows) rows = '<div class="rep-act-line detail">(no scoreable secondaries)</div>';
+
+    html += `<div class="rep-act">
+      <div class="rep-act-hdr" style="color:${col};">${names[side]} · VP ${sc[side].vp} · KP ${sc[side].kp}</div>
+      ${rows}
+    </div>`;
+  });
+  return html;
+}
 function openGameReport(R) {
   if (!R) return;
   const log = (R.eventLog || []).filter(e => e && e.cat !== 'misc');
   const maxRound = Math.max(1, R.round || 1, ...((R.eventLog || []).map(e => e.round || 1)));
   const rounds = [];
   for (let r = 1; r <= maxRound; r++) rounds.push(r);
-  if (!rounds.includes(_reportRound)) _reportRound = rounds[0] || 1;
+  if (_reportRound !== 'dice' && _reportRound !== 'objectives' && !rounds.includes(_reportRound)) _reportRound = rounds[0] || 1;
 
   const old = document.getElementById('report-overlay');
   if (old) old.remove();
@@ -8174,6 +8274,7 @@ function openGameReport(R) {
   const resultCol = (G && G.winner !== 'draw') ? `var(--${sideCssKey(G.winner)})` : 'var(--text)';
 
   const renderBody = () => {
+    if (_reportRound === 'objectives') return _repObjectives(R, p1, p2);
     if (_reportRound === 'dice') return _repDiceHtml(R, p1, p2);
     // Per-activation trace: each group's activation (order · move) with its attacks and
     // launches; attack lines expand to show the to-hit and save rolls (one open at a time).
@@ -8213,6 +8314,7 @@ function openGameReport(R) {
       <div class="rep-tabs" id="rep-tabs">
         ${rounds.map(r => `<button class="rep-tab${r === _reportRound ? ' active' : ''}" data-rep-round="${r}">ROUND ${r}</button>`).join('')}
         ${(R.diceStats ? `<button class="rep-tab${_reportRound === 'dice' ? ' active' : ''}" data-rep-round="dice">🎲 DICE</button>` : '')}
+        <button class="rep-tab${_reportRound === 'objectives' ? ' active' : ''}" data-rep-round="objectives">⭑ OBJECTIVES</button>
       </div>
       <div class="rep-body" id="rep-body">${renderBody()}</div>
     </div>`;
@@ -8230,7 +8332,7 @@ function openGameReport(R) {
   overlay.addEventListener('click', e => { if (e.target === overlay) close(); });
   overlay.querySelectorAll('[data-rep-round]').forEach(btn => {
     btn.addEventListener('click', () => {
-      _reportRound = btn.dataset.repRound === 'dice' ? 'dice' : parseInt(btn.dataset.repRound, 10);
+      _reportRound = btn.dataset.repRound === 'dice' ? 'dice' : btn.dataset.repRound === 'objectives' ? 'objectives' : parseInt(btn.dataset.repRound, 10);
       overlay.querySelectorAll('.rep-tab').forEach(t => t.classList.toggle('active', t === btn));
       overlay.querySelector('#rep-body').innerHTML = renderBody();
       wireExpanders();
@@ -9706,7 +9808,7 @@ let _actHudGid = null;          // group the HUD last rendered for
 let _actHudPrevAiming = false;  // previous "tap a target" state, to detect transitions
 // "Tap a target" cursors — entering one collapses the HUD; leaving it expands again.
 function _actHudAiming() {
-  return !!(state.targeting || state.detector || state.extracting || state.antiWing || state.featureAttack);
+  return !!(state.targeting || state.detector || state.extracting || state.surveying || state.antiWing || state.featureAttack);
 }
 function _wireActHudCollapse(hud, gid) {
   if (!_isMobileLayout()) return;
@@ -11060,6 +11162,7 @@ function _handle3dClick(e) {
       state.layerToggle = false;
       state.launching = null;
       state.extracting = null;
+      state.surveying = null;
       renderAll(true);
       netSendPeerView();
     }
@@ -11183,6 +11286,24 @@ function _handle3dClick(e) {
       return;
     }
     // Non-point dropsite launches (gate-dropship etc.) fall through to panel UI.
+  }
+
+  // Survey — click a dropsite within 6" of the surveying ship.
+  if (state.surveying) {
+    const _svSnap = _3dNearestDropsite(e, 4 * INCH);
+    const _svGrp = state.groups[state.surveying.gid];
+    const _svShip = _svGrp && _svGrp.ships[state.surveying.si];
+    const _svDef = getDef(state.surveying.gid);
+    if (!_svShip) { state.surveying = null; return; }
+    if (!_svSnap) { state.surveying = null; renderAll(true); return; }
+    const _svDs = _svSnap.ds;
+    if (_svDs.destroyed) { flashLaunchMsg('That Dropsite is destroyed'); return; }
+    if (_svDs.surveyedBy && _svDs.surveyedBy.includes(_svDef.side)) { flashLaunchMsg('Already surveyed this dropsite'); return; }
+    if (Math.hypot(_svShip.x - inchToPx(_svDs.x), _svShip.y - inchToPx(_svDs.y)) > 6 * INCH) { flashLaunchMsg('Dropsite out of range (6")'); return; }
+    const { gid: _svGid, si: _svSi } = state.surveying;
+    state.surveying = null;
+    dispatch({ type: 'surveySite', gid: _svGid, si: _svSi, dsId: _svDs.id });
+    return;
   }
 
   // Extract Recon Operatives — click a dropsite within 6" of the extracting ship.
@@ -11474,6 +11595,7 @@ function _handle3dClick(e) {
     state.layerToggle = false;
     state.launching = null;
     state.extracting = null;
+    state.surveying = null;
     if (state.phase === 'deploy') {
       const rdShip = hit.grp.ships[hit.si];
       state.redeployingShip = (rdShip && !rdShip.offTable && deploySideAllowed(hit.def.side))
@@ -11895,6 +12017,7 @@ function init3d() {
     }
     if (_pendingAssetTarget) { _pendingAssetTarget = null; renderAll(true); return; }
     if (state.assetMove) { dispatch({ type: 'selectAssetMove' }); return; }
+    if (state.surveying) { state.surveying = null; flashLaunchMsg('Survey cancelled'); renderAll(); return; }
     if (state.extracting) { state.extracting = null; flashLaunchMsg('Extract cancelled'); renderAll(); return; }
     if (state.featureAttack) { state.featureAttack = null; flashLaunchMsg('Targeting cancelled'); renderAll(true); return; }
     if (state.targeting) { state.targeting = null; flashLaunchMsg('Targeting cancelled'); renderAll(true); return; }
@@ -14800,15 +14923,6 @@ document.addEventListener('click', (e) => {
     dispatch({ type: 'explosiveDetonation', gid, si: parseInt(si) });
     return;
   }
-  if (e.target.matches('[data-survey]') || (e.target.closest && e.target.closest('[data-survey]'))) {
-    const btn = e.target.matches('[data-survey]') ? e.target : e.target.closest('[data-survey]');
-    const [gid, si, dsId] = btn.dataset.survey.split('|');
-    const def = getDef(gid);
-    const ds = state.scenarioData && state.scenarioData.dropsites.find(d => d.id === dsId);
-    if (ds) flashLaunchMsg(`${def.name} surveyed ${ds.base ? ds.base.name : dsId}`, true);
-    dispatch({ type: 'surveySite', gid, si: parseInt(si), dsId });
-    renderAll(); return;
-  }
   if (e.target.matches('[data-assess]') || (e.target.closest && e.target.closest('[data-assess]'))) {
     const btn = e.target.matches('[data-assess]') ? e.target : e.target.closest('[data-assess]');
     const [gid, si, dsId] = btn.dataset.assess.split('|');
@@ -14817,6 +14931,17 @@ document.addEventListener('click', (e) => {
     if (ds) flashLaunchMsg(`${def.name} assessed ${ds.base ? ds.base.name : dsId}`, true);
     dispatch({ type: 'assessDropsite', gid, si: parseInt(si), dsId });
     renderAll(); return;
+  }
+  if (e.target.closest && e.target.closest('[data-survey-start]')) {
+    const [gid, si] = e.target.closest('[data-survey-start]').dataset.surveyStart.split('|');
+    if (state.surveying && state.surveying.gid === gid && state.surveying.si === parseInt(si)) {
+      state.surveying = null;
+    } else {
+      state.surveying = { gid, si: parseInt(si) };
+      state.launching = null; state.targeting = null; state.extracting = null;
+      flashLaunchMsg('Click a Dropsite within 6" to survey it', true);
+    }
+    renderAll(true); return;
   }
   if (e.target.closest && e.target.closest('[data-extract-start]')) {
     const [gid, si] = e.target.closest('[data-extract-start]').dataset.extractStart.split('|');
@@ -14841,7 +14966,7 @@ document.addEventListener('click', (e) => {
           && state.launching.type === type && state.launching.li === li) {
         dispatch({ type: 'cancelLaunch', gid, si: sIdx, clearGateSel: false });
       } else {
-        state.targeting = null; state.extracting = null;
+        state.targeting = null; state.extracting = null; state.surveying = null;
         dispatch({ type: 'beginLaunch', gid, si: sIdx, li, launchType: type });
       }
       return; // dispatch calls renderAll in hotseat; online re-renders on server broadcast
@@ -15681,6 +15806,13 @@ board.addEventListener('contextmenu', (e) => {
   }
   if (_pendingAssetTarget) { e.preventDefault(); _pendingAssetTarget = null; renderAll(true); return; }
   if (state.assetMove) { e.preventDefault(); dispatch({ type: 'selectAssetMove' }); return; }
+  if (state.surveying) {
+    e.preventDefault();
+    state.surveying = null;
+    flashLaunchMsg('Survey cancelled');
+    renderAll();
+    return;
+  }
   if (state.extracting) {
     e.preventDefault();
     state.extracting = null;
@@ -15965,6 +16097,7 @@ board.addEventListener('click', (e) => {
         state.layerToggle = false;
         state.launching = null;
         state.extracting = null;
+        state.surveying = null;
         renderAll(true);
         netSendPeerView();
         return;
@@ -16384,6 +16517,7 @@ board.addEventListener('click', (e) => {
       state.layerToggle = false;
       state.launching = null;
       state.extracting = null;
+      state.surveying = null;
       // Deploy phase: clicking an already-placed ship marks it for repositioning.
       if (state.phase === 'deploy') {
         const _rdDef = getDef(gid);
@@ -17086,7 +17220,7 @@ function netAfterRender() {
   if (_netWs.readyState !== WebSocket.OPEN) return;
   // Strip ephemeral pointer state before sending — hoverPoint changes every
   // mousemove and must not trigger a flood of state broadcasts.
-  const { hoverPoint: _hp, selectedGroupId: _sg, selectedShipIdx: _ss, selectedDropsiteId: _sd, layerToggle: _lt, peerView: _pv, targeting: _tgt, antiWing: _aw, detector: _det, extracting: _ext, pendingGroundLaunch: _pgl, featureAttack: _fa, launching: _lch, ...stateToSend } = state;
+  const { hoverPoint: _hp, selectedGroupId: _sg, selectedShipIdx: _ss, selectedDropsiteId: _sd, layerToggle: _lt, peerView: _pv, targeting: _tgt, antiWing: _aw, detector: _det, extracting: _ext, surveying: _svg, pendingGroundLaunch: _pgl, featureAttack: _fa, launching: _lch, ...stateToSend } = state;
   // Re-include launching only for ship-based non-gate launches.
   // gate_dropship and fromDropsite are client-only targeting UI — no relay needed.
   if (_lch && !_lch.fromDropsite && _lch.type !== 'gate_dropship') stateToSend.launching = _lch;

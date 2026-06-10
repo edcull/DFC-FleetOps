@@ -528,7 +528,7 @@ export function computeFocalPointsScoring(state) {
 export function runScoring(state, rng, round) {
   const log = [];
   state.lastScoring = null; // set below for the R4/R6 standard-scoring modal
-  if ((round === 4 || round === 6) && !state.scoredRounds.includes(round) && !objAny(state, 'demolish') && !objAny(state, 'focal_points')) {
+  if ((round === 4 || round === 6) && !state.scoredRounds.includes(round) && !objAny(state, 'demolish') && !objAny(state, 'focal_points') && !objAny(state, 'extract')) {
     state.scoredRounds.push(round);
     const std = computeStandardScoring(state);
     const l1 = awardVP(state, 'player1', std.player1, `Standard Scoring R${round}`, round);
@@ -4748,7 +4748,6 @@ export function apply(state, intent, rng) {
       logEvent(state, `${exDef.name} extracted ${exTake} Operative${exTake > 1 ? 's' : ''} from ${exDs.base.name}`);
       return state;
     }
-    case 'surveySite':
     case 'objectivesFlyoff':
     case 'breakthroughFlyoff':
     case 'startBattalionCombat':
@@ -4984,7 +4983,19 @@ export function apply(state, intent, rng) {
       asShip.hasAssessed = true;
       return state;
     }
-    case 'surveySite':
+    case 'surveySite': {
+      const { gid: svGid, si: svSi, dsId: svDsId } = intent;
+      const svGrp = state.groups[svGid];
+      const svDef = getDef(state, svGid);
+      const svShip = svGrp && svGrp.ships[svSi];
+      const svDs = svDsId && state.scenarioData?.dropsites?.find(d => d.id === svDsId);
+      if (!svGrp || !svDef || !svShip || !svDs) return state;
+      svDs.surveyedBy = svDs.surveyedBy || [];
+      if (!svDs.surveyedBy.includes(svDef.side)) svDs.surveyedBy.push(svDef.side);
+      svShip.firedThisActivation = true; // forgo attacking/launching
+      logEvent(state, `${svDef.name} surveyed ${svDs.base?.name || svDsId}`, 'ground');
+      return state;
+    }
     case 'objectivesFlyoff':
     case 'breakthroughFlyoff':
       return state; // client handles these mutations; intent authorises the relay

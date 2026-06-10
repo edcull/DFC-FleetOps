@@ -275,10 +275,12 @@ export function buildStateBriefing(state, aiSide) {
     const lead   = alive[0];
     const id     = aiIds[gid];
     const isDrop = (g.def?.launch || []).some(l => isDropLaunch(l.type)) || g.def?.gateship > 0;
+    const reconAboard = g.ships.reduce((s, sh, si) => s + ((state.shipReconOps || {})[g.def?.id + '#' + si] || 0), 0);
     const dtag   = isDrop ? '[DROP]' : '';
+    const rtag   = reconAboard > 0 ? `[RECON:${reconAboard}]` : '';
     return alive.length
-      ? `${id}:${g.def?.name}${dtag}${co(lead.x, lead.y)}${g.activated ? '✓' : ''}`
-      : `${id}:${g.def?.name}${dtag}(off)`;
+      ? `${id}:${g.def?.name}${dtag}${rtag}${co(lead.x, lead.y)}${g.activated ? '✓' : ''}`
+      : `${id}:${g.def?.name}${dtag}${rtag}(off)`;
   });
   L.push(`  Yours:    ${yourPos.join('  ')}`);
   const humPos = humGroups.map(([gid, g]) => {
@@ -303,7 +305,8 @@ export function buildStateBriefing(state, aiSide) {
       const aiBat   = dsSideBattalions(ds, aiSide);
       const oppBat  = dsSideBattalions(ds, humanSide);
       const layer   = ds.base?.layer === 'Atmosphere' ? 'Atmo' : 'Orbit';
-      L.push(`  ${dsIds[ds.id]} ${ds.base?.name || ds.id} [${layer}] ${ctrlStr} You:${aiBat} Opp:${oppBat} bat`);
+      const reconStr = (ds.reconOps > 0) ? ` ReconOps:${ds.reconOps}` : '';
+      L.push(`  ${dsIds[ds.id]} ${ds.base?.name || ds.id} [${layer}] ${ctrlStr} You:${aiBat} Opp:${oppBat} bat${reconStr}`);
     }
   }
 
@@ -321,7 +324,8 @@ export function buildStateBriefing(state, aiSide) {
       const hpStr  = hp < maxHp ? `${hp}/${maxHp}HP` : `${maxHp}HP`;
       const count  = alive.length > 1 ? ` ×${alive.length}` : '';
       const isDrop = (grp.def?.launch || []).some(l => isDropLaunch(l.type)) || grp.def?.gateship > 0;
-      L.push(`  ${humIds[gid]} ${grp.def?.name}${count} [${grp.def?.tonnage}] ${hpStr}${isDrop ? ' DROP' : ''}`);
+      const reconOpsAboard = grp.ships.reduce((s, sh, si) => s + ((state.shipReconOps || {})[grp.def?.id + '#' + si] || 0), 0);
+      L.push(`  ${humIds[gid]} ${grp.def?.name}${count} [${grp.def?.tonnage}] ${hpStr}${isDrop ? ' DROP' : ''}${reconOpsAboard > 0 ? ` RECON:${reconOpsAboard}` : ''}`);
     }
     if (humOffCount > 0) {
       const offDropCount = humGroups.filter(([, g]) =>

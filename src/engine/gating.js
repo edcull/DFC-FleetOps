@@ -13,7 +13,7 @@
 
 import { ORDERS, INCH, FEATURES } from './constants.js';
 import { getDef, assetThrust } from './state.js';
-import { nextUndeployedShipIdx, activeGroupIdForSide, moveCone, headingVec, weaponCanTarget, firingOriginShip, pointInWeaponArc, targetingRangePx, effectiveScan, dsBattalions, deploySideAllowed, sideNeedsDeployPhase, transportValue, shipInNetwork, isCapital, objectiveForSide, sceneryValid } from './mutators.js';
+import { nextUndeployedShipIdx, activeGroupIdForSide, moveCone, headingVec, weaponCanTarget, firingOriginShip, pointInWeaponArc, targetingRangePx, effectiveScan, dsBattalions, deploySideAllowed, sideNeedsDeployPhase, transportValue, shipInNetwork, isCapital, objectiveForSide, sceneryValid, connectedGateships } from './mutators.js';
 
 const INTENT_TYPES = ['pass', 'endRound', 'commitScenario'];
 
@@ -647,7 +647,23 @@ export function isLegal(state, intent, side) {
         && state.aiming.gid === intent.gid && state.aiming.si === intent.si;
       return (hpOrd === 'CC' || hpOrd === 'DC') && (!hpShip.movedThisRound || inCourseChange);
     }
-    case 'surveySite':
+    case 'surveySite': {
+      if (state.phase !== 'play') return false;
+      const { gid: svGid, si: svSi, dsId: svDsId } = intent;
+      const svGrp = state.groups[svGid];
+      if (!svGrp || svGrp.activated) return false;
+      const svDef = getDef(state, svGid);
+      if (!svDef || svDef.side !== side) return false;
+      if (!isCapital(svDef)) return false;
+      const svShip = svGrp.ships[svSi];
+      if (!svShip || svShip.destroyed || svShip.offTable) return false;
+      if (svShip.firedThisActivation || (svShip.launchedThisRound > 0)) return false;
+      const svDs = state.scenarioData?.dropsites?.find(d => d.id === svDsId);
+      if (!svDs || svDs.destroyed) return false;
+      if (svDs.surveyedBy && svDs.surveyedBy.includes(side)) return false;
+      if (Math.hypot(svShip.x - svDs.x * INCH, svShip.y - svDs.y * INCH) > 6 * INCH) return false;
+      return true;
+    }
     case 'objectivesFlyoff':
     case 'breakthroughFlyoff':
     case 'extractRecon': {
@@ -663,8 +679,13 @@ export function isLegal(state, intent, side) {
       if (transportValue(exDef) <= 0) return false;
       const exDs = state.scenarioData?.dropsites?.find(d => d.id === exDsId);
       if (!exDs || !(exDs.reconOps > 0)) return false;
-      if (Math.hypot(exShip.x - exDs.x * INCH, exShip.y - exDs.y * INCH) > 6 * INCH) return false;
-      return true;
+      const exDist = Math.hypot(exShip.x - exDs.x * INCH, exShip.y - exDs.y * INCH);
+      if (exDist <= 6 * INCH) return true;
+      // Shaltari Motherships extract via a connected Voidgate within 6" of the dropsite.
+      const isGateMother = (exDef.launch || []).some(l => l.type === 'gate_dropship');
+      if (!isGateMother) return false;
+      const reachable = connectedGateships(state, exDef.side, exShip.x, exShip.y);
+      return reachable.some(g => Math.hypot(g.x - exDs.x * INCH, g.y - exDs.y * INCH) <= 6 * INCH);
     }
     case 'assessDropsite': {
       if (state.phase !== 'play') return false;
