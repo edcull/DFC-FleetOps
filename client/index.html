@@ -3665,14 +3665,21 @@ function renderDetail() {
       const k = targetKey(state.selectedGroupId, state.selectedShipIdx);
       const carried = (state.shipReconOps && state.shipReconOps[k]) || 0;
       const isExtracting = state.extracting && state.extracting.gid === state.selectedGroupId && state.extracting.si === state.selectedShipIdx;
+      const isGateMother = (def.launch || []).some(l => l.type === 'gate_dropship');
       const acted = selShip.firedThisActivation || (selShip.launchedThisRound > 0);
       const moveOk = selShip.movedThisRound || !(ORDERS[effectiveOrder(def, grp, state.selectedShipIdx)] || {}).moveMax;
+      let extractHint = isGateMother ? 'Click, then select a connected Voidgate, then click a Dropsite.' : 'Click, then target a Dropsite. 2 VP per Operative at game end.';
+      if (isExtracting) {
+        if (isGateMother && !state.extracting.gateSel) extractHint = 'Click a connected Voidgate to relay through · right-click cancels';
+        else if (isGateMother && state.extracting.gateSel) extractHint = 'Click a Dropsite within 6" of the Voidgate · right-click cancels';
+        else extractHint = 'Click a Dropsite within 6" to extract · right-click cancels';
+      }
       extractHTML = `<div class="panel-section">
         <div class="panel-title">Extract${carried ? ` · <span style="color:#b59ad6">${carried} aboard</span>` : ''}</div>
         <div class="weapon-row" ${(!acted && moveOk) ? `data-extract-start="${state.selectedGroupId}|${state.selectedShipIdx}" style="cursor:pointer;${isExtracting?'border-left:3px solid #b59ad6;background:rgba(181,154,214,0.08);':''}"` : 'style="opacity:0.5;"'}>
           <div class="weapon-name">⬆ Extract Recon Operatives</div>
-          <div class="weapon-stats">Transport value ${tv} · 6" range · ${carried} aboard</div>
-          ${(!acted && moveOk) ? `<div class="weapon-special" style="color:var(--text-mute)">${isExtracting ? 'Click a Dropsite within 6" to extract · right-click cancels' : 'Click, then target a Dropsite. 2 VP per Operative at game end.'}</div>`
+          <div class="weapon-stats">${isGateMother ? 'Via Voidgate network · 6" from gate' : `Transport value ${tv} · 6" range`} · ${carried} aboard</div>
+          ${(!acted && moveOk) ? `<div class="weapon-special" style="color:var(--text-mute)">${extractHint}</div>`
             : `<div class="weapon-special" style="color:var(--text-mute)">${acted ? 'Ship has already acted this activation.' : 'Move first.'}</div>`}
         </div>
       </div>`;
@@ -4518,13 +4525,30 @@ function renderBoard() {
   }
 
   // Extract range aura: ship in extract-targeting mode shows its 6" reach to Dropsites.
+  // For Motherships waiting for voidgate selection, highlight the 18" network radius.
+  // Once a voidgate is selected, show the 6" aura from the voidgate.
   if (state.extracting) {
     const eg = state.groups[state.extracting.gid];
     const es = eg && eg.ships[state.extracting.si];
     if (es && !es.destroyed && !es.offTable) {
       const rPx = 6 * INCH;
-      html += `<circle cx="${es.x}" cy="${es.y}" r="${rPx}" fill="rgba(181,154,214,0.06)" stroke="#b59ad6" stroke-width="1" stroke-dasharray="5 3"/>
-        <text x="${es.x}" y="${es.y - rPx - 4}" font-family="var(--mono)" font-size="8" font-weight="700" fill="#b59ad6" text-anchor="middle" stroke="var(--bg)" stroke-width="2" paint-order="stroke" pointer-events="none">EXTRACT 6"</text>`;
+      if (state.extracting.isGateMother && !state.extracting.gateSel) {
+        // Step 1: show 18" network radius from mothership, highlight connected voidgates
+        const netPx = 18 * INCH;
+        html += `<circle cx="${es.x}" cy="${es.y}" r="${netPx}" fill="rgba(181,154,214,0.03)" stroke="#b59ad6" stroke-width="1" stroke-dasharray="8 4"/>
+          <text x="${es.x}" y="${es.y - netPx - 4}" font-family="var(--mono)" font-size="8" font-weight="700" fill="#b59ad6" text-anchor="middle" stroke="var(--bg)" stroke-width="2" paint-order="stroke" pointer-events="none">SELECT VOIDGATE</text>`;
+      } else if (state.extracting.isGateMother && state.extracting.gateSel) {
+        // Step 2: show 6" aura from the selected voidgate
+        const vgGrp = state.groups[state.extracting.gateSel.gid];
+        const vgShip = vgGrp && vgGrp.ships[state.extracting.gateSel.si];
+        if (vgShip) {
+          html += `<circle cx="${vgShip.x}" cy="${vgShip.y}" r="${rPx}" fill="rgba(181,154,214,0.06)" stroke="#b59ad6" stroke-width="1" stroke-dasharray="5 3"/>
+            <text x="${vgShip.x}" y="${vgShip.y - rPx - 4}" font-family="var(--mono)" font-size="8" font-weight="700" fill="#b59ad6" text-anchor="middle" stroke="var(--bg)" stroke-width="2" paint-order="stroke" pointer-events="none">EXTRACT 6"</text>`;
+        }
+      } else {
+        html += `<circle cx="${es.x}" cy="${es.y}" r="${rPx}" fill="rgba(181,154,214,0.06)" stroke="#b59ad6" stroke-width="1" stroke-dasharray="5 3"/>
+          <text x="${es.x}" y="${es.y - rPx - 4}" font-family="var(--mono)" font-size="8" font-weight="700" fill="#b59ad6" text-anchor="middle" stroke="var(--bg)" stroke-width="2" paint-order="stroke" pointer-events="none">EXTRACT 6"</text>`;
+      }
     }
   }
 
@@ -11308,22 +11332,47 @@ function _handle3dClick(e) {
 
   // Extract Recon Operatives — click a dropsite within 6" of the extracting ship.
   if (state.extracting) {
+    const _ex3 = state.extracting;
+    const _ex3Grp = state.groups[_ex3.gid];
+    const _ex3Ship = _ex3Grp && _ex3Grp.ships[_ex3.si];
+    const _ex3Def = getDef(_ex3.gid);
+    if (!_ex3Ship) { state.extracting = null; return; }
+
+    // Step 1 for Mothership: click a connected voidgate ship to select it.
+    if (_ex3.isGateMother && !_ex3.gateSel) {
+      const _ex3VgSnap = _3dHitShip(e, m => { const d = getDef(m.gid); return d && d.side === _ex3Def.side; });
+      if (_ex3VgSnap) {
+        const reachable = connectedGateships(_ex3Def.side, _ex3Ship.x, _ex3Ship.y);
+        const vgGrp = state.groups[_ex3VgSnap.gid];
+        const vgShip = vgGrp && vgGrp.ships[_ex3VgSnap.si];
+        if (vgShip && reachable.some(g => g.ship === vgShip)) {
+          state.extracting = { ..._ex3, gateSel: { gid: _ex3VgSnap.gid, si: _ex3VgSnap.si } };
+          flashLaunchMsg('Click a Dropsite within 6" of the Voidgate to extract', true);
+          renderAll(); return;
+        }
+      }
+      flashLaunchMsg('Click a connected Voidgate to relay through'); return;
+    }
+
+    // Step 2 (or direct): click a dropsite.
     const _exSnap = _3dNearestDropsite(e, 4 * INCH);
     if (!_exSnap) { flashLaunchMsg('Click a Dropsite to extract from'); return; }
     const _exDs  = _exSnap.ds;
-    const _exGrp = state.groups[state.extracting.gid];
-    const _exShip = _exGrp && _exGrp.ships[state.extracting.si];
-    const _exDef = getDef(state.extracting.gid);
-    if (!_exShip) { state.extracting = null; return; }
     if (!(_exDs.reconOps > 0)) { flashLaunchMsg('No Recon Operatives at that Dropsite'); return; }
-    if (Math.hypot(_exShip.x - inchToPx(_exDs.x), _exShip.y - inchToPx(_exDs.y)) > 6 * INCH) {
-      flashLaunchMsg('Dropsite out of range (6")'); return;
+    let _exInRange = false;
+    if (_ex3.isGateMother && _ex3.gateSel) {
+      const _vg3Grp = state.groups[_ex3.gateSel.gid];
+      const _vg3Ship = _vg3Grp && _vg3Grp.ships[_ex3.gateSel.si];
+      _exInRange = _vg3Ship && Math.hypot(_vg3Ship.x - inchToPx(_exDs.x), _vg3Ship.y - inchToPx(_exDs.y)) <= 6 * INCH;
+    } else {
+      _exInRange = Math.hypot(_ex3Ship.x - inchToPx(_exDs.x), _ex3Ship.y - inchToPx(_exDs.y)) <= 6 * INCH;
     }
-    const _exTake = Math.min(transportValue(_exDef), _exDs.reconOps);
-    const { gid: _exGid, si: _exSi } = state.extracting;
+    if (!_exInRange) { flashLaunchMsg('Dropsite out of range (6")'); return; }
+    const _exTake = Math.min(transportValue(_ex3Def), _exDs.reconOps);
+    const { gid: _exGid, si: _exSi } = _ex3;
     state.extracting = null;
     dispatch({ type: 'extractRecon', gid: _exGid, si: _exSi, dsId: _exDs.id });
-    flashLaunchMsg(`${_exDef.name} extracted ${_exTake} Operative${_exTake > 1 ? 's' : ''}`, true);
+    flashLaunchMsg(`${_ex3Def.name} extracted ${_exTake} Operative${_exTake > 1 ? 's' : ''}`, true);
     return;
   }
 
@@ -12018,7 +12067,11 @@ function init3d() {
     if (_pendingAssetTarget) { _pendingAssetTarget = null; renderAll(true); return; }
     if (state.assetMove) { dispatch({ type: 'selectAssetMove' }); return; }
     if (state.surveying) { state.surveying = null; flashLaunchMsg('Survey cancelled'); renderAll(); return; }
-    if (state.extracting) { state.extracting = null; flashLaunchMsg('Extract cancelled'); renderAll(); return; }
+    if (state.extracting) {
+      if (state.extracting.gateSel) { state.extracting = { ...state.extracting, gateSel: null }; flashLaunchMsg('Voidgate selection cancelled'); }
+      else { state.extracting = null; flashLaunchMsg('Extract cancelled'); }
+      renderAll(); return;
+    }
     if (state.featureAttack) { state.featureAttack = null; flashLaunchMsg('Targeting cancelled'); renderAll(true); return; }
     if (state.targeting) { state.targeting = null; flashLaunchMsg('Targeting cancelled'); renderAll(true); return; }
     if (state.aiming) {
@@ -12834,13 +12887,33 @@ function _sync3dOverlays(group) {
   // so they persist regardless of which group is selected.
 
 
-  // Extract aura: 6" dashed ring around the ship in extract-targeting mode.
+  // Extract aura: 6" dashed ring around the ship (or selected voidgate) in extract-targeting mode.
   if (state.extracting) {
-    const _exGrp  = state.groups[state.extracting.gid];
-    const _exShip = _exGrp && _exGrp.ships[state.extracting.si];
-    if (_exShip && !_exShip.destroyed && !_exShip.offTable) {
-      const _exWy = _3D_LAYER_Y[_exShip.layer] ?? _3D_LAYER_Y.orbit;
-      group.add(_3dDashedCircle(_exShip.x - 288, _exShip.y - 288, 6 * INCH, _exWy, 0xb59ad6, 0.70, 5, 3));
+    const _exA = state.extracting;
+    const _exAGrp  = state.groups[_exA.gid];
+    const _exAShip = _exAGrp && _exAGrp.ships[_exA.si];
+    if (_exAShip && !_exAShip.destroyed && !_exAShip.offTable) {
+      if (_exA.isGateMother && !_exA.gateSel) {
+        // Step 1: show 18" network radius + chain visualization from mothership.
+        const _exAWy = _3D_LAYER_Y[_exAShip.layer] ?? _3D_LAYER_Y.orbit;
+        group.add(_3dDashedCircle(_exAShip.x - 288, _exAShip.y - 288, 18 * INCH, _exAWy, 0xb59ad6, 0.40, 8, 4));
+        const _exAGates = connectedGateships(getDef(_exA.gid).side, _exAShip.x, _exAShip.y);
+        _exAGates.forEach(g => {
+          const gwy = _3D_LAYER_Y[g.layer || 'orbit'] ?? 120;
+          group.add(_3dDashedCircle(g.x - 288, g.y - 288, 6 * INCH, gwy, 0xb59ad6, 0.35, 6, 3));
+        });
+      } else if (_exA.isGateMother && _exA.gateSel) {
+        // Step 2: show 6" ring from the selected voidgate.
+        const _vg3A = state.groups[_exA.gateSel.gid];
+        const _vg3AShip = _vg3A && _vg3A.ships[_exA.gateSel.si];
+        if (_vg3AShip) {
+          const _vg3AWy = _3D_LAYER_Y[_vg3AShip.layer] ?? _3D_LAYER_Y.orbit;
+          group.add(_3dDashedCircle(_vg3AShip.x - 288, _vg3AShip.y - 288, 6 * INCH, _vg3AWy, 0xb59ad6, 0.70, 5, 3));
+        }
+      } else {
+        const _exAWy = _3D_LAYER_Y[_exAShip.layer] ?? _3D_LAYER_Y.orbit;
+        group.add(_3dDashedCircle(_exAShip.x - 288, _exAShip.y - 288, 6 * INCH, _exAWy, 0xb59ad6, 0.70, 5, 3));
+      }
     }
   }
 
@@ -14949,9 +15022,11 @@ document.addEventListener('click', (e) => {
     if (state.extracting && state.extracting.gid === gid && state.extracting.si === parseInt(si)) {
       state.extracting = null;
     } else {
-      state.extracting = { gid, si: parseInt(si) };
-      state.launching = null; state.targeting = null;
-      flashLaunchMsg('Click a Dropsite within 6" to extract Recon Operatives', true);
+      const _exsDef = getDef(gid);
+      const _exsIsGM = (_exsDef?.launch || []).some(l => l.type === 'gate_dropship');
+      state.launching = null; state.targeting = null; state.surveying = null;
+      state.extracting = { gid, si: parseInt(si), isGateMother: _exsIsGM };
+      flashLaunchMsg(_exsIsGM ? 'Click a connected Voidgate to relay through' : 'Click a Dropsite within 6" to extract Recon Operatives', true);
     }
     renderAll(true); return;
   }
@@ -15815,8 +15890,13 @@ board.addEventListener('contextmenu', (e) => {
   }
   if (state.extracting) {
     e.preventDefault();
-    state.extracting = null;
-    flashLaunchMsg('Extract cancelled');
+    if (state.extracting.gateSel) {
+      state.extracting = { ...state.extracting, gateSel: null };
+      flashLaunchMsg('Voidgate selection cancelled — click a connected Voidgate');
+    } else {
+      state.extracting = null;
+      flashLaunchMsg('Extract cancelled');
+    }
     renderAll();
     return;
   }
@@ -16429,6 +16509,37 @@ board.addEventListener('click', (e) => {
   // EXTRACT targeting: resolve against the nearest clicked dropsite, bypassing the
   // el-walk so any click on/near a dropsite works regardless of which SVG child was hit.
   if (state.extracting) {
+    const _ex2 = state.extracting;
+    const _ex2Grp = state.groups[_ex2.gid];
+    const _ex2Ship = _ex2Grp && _ex2Grp.ships[_ex2.si];
+    const _ex2Def = getDef(_ex2.gid);
+
+    // Step 1 for Mothership: click a connected voidgate ship to select it as relay.
+    if (_ex2.isGateMother && !_ex2.gateSel) {
+      let el2 = e.target;
+      while (el2 && el2 !== board) {
+        if (el2.dataset && el2.dataset.ship) {
+          const [vgGid, vgSiStr] = el2.dataset.ship.split('|');
+          const vgDef = getDef(vgGid);
+          if (vgDef && vgDef.side === _ex2Def.side) {
+            const reachable = connectedGateships(_ex2Def.side, _ex2Ship.x, _ex2Ship.y);
+            const vgGrp = state.groups[vgGid];
+            const vgSi = parseInt(vgSiStr);
+            const vgShip = vgGrp && vgGrp.ships[vgSi];
+            if (vgShip && reachable.some(g => g.ship === vgShip)) {
+              state.extracting = { ..._ex2, gateSel: { gid: vgGid, si: vgSi } };
+              flashLaunchMsg('Click a Dropsite within 6" of the Voidgate to extract', true);
+              renderAll(true); return;
+            }
+          }
+          flashLaunchMsg('Click a connected Voidgate to relay through'); return;
+        }
+        el2 = el2.parentElement;
+      }
+      flashLaunchMsg('Click a connected Voidgate to relay through'); return;
+    }
+
+    // Step 2 (or direct for non-mothership): click a dropsite.
     const pt = svgPointFromEvent(e);
     const dss = (state.scenarioData && state.scenarioData.dropsites) || [];
     let nearestDs = null, nearestD = Infinity;
@@ -16439,17 +16550,22 @@ board.addEventListener('click', (e) => {
     });
     const CLICK_TOL = 2.5 * INCH;
     if (nearestDs && nearestD <= CLICK_TOL) {
-      const eg = state.groups[state.extracting.gid];
-      const es = eg && eg.ships[state.extracting.si];
-      const edef = getDef(state.extracting.gid);
+      const edef = _ex2Def;
       const ds = nearestDs;
-      if (es && ds) {
+      if (_ex2Ship && ds) {
         if (!(ds.reconOps > 0)) { flashLaunchMsg('No Recon Operatives at that Dropsite'); return; }
-        if (Math.hypot(es.x - inchToPx(ds.x), es.y - inchToPx(ds.y)) > 6 * INCH) {
-          flashLaunchMsg('Dropsite out of range (6")'); return;
+        // Range check: gate mothers check from selected voidgate, others from ship.
+        let inRange = false;
+        if (_ex2.isGateMother && _ex2.gateSel) {
+          const vgGrp = state.groups[_ex2.gateSel.gid];
+          const vgShip = vgGrp && vgGrp.ships[_ex2.gateSel.si];
+          inRange = vgShip && Math.hypot(vgShip.x - inchToPx(ds.x), vgShip.y - inchToPx(ds.y)) <= 6 * INCH;
+        } else {
+          inRange = Math.hypot(_ex2Ship.x - inchToPx(ds.x), _ex2Ship.y - inchToPx(ds.y)) <= 6 * INCH;
         }
+        if (!inRange) { flashLaunchMsg('Dropsite out of range (6")'); return; }
         const take = Math.min(transportValue(edef), ds.reconOps);
-        const { gid, si } = state.extracting;
+        const { gid, si } = _ex2;
         state.extracting = null;
         dispatch({ type: 'extractRecon', gid, si, dsId: ds.id });
         flashLaunchMsg(`${edef.name} extracted ${take} Operative${take>1?'s':''}`, true);
@@ -16469,6 +16585,25 @@ board.addEventListener('click', (e) => {
     if (el.dataset && el.dataset.daFeat) return;
     if (el.dataset && el.dataset.ship) {
       const [gid, si] = el.dataset.ship.split('|');
+      // Mothership extract step 1: click a connected Voidgate to select as relay.
+      if (state.extracting && state.extracting.isGateMother && !state.extracting.gateSel) {
+        const _vgClickDef = getDef(gid);
+        const _exM = state.extracting;
+        const _exMGrp = state.groups[_exM.gid];
+        const _exMShip = _exMGrp && _exMGrp.ships[_exM.si];
+        if (_vgClickDef && _vgClickDef.side === getDef(_exM.gid)?.side) {
+          const reachable = connectedGateships(_vgClickDef.side, _exMShip.x, _exMShip.y);
+          const vgGrp = state.groups[gid];
+          const vgSi = parseInt(si);
+          const vgShip = vgGrp && vgGrp.ships[vgSi];
+          if (vgShip && reachable.some(g => g.ship === vgShip)) {
+            state.extracting = { ..._exM, gateSel: { gid, si: vgSi } };
+            flashLaunchMsg('Click a Dropsite within 6" of the Voidgate to extract', true);
+            renderAll(true); return;
+          }
+        }
+        flashLaunchMsg('That ship is not a connected Voidgate'); return;
+      }
       // Block clicks on target ships while the attack modal is resolving.
       if (state.attackModal && state.attackModal.step !== 'done') {
         const siInt = parseInt(si);
@@ -16557,15 +16692,24 @@ board.addEventListener('click', (e) => {
       // EXTRACT: if this ship is in extract-targeting mode, take Recon Operatives aboard
       // from this Dropsite (within 6", up to the ship's transport value).
       if (state.extracting) {
-        const eg = state.groups[state.extracting.gid];
-        const es = eg && eg.ships[state.extracting.si];
-        const edef = getDef(state.extracting.gid);
+        const _exEl = state.extracting;
+        const eg = state.groups[_exEl.gid];
+        const es = eg && eg.ships[_exEl.si];
+        const edef = getDef(_exEl.gid);
         const ds = state.scenarioData.dropsites.find(d => d.id === did);
         if (es && ds) {
           if (!(ds.reconOps > 0)) { flashLaunchMsg('No Recon Operatives at that Dropsite'); return; }
-          if (Math.hypot(es.x - inchToPx(ds.x), es.y - inchToPx(ds.y)) > 6 * INCH) { flashLaunchMsg('Dropsite out of range (6")'); return; }
+          let _exElInRange = false;
+          if (_exEl.isGateMother && _exEl.gateSel) {
+            const _vgElGrp = state.groups[_exEl.gateSel.gid];
+            const _vgElShip = _vgElGrp && _vgElGrp.ships[_exEl.gateSel.si];
+            _exElInRange = _vgElShip && Math.hypot(_vgElShip.x - inchToPx(ds.x), _vgElShip.y - inchToPx(ds.y)) <= 6 * INCH;
+          } else if (!_exEl.isGateMother) {
+            _exElInRange = Math.hypot(es.x - inchToPx(ds.x), es.y - inchToPx(ds.y)) <= 6 * INCH;
+          }
+          if (!_exElInRange) { flashLaunchMsg(_exEl.isGateMother && !_exEl.gateSel ? 'Select a Voidgate first' : 'Dropsite out of range (6")'); return; }
           const take = Math.min(transportValue(edef), ds.reconOps);
-          const { gid, si } = state.extracting;
+          const { gid, si } = _exEl;
           state.extracting = null;
           dispatch({ type: 'extractRecon', gid, si, dsId: did });
           flashLaunchMsg(`${edef.name} extracted ${take} Operative${take>1?'s':''}`, true);
