@@ -1104,7 +1104,6 @@ export function generateDeployOptions(state, aiSide) {
     if (si < 0) continue;
     if (!isLegal(state, { type: 'deployShip', gid, si }, aiSide)) continue;
 
-    const heading = deployZoneName === 'south' ? -90 : 90; // face north or south
     const def = grp.def;
     const diamPx = baseDiameterPx(def);
 
@@ -1123,6 +1122,17 @@ export function generateDeployOptions(state, aiSide) {
       baseY = edgeYpx + fwd * def.vanguard * INCH;
     }
 
+    // Voidgates (openNetwork) may each face their own dropsite target independently.
+    // Other ships all face toward the enemy (standard north/south heading).
+    let heading = deployZoneName === 'south' ? -90 : 90;
+    if (def.openNetwork && myDropsites.length) {
+      const di = dropperIds.indexOf(gid);
+      const tds = myDropsites[di % myDropsites.length];
+      const dx = tds.x * INCH - baseX;
+      const dy = tds.y * INCH - baseY;
+      heading = Math.round(Math.atan2(dy, dx) * 180 / Math.PI);
+    }
+
     // Deploy each ship of the group into a tight, coherent cluster. The FIRST ship anchors on the
     // group's lane (and, for Vanguard, pushed forward into the halo). FOLLOW-ON ships seed right
     // BESIDE an already-placed group-mate — never at an absolute slot — so even when the zone (or
@@ -1134,11 +1144,23 @@ export function generateDeployOptions(state, aiSide) {
     const placed = grp.ships.filter(s => !s.destroyed && !s.offTable);
     let seedX, seedY;
     if (placed.length) {
-      // Beside the placed group-mates (lateral offset from their centroid), kept on the same row.
+      // Beside the placed group-mates. Alternate left/right from the last placed ship so the
+      // group fans out rather than drifting in one direction (which can exit the zone or exceed
+      // the coherency radius before placeNonOverlap corrects it).
+      const lastShip = placed[placed.length - 1];
       const cx = placed.reduce((a, s) => a + s.x, 0) / placed.length;
       const cy = placed.reduce((a, s) => a + s.y, 0) / placed.length;
-      seedX = Math.max(INCH, Math.min(BOARD_PX - INCH, cx + spacing));
-      seedY = Math.max(INCH, Math.min(BOARD_PX - INCH, cy));
+      // Try both lateral directions; keep whichever result stays closer to the centroid.
+      const seedY0 = Math.max(INCH, Math.min(BOARD_PX - INCH, cy));
+      const tryR = Math.max(INCH, Math.min(BOARD_PX - INCH, lastShip.x + spacing));
+      const tryL = Math.max(INCH, Math.min(BOARD_PX - INCH, lastShip.x - spacing));
+      const posR = placeNonOverlap(tryR, seedY0, allPlaced, diamPx, zone, vgInZone);
+      const posL = placeNonOverlap(tryL, seedY0, allPlaced, diamPx, zone, vgInZone);
+      const dR = Math.hypot(posR.x - cx, posR.y - cy);
+      const dL = Math.hypot(posL.x - cx, posL.y - cy);
+      const pos = dR <= dL ? posR : posL;
+      opts.push({ id: `opt_dep_${gid}_${opts.length}`, gid, si, x: Math.round(pos.x), y: Math.round(pos.y), heading });
+      break;
     } else {
       const za = legalZonePosPx(vgInZone ? null : zone,
         Math.max(INCH, Math.min(BOARD_PX - INCH, baseX)),
