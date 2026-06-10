@@ -647,7 +647,23 @@ export function isLegal(state, intent, side) {
         && state.aiming.gid === intent.gid && state.aiming.si === intent.si;
       return (hpOrd === 'CC' || hpOrd === 'DC') && (!hpShip.movedThisRound || inCourseChange);
     }
-    case 'surveySite':
+    case 'surveySite': {
+      if (state.phase !== 'play') return false;
+      const { gid: svGid, si: svSi, dsId: svDsId } = intent;
+      const svGrp = state.groups[svGid];
+      if (!svGrp || svGrp.activated) return false;
+      const svDef = getDef(state, svGid);
+      if (!svDef || svDef.side !== side) return false;
+      if (!isCapital(svDef)) return false;
+      const svShip = svGrp.ships[svSi];
+      if (!svShip || svShip.destroyed || svShip.offTable) return false;
+      if (svShip.firedThisActivation || (svShip.launchedThisRound > 0)) return false;
+      const svDs = state.scenarioData?.dropsites?.find(d => d.id === svDsId);
+      if (!svDs || svDs.destroyed) return false;
+      if (svDs.surveyedBy && svDs.surveyedBy.includes(side)) return false;
+      if (Math.hypot(svShip.x - svDs.x * INCH, svShip.y - svDs.y * INCH) > 6 * INCH) return false;
+      return true;
+    }
     case 'objectivesFlyoff':
     case 'breakthroughFlyoff':
     case 'extractRecon': {
