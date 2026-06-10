@@ -13,7 +13,7 @@
 
 import { ORDERS, INCH, FEATURES } from './constants.js';
 import { getDef, assetThrust } from './state.js';
-import { nextUndeployedShipIdx, activeGroupIdForSide, moveCone, headingVec, weaponCanTarget, firingOriginShip, pointInWeaponArc, targetingRangePx, effectiveScan, dsBattalions, deploySideAllowed, sideNeedsDeployPhase, transportValue, shipInNetwork, isCapital, objectiveForSide, sceneryValid } from './mutators.js';
+import { nextUndeployedShipIdx, activeGroupIdForSide, moveCone, headingVec, weaponCanTarget, firingOriginShip, pointInWeaponArc, targetingRangePx, effectiveScan, dsBattalions, deploySideAllowed, sideNeedsDeployPhase, transportValue, shipInNetwork, isCapital, objectiveForSide, sceneryValid, connectedGateships } from './mutators.js';
 
 const INTENT_TYPES = ['pass', 'endRound', 'commitScenario'];
 
@@ -663,8 +663,13 @@ export function isLegal(state, intent, side) {
       if (transportValue(exDef) <= 0) return false;
       const exDs = state.scenarioData?.dropsites?.find(d => d.id === exDsId);
       if (!exDs || !(exDs.reconOps > 0)) return false;
-      if (Math.hypot(exShip.x - exDs.x * INCH, exShip.y - exDs.y * INCH) > 6 * INCH) return false;
-      return true;
+      const exDist = Math.hypot(exShip.x - exDs.x * INCH, exShip.y - exDs.y * INCH);
+      if (exDist <= 6 * INCH) return true;
+      // Shaltari Motherships extract via a connected Voidgate within 6" of the dropsite.
+      const isGateMother = (exDef.launch || []).some(l => l.type === 'gate_dropship');
+      if (!isGateMother) return false;
+      const reachable = connectedGateships(state, exDef.side, exShip.x, exShip.y);
+      return reachable.some(g => Math.hypot(g.x - exDs.x * INCH, g.y - exDs.y * INCH) <= 6 * INCH);
     }
     case 'assessDropsite': {
       if (state.phase !== 'play') return false;

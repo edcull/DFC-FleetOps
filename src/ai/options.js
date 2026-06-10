@@ -111,11 +111,27 @@ function defIsDropper(def) {
 // to hit while in it — so it's both protection and where ground drops happen.
 function defIsDescent(def) { return !!def && /Descent/i.test(def.special || ''); }
 function defIsCorvette(def) { return !!def && /corvette/i.test(def.role || ''); }
-// A "primary" target worth firing everything at: an enemy drop carrier, or an important combat
-// ship (capital/heavy hull, or high points).
-function defIsPrimaryTarget(def) {
-  return !!def && (defIsDropper(def) || (def.launch || []).some(l => l.type === 'gate_dropship')
-    || def.tonnage === 'C' || def.tonnage === 'H' || (def.pts || 0) >= 90);
+// A "primary" target worth firing everything at: an enemy drop carrier (for control missions),
+// or an important combat ship (capital/heavy hull, or high points).
+function defIsPrimaryTarget(def, state) {
+  if (!def) return false;
+  const obj = state?.scenario?.objective;
+  const isExtract = obj === 'extract';
+  // On Extract, drop carriers are not the priority — surviving to the end and killing op-carriers is.
+  const dropValue = isExtract ? false
+    : (defIsDropper(def) || (def.launch || []).some(l => l.type === 'gate_dropship'));
+  return dropValue || def.tonnage === 'C' || def.tonnage === 'H' || (def.pts || 0) >= 90;
+}
+// True if this GROUP has enemy Recon Operatives aboard (Extract objective specific).
+function grpHasReconOps(state, gid) {
+  const reconOps = state.shipReconOps;
+  if (!reconOps) return false;
+  const grp = state.groups[gid];
+  if (!grp) return false;
+  return grp.ships.some((_, si) => {
+    const def = grp.def;
+    return def && (reconOps[def.id + '#' + si] || 0) > 0;
+  });
 }
 // Missions where landing Battalions scores (so drop-capable ships should prioritise dropping).
 function isDropMission(state) {
@@ -763,10 +779,12 @@ function computeFleetFocusTarget(state, aiSide) {
       if (attackers < 2) continue; // focus only where concentration is actually possible
       const hull = ts.hull ?? ts.maxHull ?? 1;
       const score = attackers * 100 - hull * 8
-        + (defIsPrimaryTarget(tg.def) ? 40 : 0)
+        + (defIsPrimaryTarget(tg.def, state) ? 40 : 0)
+        // Operative carriers are the priority kill on Extract missions.
+        + (grpHasReconOps(state, tgid) ? 200 : 0)
         // The enemy drop engine (Mothership channelling, or any dropper) is the priority kill —
         // killing it stops their objective scoring outright.
-        + (defIsGateMother(tg.def) ? 180 : defIsDropper(tg.def) ? 90 : 0)
+        + (defIsGateMother(tg.def) && state?.scenario?.objective !== 'extract' ? 180 : defIsDropper(tg.def) && state?.scenario?.objective !== 'extract' ? 90 : 0)
         + (hull < (ts.maxHull || hull) ? 25 : 0); // already wounded → finish it
       if (score > bestScore) { bestScore = score; best = { gid: tgid, si: tsi }; }
     }
@@ -810,10 +828,10 @@ export function detectorPlan(state, gid, aiSide) {
   if (!tgt) {
     // Else the nearest high-value enemy worth opening up: a primary target (capital/heavy/dropper)
     // OR a Voidgate / Mothership (the Shaltari drop engine — fragile and very worth killing).
-    const highValue = d => defIsPrimaryTarget(d) || defIsVoidgate(d) || defIsGateMother(d);
+    const highValue = (d, gid) => defIsPrimaryTarget(d, state) || defIsVoidgate(d) || defIsGateMother(d) || grpHasReconOps(state, gid);
     let best = null, bd = Infinity;
     for (const [egid, eg] of Object.entries(state.groups)) {
-      if (eg.def?.side !== enemySide || !highValue(eg.def)) continue;
+      if (eg.def?.side !== enemySide || !highValue(eg.def, egid)) continue;
       eg.ships.forEach((es, esi) => {
         if (!spikable(eg, es)) return;
         const d = dist2d(ship.x, ship.y, es.x, es.y);
@@ -847,10 +865,12 @@ function findBestTarget(state, gid, si, wi, aiSide) {
       const tAtmoDescent = defIsDescent(tgrp.def) && (tship.layer || 'orbit') === 'atmosphere';
       const score = (tgrp.def.pts || 0)
         + (tship.hull < (tship.maxHull || 1) / 2 ? 50 : 0)   // prefer crippled
-        // Prioritise enemy drop ships to stop landings. A Mothership/Voidgate-network carrier
-        // (gate_dropship) channels MANY battalions a round — the highest-value kill of all — so it
-        // outranks ordinary bulk-lander/dropship carriers.
-        + (defIsGateMother(tgrp.def) ? 300 : defIsDropper(tgrp.def) ? 150 : 0)
+        // On Extract missions, ships carrying Recon Operatives are the highest-value kill.
+        + (grpHasReconOps(state, targetGid) ? 500 : 0)
+        // Prioritise enemy drop ships to stop landings (non-Extract missions only).
+        + (state?.scenario?.objective !== 'extract'
+          ? (defIsGateMother(tgrp.def) ? 300 : defIsDropper(tgrp.def) ? 150 : 0)
+          : 0)
         // Corvettes (Air-to-Air, ignore the atmosphere penalty) exist to hunt enemy Descent ships
         // landing in Atmosphere — make that their overriding target.
         + (defIsCorvette(def) && tAtmoDescent ? 400 : 0)
@@ -870,8 +890,8 @@ function hasPrimaryTargetInRange(state, gid, si, aiSide) {
   const ship = grp?.ships[si];
   if (!def?.weapons?.length || !ship || ship.destroyed || ship.offTable) return false;
   const enemySide = aiSide === 'player1' ? 'player2' : 'player1';
-  for (const [, tgrp] of Object.entries(state.groups)) {
-    if (tgrp.def?.side !== enemySide || !defIsPrimaryTarget(tgrp.def)) continue;
+  for (const [tgid, tgrp] of Object.entries(state.groups)) {
+    if (tgrp.def?.side !== enemySide || (!defIsPrimaryTarget(tgrp.def, state) && !grpHasReconOps(state, tgid))) continue;
     for (const ts of tgrp.ships) {
       if (ts.destroyed || ts.offTable || ts.attachedTo) continue;
       for (const w of def.weapons) {

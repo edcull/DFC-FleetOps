@@ -2,7 +2,7 @@
 // Mutates state directly via applyFn so post-move targeting is accurate.
 
 import { INCH, ORDERS } from '../engine/constants.js';
-import { moveCone, dsEnemyBattalions, dsBattalions, connectedGateships, coherencyInches, outOfFormationSet, shipInNetwork } from '../engine/mutators.js';
+import { moveCone, dsEnemyBattalions, dsBattalions, connectedGateships, coherencyInches, outOfFormationSet, shipInNetwork, transportValue } from '../engine/mutators.js';
 import { isLegal } from '../engine/gating.js';
 import { bestMoveToward, findBestTarget, baseDiameterPx, gateRunnerPlan, gateMotherPlan, corvettePlan, descentDropperPlan, detectorPlan, gateShipTargets } from './options.js';
 
@@ -731,6 +731,29 @@ export function buildActivation(state, rng, gid, order, movePlan, aiSide, applyF
           let landCount = count;
           if (launchType === 'bulk_lander' && dsEnemyBattalions(ds, def.side) > 0) landCount = Math.floor(count / 2);
           if (landCount > 0) applyFn({ type: 'launchGroundAsset', gid, si: launchSi, li, dsId, count: landCount, locationKey: 'ground' });
+        }
+      }
+    }
+  }
+
+  // Extract Recon Operatives on Extract missions (any ship with transport value within range,
+  // including Shaltari Motherships whose connected Voidgates are within 6" of the dropsite).
+  if (state.scenario?.objective === 'extract' && !NO_LAUNCH_ORDERS.has(order)) {
+    const exDropsites = state.scenarioData?.dropsites || [];
+    const exSi = grp.ships.findIndex(s => !s.destroyed && !s.offTable && !s.firedThisActivation && !(s.launchedThisRound > 0));
+    if (exSi >= 0 && transportValue(def) > 0) {
+      const exShip = grp.ships[exSi];
+      const isGateMother = (def.launch || []).some(l => l.type === 'gate_dropship');
+      const reachable = isGateMother ? connectedGateships(state, def.side, exShip.x, exShip.y) : [];
+      for (const exDs of exDropsites) {
+        if (!exDs || exDs.destroyed || !(exDs.reconOps > 0)) continue;
+        const directDist = Math.hypot(exShip.x - exDs.x * INCH, exShip.y - exDs.y * INCH);
+        const viaGate = isGateMother && reachable.some(g => Math.hypot(g.x - exDs.x * INCH, g.y - exDs.y * INCH) <= 6 * INCH);
+        if (directDist <= 6 * INCH || viaGate) {
+          if (isLegal(state, { type: 'extractRecon', gid, si: exSi, dsId: exDs.id }, def.side)) {
+            applyFn({ type: 'extractRecon', gid, si: exSi, dsId: exDs.id });
+            break; // one extract per activation
+          }
         }
       }
     }
