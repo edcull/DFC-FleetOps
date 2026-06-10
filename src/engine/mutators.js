@@ -4378,7 +4378,8 @@ function autoAdvanceAssetPhase(state, rng) {
     (state.launchedAssets || []).forEach(a => { a.moved = false; a.t2t = false; a.bomberTarget = null; a._preMove = null; });
     state.dogfightResult = null;
     ap.assetType = null; state.assetActiveSide = null;
-    advanceAssetStage(state, null);
+    const _aasRes = advanceAssetStage(state, null);
+    if (_aasRes.done) return advanceRound(state, rng);
   }
 }
 
@@ -4799,7 +4800,7 @@ export function apply(state, intent, rng) {
       (state.launchedAssets || []).forEach(a => { a.moved = false; a.t2t = false; a.bomberTarget = null; a._preMove = null; });
       state.dogfightResult = null;
       state.assetPhase.assetType = null; state.assetActiveSide = null;
-      advanceAssetStage(state, null);
+      { const _samRes = advanceAssetStage(state, null); if (_samRes.done) return advanceRound(state, rng); }
       return state;
     case 'assetStageDone': {
       const { assetType: asdType, side: asdSide } = intent;

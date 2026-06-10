@@ -15697,8 +15697,18 @@ board.addEventListener('contextmenu', (e) => {
   }
   if (state.targeting) {
     e.preventDefault();
+    // Cancel the aim state and clear ALL locked weapon targets for this group so
+    // the group is not considered as having fired and can still act normally.
+    const _tGid = state.targeting.gid;
     state.targeting = null;
-    flashLaunchMsg('Targeting cancelled');
+    if (_tGid && state.groups[_tGid]) {
+      state.groups[_tGid].ships.forEach((s, _tSi) => {
+        if (!s.weaponTargets) return;
+        const wis = Object.keys(s.weaponTargets).map(Number);
+        wis.forEach(wi => dispatch({ type: 'unlockWeapon', gid: _tGid, si: _tSi, wi }));
+      });
+    }
+    flashLaunchMsg('Attack cancelled');
     renderAll(true);
     return;
   }
@@ -18488,6 +18498,7 @@ async function openAdminPanel(anchor, inGame = false) {
                 ${(s.playerNames?.f1||'P1')} vs ${(s.playerNames?.f2||'P2')} · ${s.phase?.toUpperCase()} Rnd ${s.round??'—'} · ${s.isHotseat?'HOTSEAT':'ONLINE'}${s.hasReplay?' · ↺':''}
               </div>
             </div>
+            <a class="btn" href="/api/admin/saves/${s.roomId}/download" download="dfc-save-${s.roomId}.json" style="padding:3px 7px;font-size:8px;flex-shrink:0;text-decoration:none;">↓</a>
             <button class="btn adm-del-save" data-rid="${s.roomId}" style="padding:3px 7px;font-size:8px;color:var(--hull-crit);border-color:var(--hull-crit);flex-shrink:0;">✕</button>
           </div>`).join('');
         body.querySelectorAll('.adm-del-save').forEach(btn => {
