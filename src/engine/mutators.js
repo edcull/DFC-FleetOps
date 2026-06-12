@@ -2335,9 +2335,12 @@ export function rollSaves(state, rng, M) {
     }
   }
   // Backup save value (Formation gives a 6+ backup to grouped ships); rolled later.
+  // Open Network (Voidgates) and Payload ships skip coherency and don't benefit from
+  // the formation backup save — groupInFormation() short-circuits to true for them,
+  // so we must exclude them explicitly here.
   let backupVal = saveVal(td.bs);
   const tgrp = state.groups[s.targetGid];
-  if (tgrp && tgrp.ships.length > 1 && groupInFormation(state, td)) {
+  if (tgrp && tgrp.ships.length > 1 && !td.openNetwork && !td.payload && groupInFormation(state, td)) {
     backupVal = (backupVal == null) ? 6 : Math.min(backupVal, 6);
   }
   const isBomberAtk = M.bomber && (M.bomberKind === 'bomber' || M.bomberKind === 'fireship');
