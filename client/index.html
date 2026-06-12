@@ -1723,7 +1723,7 @@ function otherShipBases(skipGid, skipSi)                   { return _otherShipBa
 function isInVanguardZone(xIn, yIn, def, bz)               { return _isInVanguardZone(state, xIn, yIn, def, bz); }
 function largeObjectAt(xpx, ypx)                           { return _largeObjectAt(state, xpx, ypx); }
 function sceneryAttackEffects(ax, ay, bx, by, as_, ts)     { return _sceneryAttackEffects(state, ax, ay, bx, by, as_, ts); }
-function sceneryMoveHits(ax, ay, bx, by, ship)             { return _sceneryMoveHits(state, rng, ax, ay, bx, by, ship); }
+function sceneryMoveHits(ax, ay, bx, by, ship)             { return _sceneryMoveHits(state, ax, ay, bx, by, ship); }
 function sceneryValid(type, xIn, yIn)                      { return _sceneryValid(state, type, xIn, yIn); }
 function canDeployNow(def)                                 { return _canDeployNow(state, def); }
 function canActivateOffTable(def)                          { return _canActivateOffTable(state, def); }
@@ -4146,22 +4146,20 @@ function renderBoard() {
     const def = getDef(selGid);
     const grp = getGroup(selGid);
 
-    // Formation coherency rings — shown while moving/aiming a ship in a multi-ship
-    // group, around the OTHER ships, so the player can see the in-formation area.
+    // Formation coherency rings — always shown for multi-ship groups so the player
+    // can see formation constraints at a glance. Grey on all ships (including selected).
     const aliveCount = grp.ships.filter(s => !s.destroyed && !s.offTable).length;
     const selOrd = effectiveOrder(def, grp, state.selectedShipIdx);
     const movingActive = (state.selectedShipIdx !== null && selOrd &&
                           ORDERS[selOrd] && ORDERS[selOrd].moveMax > 0)
                          || (state.aiming && state.aiming.gid === selGid)
                          || (state.vectoredSecondMove && state.vectoredSecondMove.gid === selGid);
-    if (aliveCount >= 2 && movingActive && !noFormation(def)) {
+    if (aliveCount >= 2 && !noFormation(def)) {
       const cohPx = coherencyInches(def) * INCH;
-      const cohCol = def.side === 'player1' ? 'var(--ucm)' : 'var(--shal)';
-      grp.ships.forEach((s, si) => {
+      grp.ships.forEach(s => {
         if (s.destroyed || s.offTable) return;
-        if (si === state.selectedShipIdx) return; // don't ring the ship being moved
         html += `<circle cx="${s.x}" cy="${s.y}" r="${cohPx}" fill="none"
-                  stroke="${cohCol}" stroke-width="0.6" stroke-dasharray="3 4" opacity="0.35"/>`;
+                  stroke="rgba(160,160,170,1)" stroke-width="0.6" stroke-dasharray="3 4" opacity="0.38"/>`;
       });
     }
 
@@ -10034,6 +10032,8 @@ function renderActivationHUD() {
   const isOpponent = !!_netSide && def.side !== _netSide;
   if (isOpponent) return;
 
+  const hasSceneryDamage = grp.ships.some(s => !s.destroyed && (s.pendingSceneryHits || []).length > 0);
+
   const sideClass = sideCssKey(def.side);
   // When pinned to the activating group (player selected something else), derive a
   // meaningful ship index: prefer the most recent undoable moved ship, then first unmoved.
@@ -11625,9 +11625,7 @@ function _handle3dClick(e) {
         const active = !state.deployDone.player1 ? 'player1' : 'player2';
         flashLaunchMsg(`${playerNameForSide(active)} deploys first`); return;
       }
-      if (state.phase === 'play' && state.activeSide && hit.def.side !== state.activeSide) {
-        flashLaunchMsg(`${playerNameForSide(state.activeSide)}'s turn to activate`); return;
-      }
+      // Opponent ship clicks allowed during play for detail-viewing; HUD stays pinned.
     }
     if (state.phase === 'play' && state.selectedGroupId !== hit.gid) {
       const isMyGroup = !_netSide || hit.def.side === _netSide;
@@ -12620,12 +12618,12 @@ function _sync3dOverlays(group) {
     || (state.vectoredSecondMove && state.vectoredSecondMove.gid === selGid);
   const aliveCount = grp.ships.filter(s => !s.destroyed && !s.offTable).length;
 
-  // 1. Formation coherency rings around non-selected ships while moving
-  if (aliveCount >= 2 && movingActive && !noFormation(def)) {
+  // 1. Formation coherency rings — always shown on all ships in multi-ship groups, in grey.
+  if (aliveCount >= 2 && !noFormation(def)) {
     const cohPx = coherencyInches(def) * INCH;
-    grp.ships.forEach((s, si) => {
-      if (s.destroyed || s.offTable || si === selSi) return;
-      group.add(_3dDashedCircle(s.x - 288, s.y - 288, cohPx, _3D_LAYER_Y[s.layer] ?? 120, sideColHex, 0.35, 3, 4));
+    grp.ships.forEach(s => {
+      if (s.destroyed || s.offTable) return;
+      group.add(_3dDashedCircle(s.x - 288, s.y - 288, cohPx, _3D_LAYER_Y[s.layer] ?? 120, 0x909090, 0.38, 3, 4));
     });
   }
 
@@ -13447,7 +13445,10 @@ function _sync3dStaticScenery(group) {
   (sd.placedScenery || []).forEach(sc => {
     const wx = sc.x * INCH - 288, wz = sc.y * INCH - 288;
     const dense = sc.type === 'dense';
-    const baseCol = dense ? 0x4a3a1a : 0x1a2a4a;
+    // Dense fields: amber-brown; micrometeor clouds: steel-grey-blue.
+    const baseCol    = dense ? 0x9a5520 : 0x7a9bbb;
+    const emissCol   = dense ? 0x2a0f00 : 0x102030;
+    const outlineCol = dense ? 0xd07830 : 0x90c0e0;
     const count = dense ? 5 : 7;
     for (let i = 0; i < count; i++) {
       const r = dense ? 7 + i * 3 : 5 + i * 4;
@@ -13456,13 +13457,25 @@ function _sync3dStaticScenery(group) {
       // Vertical offset staggers puffs across ±12 units around the midpoint
       const yOff = ((i / count) - 0.5) * 24;
       const geo = new THREE.SphereGeometry(r, 6, 4);
-      const mesh = new THREE.Mesh(geo, new THREE.MeshLambertMaterial({
-        color: baseCol, transparent: true, opacity: dense ? 0.65 : 0.78, depthWrite: false
+      const mesh = new THREE.Mesh(geo, new THREE.MeshPhongMaterial({
+        color: baseCol, emissive: emissCol, shininess: 5,
+        transparent: true, opacity: dense ? 0.78 : 0.85, depthWrite: false
       }));
       mesh.renderOrder = 1;
       mesh.position.set(wx + Math.cos(ang) * spread, _CLOUD_Y + yOff, wz + Math.sin(ang) * spread);
       group.add(mesh);
     }
+    // Footprint outline rectangle at orbit level — matches the 6"×3" 2D footprint.
+    const fHW = 3 * INCH, fHH = 1.5 * INCH; // half-widths
+    const aRad = (sc.angle || 0) * Math.PI / 180;
+    const cosA = Math.cos(aRad), sinA = Math.sin(aRad);
+    const oy = _3D_LAYER_Y.orbit + 2;
+    const footPts = [[-fHW,-fHH],[fHW,-fHH],[fHW,fHH],[-fHW,fHH],[-fHW,-fHH]].map(([lx,lz]) =>
+      new THREE.Vector3(wx + lx*cosA - lz*sinA, oy, wz + lx*sinA + lz*cosA));
+    group.add(new THREE.Line(
+      new THREE.BufferGeometry().setFromPoints(footPts),
+      new THREE.LineBasicMaterial({ color: outlineCol, transparent: true, opacity: 0.8 })
+    ));
   });
 
   // Focal point auras — dashed gold ring + translucent fill disc at orbit layer.
@@ -16554,10 +16567,8 @@ board.addEventListener('click', (e) => {
             flashLaunchMsg(`${playerNameForSide(active)} deploys first`);
             return;
           }
-          if (state.phase === 'play' && state.activeSide && clickedDefHs.side !== state.activeSide) {
-            flashLaunchMsg(`${playerNameForSide(state.activeSide)}'s turn to activate`);
-            return;
-          }
+          // Opponent ship clicks are allowed during play for detail-viewing; the HUD stays
+          // pinned to the active group via _pinToActive so the activation isn't disrupted.
         }
       }
       // Activation lock: don't switch to a group that is locked this activation.
