@@ -2078,7 +2078,7 @@ function renderStaticScenery() {
     const op = ghost ? 0.5 : 1;
     const label = isMicro ? 'MICROMETEOR' : 'DENSE FIELD';
     let g = `<g transform="translate(${cx},${cy}) rotate(${angle})" opacity="${op}" ${ghost?'pointer-events="none"':`data-scenery-idx="${s._idx}" style="cursor:pointer;"`}>
-      <rect x="${-w/2}" y="${-h/2}" width="${w}" height="${h}" rx="${h*0.4}"
+      <rect x="${-w/2}" y="${-h/2}" width="${w}" height="${h}"
         fill="${fill}" stroke="${stroke}" stroke-width="1.2" stroke-dasharray="${isMicro?'':'4 3'}"/>`;
     for (let i = 0; i < 7; i++) {
       const dx = (Math.sin(i*2.3)*0.42)*w, dy = (Math.cos(i*1.7)*0.34)*h;
@@ -13465,16 +13465,27 @@ function _sync3dStaticScenery(group) {
       mesh.position.set(wx + Math.cos(ang) * spread, _CLOUD_Y + yOff, wz + Math.sin(ang) * spread);
       group.add(mesh);
     }
-    // Footprint outline rectangle at orbit level — matches the 6"×3" 2D footprint.
+    // Footprint plane + outline at orbit level — shows the exact 6"×3" 2D hitbox.
     const fHW = 3 * INCH, fHH = 1.5 * INCH; // half-widths
     const aRad = (sc.angle || 0) * Math.PI / 180;
     const cosA = Math.cos(aRad), sinA = Math.sin(aRad);
     const oy = _3D_LAYER_Y.orbit + 2;
+    // Filled plane (shows the block area clearly)
+    const fillGeo = new THREE.PlaneGeometry(fHW * 2, fHH * 2);
+    const fillMesh = new THREE.Mesh(fillGeo, new THREE.MeshBasicMaterial({
+      color: outlineCol, transparent: true, opacity: 0.18, side: THREE.DoubleSide, depthWrite: false
+    }));
+    fillMesh.rotation.order = 'YXZ';
+    fillMesh.rotation.y = aRad;
+    fillMesh.rotation.x = -Math.PI / 2;
+    fillMesh.position.set(wx, oy, wz);
+    group.add(fillMesh);
+    // Outline rectangle
     const footPts = [[-fHW,-fHH],[fHW,-fHH],[fHW,fHH],[-fHW,fHH],[-fHW,-fHH]].map(([lx,lz]) =>
       new THREE.Vector3(wx + lx*cosA - lz*sinA, oy, wz + lx*sinA + lz*cosA));
     group.add(new THREE.Line(
       new THREE.BufferGeometry().setFromPoints(footPts),
-      new THREE.LineBasicMaterial({ color: outlineCol, transparent: true, opacity: 0.8 })
+      new THREE.LineBasicMaterial({ color: outlineCol, transparent: true, opacity: 0.9 })
     ));
   });
 
@@ -13540,7 +13551,7 @@ function _sync3dSceneryDynamic(group) {
         const yOff = ((i / _gcount) - 0.5) * 24;
         const mesh = new THREE.Mesh(
           new THREE.SphereGeometry(r, 6, 4),
-          new THREE.MeshLambertMaterial({ color: col, transparent: true, opacity, depthWrite: false })
+          new THREE.MeshPhongMaterial({ color: col, transparent: true, opacity, depthWrite: false, shininess: 5 })
         );
         mesh.renderOrder = 2;
         mesh.position.set(wx + Math.cos(ang) * _gspread, _CLOUD_Y + yOff, wz + Math.sin(ang) * _gspread);
@@ -13551,7 +13562,7 @@ function _sync3dSceneryDynamic(group) {
     if (_gsp.pending) {
       // Piece is placed — show solid ghost + dashed direction line while aiming.
       const wx = _gsp.pending.x - 288, wz = _gsp.pending.y - 288;
-      const baseCol = _gdense ? 0x4a3a1a : 0x1a2a4a;
+      const baseCol = _gdense ? 0x9a5520 : 0x7a9bbb;
       _addGhostCloud(wx, wz, (_gsp.angle || 0) * Math.PI / 180, 0.85, baseCol);
       const aRad = (_gsp.angle || 0) * Math.PI / 180;
       const lineLen = _gspread + 18;
@@ -13568,7 +13579,7 @@ function _sync3dSceneryDynamic(group) {
       // Hovering — show transparent ghost coloured by validity.
       const xIn = state.hoverPoint.x / INCH, yIn = state.hoverPoint.y / INCH;
       const valid = sceneryValid(_gsp.type, xIn, yIn);
-      const col = valid.ok ? (_gdense ? 0x4a3a1a : 0x1a2a4a) : 0x6b1a1a;
+      const col = valid.ok ? (_gdense ? 0x9a5520 : 0x7a9bbb) : 0x6b1a1a;
       _addGhostCloud(state.hoverPoint.x - 288, state.hoverPoint.y - 288, 0, 0.38, col);
     }
   }
