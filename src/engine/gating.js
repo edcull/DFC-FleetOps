@@ -123,6 +123,7 @@ export function isLegal(state, intent, side) {
       if (!def || def.side !== side) return false;
       const ship = grp.ships[si];
       if (!ship || ship.destroyed || ship.offTable || ship.firedThisActivation || ship.detectorUsed) return false;
+      if (grp.ships.some(s => !s.destroyed && (s.pendingSceneryHits || []).length > 0)) return false;
       const hasDetectorSpecial = /\bDetector\b/i.test(def.special || '');
       const w = def.weapons && def.weapons[wi];
       if (!hasDetectorSpecial && (!w || (w.arc !== 'LoS' && !/^Detector$/i.test(w.name)))) return false;
@@ -180,6 +181,7 @@ export function isLegal(state, intent, side) {
       // the turn advances before the attack's damage (and any kills) land, which can
       // strand the active side. The client UI blocks this; enforce it here too.
       if (state.attackModal) return false;
+      { const fg = state.groups[gid]; if (fg && fg.ships.some(s => !s.destroyed && (s.pendingSceneryHits || []).length > 0)) return false; }
       const grp = state.groups[gid];
       if (!grp || grp.activated) return false;
       const def = getDef(state, gid);
@@ -280,6 +282,7 @@ export function isLegal(state, intent, side) {
       const ship = grp.ships[si];
       if (!ship || ship.destroyed || ship.offTable) return false;
       if (!def.launch || !def.launch[li]) return false;
+      if (grp.ships.some(s => !s.destroyed && (s.pendingSceneryHits || []).length > 0)) return false;
       return true;
     }
     case 'selectGate': {
@@ -547,6 +550,7 @@ export function isLegal(state, intent, side) {
       const { gid } = intent;
       if (state.phase !== 'play') return false;
       if (state.attackModal) return false;
+      { const fg = state.groups[gid]; if (fg && fg.ships.some(s => !s.destroyed && (s.pendingSceneryHits || []).length > 0)) return false; }
       const grp = state.groups[gid];
       if (!grp || grp.activated) return false;
       // The group's order must permit firing. MT / SR have fireRule 'none'.
@@ -658,6 +662,7 @@ export function isLegal(state, intent, side) {
       const svShip = svGrp.ships[svSi];
       if (!svShip || svShip.destroyed || svShip.offTable) return false;
       if (svShip.firedThisActivation || (svShip.launchedThisRound > 0)) return false;
+      if (svGrp.ships.some(s => !s.destroyed && (s.pendingSceneryHits || []).length > 0)) return false;
       const svDs = state.scenarioData?.dropsites?.find(d => d.id === svDsId);
       if (!svDs || svDs.destroyed) return false;
       if (svDs.surveyedBy && svDs.surveyedBy.includes(side)) return false;
@@ -676,6 +681,7 @@ export function isLegal(state, intent, side) {
       const exShip = exGrp.ships[exSi];
       if (!exShip || exShip.destroyed || exShip.offTable) return false;
       if (exShip.firedThisActivation || (exShip.launchedThisRound > 0)) return false;
+      if (exGrp.ships.some(s => !s.destroyed && (s.pendingSceneryHits || []).length > 0)) return false;
       if (transportValue(exDef) <= 0) return false;
       const exDs = state.scenarioData?.dropsites?.find(d => d.id === exDsId);
       if (!exDs || !(exDs.reconOps > 0)) return false;
@@ -686,6 +692,14 @@ export function isLegal(state, intent, side) {
       if (!isGateMother) return false;
       const reachable = connectedGateships(state, exDef.side, exShip.x, exShip.y);
       return reachable.some(g => Math.hypot(g.x - exDs.x * INCH, g.y - exDs.y * INCH) <= 6 * INCH);
+    }
+    case 'openSceneryDamage': {
+      const { gid: odGid } = intent;
+      const odGrp = state.groups[odGid];
+      if (!odGrp) return false;
+      const odDef = getDef(state, odGid);
+      if (!odDef || odDef.side !== side) return false;
+      return odGrp.ships.some(s => !s.destroyed && (s.pendingSceneryHits || []).length > 0);
     }
     case 'assessDropsite': {
       if (state.phase !== 'play') return false;

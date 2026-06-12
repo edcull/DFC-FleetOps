@@ -3241,6 +3241,8 @@ function renderDetail() {
   const sideClass = sideCssKey(def.side);
   // In online mode, the opponent's group is read-only — interactive controls are hidden/disabled.
   const isOpponent = !!_netSide && def.side !== _netSide;
+  // True if any live ship in the group has unresolved scenery hits pending.
+  const hasSceneryDamage = grp.ships.some(s => !s.destroyed && (s.pendingSceneryHits || []).length > 0);
 
   // Stat grid
   // Silent Running: base Sig drops to 0", but Spikes still add 3" each.
@@ -3505,7 +3507,7 @@ function renderDetail() {
     const individualOrders = def.openNetwork || onIndividualOrders(def, grp);
     const moveGate = individualOrders ? moved : groupMovementComplete(def, grp);
     // Conditions under which weapons can be assigned this activation.
-    const canFire = !isOpponent && !grp.activated && state.phase === 'play' && onTable && !selShipOOF && limit > 0 && !weaponsOffline && !fired && moveGate;
+    const canFire = !isOpponent && !grp.activated && state.phase === 'play' && onTable && !selShipOOF && limit > 0 && !weaponsOffline && !fired && moveGate && !hasSceneryDamage;
     // Is the ship currently firing any Close Action weapon (enables a free Low Power weapon)?
     const firingCA = selShip && Object.keys(selShip.weaponTargets).some(wi => parseWeaponSpecials(def.weapons[wi]).closeAction);
     weaponsHTML = `<div class="panel-section">
@@ -3538,7 +3540,7 @@ function renderDetail() {
       const clickable = !isDetector && canFire && (_volleyCount ? _filledSlots < _volleyCount : !tgt) && fitsLimit && !caBlocked && !limitedBlocked;
       const detectorUsed = selShip && selShip.detectorUsed;
       const detectorAiming = state.detector && state.detector.gid === state.selectedGroupId && state.detector.si === si && state.detector.wi === wi;
-      const canDetect = !isOpponent && !grp.activated && isDetector && state.phase === 'play' && onTable && !selShipOOF && !weaponsOffline && !fired && moveGate && !detectorUsed;
+      const canDetect = !isOpponent && !grp.activated && isDetector && state.phase === 'play' && onTable && !selShipOOF && !weaponsOffline && !fired && moveGate && !detectorUsed && !hasSceneryDamage;
       const isAntiWing = /Anti.?Wing/i.test(w.special || '');
       const awAiming = state.antiWing && state.antiWing.gid === state.selectedGroupId && state.antiWing.si === si && state.antiWing.wi === wi;
       const enemyWingsExist = (state.launchedAssets || []).some(a => a.side !== def.side && (a.kind === 'fighter' || a.kind === 'bomber'));
@@ -3568,7 +3570,7 @@ function renderDetail() {
     if (_hasDetectorSpecial && !_hasLoSWeapon) {
       const detectorUsed = selShip && selShip.detectorUsed;
       const detectorAiming = state.detector && state.detector.gid === state.selectedGroupId && state.detector.si === si && state.detector.wi === -1;
-      const canDetect = !isOpponent && !grp.activated && state.phase === 'play' && onTable && !selShipOOF && !weaponsOffline && !fired && moveGate && !detectorUsed;
+      const canDetect = !isOpponent && !grp.activated && state.phase === 'play' && onTable && !selShipOOF && !weaponsOffline && !fired && moveGate && !detectorUsed && !hasSceneryDamage;
       weaponsHTML += `<div class="weapon-row${detectorAiming ? ' weapon-aiming' : ''}"
           ${canDetect ? `data-detector="${state.selectedGroupId}|${si}|-1" style="cursor:pointer;"` : ''}>
         <div class="weapon-name">Detector${detectorUsed ? ` <span style="color:var(--text-mute);font-size:9px;">✓ used</span>` : ''}</div>
@@ -3614,7 +3616,7 @@ function renderDetail() {
       const isSurveying = state.surveying && state.surveying.gid === state.selectedGroupId && state.surveying.si === state.selectedShipIdx;
       const acted = selShip.firedThisActivation || (selShip.launchedThisRound > 0);
       const moveOk = selShip.movedThisRound || !(ORDERS[effectiveOrder(def, grp, state.selectedShipIdx)] || {}).moveMax;
-      const canSurvey = !acted && moveOk;
+      const canSurvey = !acted && moveOk && !hasSceneryDamage;
       surveyHTML = `<div class="panel-section">
         <div class="panel-title">Survey</div>
         <div class="weapon-row" ${canSurvey ? `data-survey-start="${state.selectedGroupId}|${state.selectedShipIdx}" style="cursor:pointer;${isSurveying ? 'border-left:3px solid #3a9aaa;background:rgba(58,154,170,0.08);' : ''}"` : 'style="opacity:0.5;"'}>
@@ -3667,13 +3669,14 @@ function renderDetail() {
       const isExtracting = state.extracting && state.extracting.gid === state.selectedGroupId && state.extracting.si === state.selectedShipIdx;
       const acted = selShip.firedThisActivation || (selShip.launchedThisRound > 0);
       const moveOk = selShip.movedThisRound || !(ORDERS[effectiveOrder(def, grp, state.selectedShipIdx)] || {}).moveMax;
+      const canExtract = !acted && moveOk && !hasSceneryDamage;
       extractHTML = `<div class="panel-section">
         <div class="panel-title">Extract${carried ? ` · <span style="color:#b59ad6">${carried} aboard</span>` : ''}</div>
-        <div class="weapon-row" ${(!acted && moveOk) ? `data-extract-start="${state.selectedGroupId}|${state.selectedShipIdx}" style="cursor:pointer;${isExtracting?'border-left:3px solid #b59ad6;background:rgba(181,154,214,0.08);':''}"` : 'style="opacity:0.5;"'}>
+        <div class="weapon-row" ${canExtract ? `data-extract-start="${state.selectedGroupId}|${state.selectedShipIdx}" style="cursor:pointer;${isExtracting?'border-left:3px solid #b59ad6;background:rgba(181,154,214,0.08);':''}"` : 'style="opacity:0.5;"'}>
           <div class="weapon-name">⬆ Extract Recon Operatives</div>
           <div class="weapon-stats">Transport value ${tv} · 6" range · ${carried} aboard</div>
-          ${(!acted && moveOk) ? `<div class="weapon-special" style="color:var(--text-mute)">${isExtracting ? 'Click a Dropsite within 6" to extract · right-click cancels' : 'Click, then target a Dropsite. 2 VP per Operative at game end.'}</div>`
-            : `<div class="weapon-special" style="color:var(--text-mute)">${acted ? 'Ship has already acted this activation.' : 'Move first.'}</div>`}
+          ${canExtract ? `<div class="weapon-special" style="color:var(--text-mute)">${isExtracting ? 'Click a Dropsite within 6" to extract · right-click cancels' : 'Click, then target a Dropsite. 2 VP per Operative at game end.'}</div>`
+            : `<div class="weapon-special" style="color:var(--text-mute)">${acted ? 'Ship has already acted this activation.' : hasSceneryDamage ? 'Resolve scenery damage first.' : 'Move first.'}</div>`}
         </div>
       </div>`;
     }
@@ -3691,7 +3694,7 @@ function renderDetail() {
     const launchNeedsMove = launchOrder && ORDERS[launchOrder] && ORDERS[launchOrder].moveMax > 0;
     const launchIndividual = def.openNetwork || onIndividualOrders(def, grp);
     const launchMoved = !launchNeedsMove || (launchIndividual ? (selShip && selShip.movedThisRound) : groupMovementComplete(def, grp));
-    const canLaunch = !isOpponent && !grp.activated && state.phase === 'play' && selShip && !selShip.destroyed && !selShip.offTable && !selShipOOF && !!launchOrder && !launchBlockedByOrder && launchMoved && !selShip.usedVectoredSecondMove;
+    const canLaunch = !isOpponent && !grp.activated && state.phase === 'play' && selShip && !selShip.destroyed && !selShip.offTable && !selShipOOF && !!launchOrder && !launchBlockedByOrder && launchMoved && !selShip.usedVectoredSecondMove && !hasSceneryDamage;
     launchHTML = `<div class="panel-section">
       <div class="panel-title">Launch Assets${selShipOOF ? ' · <span style="color:var(--hull-crit)">disabled (out of formation)</span>' : launchBlockedByOrder ? ` · <span style="color:var(--hull-crit)">disabled (${launchOrder})</span>` : (!launchOrder ? ' · <span style="color:var(--text-mute)">set an order first</span>' : !launchMoved ? ' · <span style="color:var(--text-mute)">move first</span>' : '')}</div>`;
 
@@ -4789,8 +4792,9 @@ function renderBoard() {
             const spikes = (tGrp.spikes || 0) + (s.spikes || 0);
             const sigPx      = sig * INCH;
             const sigSpikePx = (sig + 3 * spikes) * INCH;
-            if (eff.ignoreSig) {
-              // Dense field: sig AND spikes both ignored — grey out the whole bubble.
+            const isValidTarget = weaponCanTarget(state, aDef, originShip, w, def, s, tGrp);
+            if (eff.ignoreSig || !isValidTarget) {
+              // Dense field, or non-targetable for any reason — grey out the whole bubble.
               if (sigSpikePx > 0) {
                 html += `<circle cx="${s.x}" cy="${s.y}" r="${sigSpikePx}" fill="rgba(100,100,100,0.03)" stroke="#555" stroke-width="0.5" stroke-dasharray="2 4" opacity="0.5" pointer-events="none"/>`;
               }
@@ -4806,7 +4810,7 @@ function renderBoard() {
             } else if (sigSpikePx > 0) {
               html += `<circle cx="${s.x}" cy="${s.y}" r="${sigSpikePx}" fill="rgba(255,82,82,0.04)" stroke="var(--hull-crit)" stroke-width="0.5" stroke-dasharray="2 4" opacity="0.5" pointer-events="none"/>`;
             }
-            if (weaponCanTarget(state, aDef, originShip, w, def, s, tGrp)) {
+            if (isValidTarget) {
               html += `<circle cx="${s.x}" cy="${s.y}" r="9" fill="none" stroke="var(--hull-crit)" stroke-width="1.5" stroke-dasharray="2 2"/>`;
             }
           });
@@ -5134,7 +5138,11 @@ function renderAttackModal() {
   if (M.step === 'select') {
     const resolved = M.resolvedShots || [];
     const remaining = M.shots.filter((_, i) => !resolved.includes(i)).length;
-    body = `<div style="font-size:10px;color:var(--text-mute);margin-bottom:8px;">${remaining} weapon system${remaining !== 1 ? 's' : ''} to resolve — choose one:</div>`;
+    if (M.sceneryDamage) {
+      body = `<div style="font-size:10px;color:#f4a460;margin-bottom:8px;">⚠ Scenery damage — ${remaining} hit${remaining !== 1 ? 's' : ''} to resolve:</div>`;
+    } else {
+      body = `<div style="font-size:10px;color:var(--text-mute);margin-bottom:8px;">${remaining} weapon system${remaining !== 1 ? 's' : ''} to resolve — choose one:</div>`;
+    }
     M.shots.forEach((s, i) => {
       const isDone = resolved.includes(i);
       const inactive = isDone || !isAttacker;
@@ -5147,6 +5155,9 @@ function renderAttackModal() {
         body += `<div style="margin-bottom:4px;padding:4px 8px;font-family:var(--mono);font-size:10px;color:var(--text-mute);opacity:0.4;">
           <span style="color:var(--hull-good)">✓</span> ${s.w.name}${volLabel}</div>`;
       } else {
+        const rightLabel = M.sceneryDamage
+          ? `${s.w.hits} ${s.w.type === 'K' ? 'Kinetic' : 'Energy'} hit${s.w.hits !== 1 ? 's' : ''}`
+          : `Att ${s.w.att} · Lock ${s.w.lock}+`;
         body += `<button ${inactive ? 'disabled' : `data-am-select="${i}"`}
           style="display:block;width:100%;text-align:left;margin-bottom:4px;padding:6px 8px;
                  background:${inactive ? 'rgba(255,255,255,0.03)' : 'rgba(255,255,255,0.07)'};
@@ -5155,7 +5166,7 @@ function renderAttackModal() {
                  font-family:var(--mono);font-size:10px;">
           <b>${s.w.name}</b>${volLabel}
           <span style="color:var(--hull-crit)"> ▶ ${tName}</span>
-          <span style="float:right;color:var(--text-mute);">Att ${s.w.att} · Lock ${s.w.lock}+</span>
+          <span style="float:right;color:var(--text-mute);">${rightLabel}</span>
         </button>`;
       }
     });
@@ -5191,7 +5202,14 @@ function renderAttackModal() {
       const tName = s.dsId
         ? (state.scenarioData?.dropsites?.find(d => d.id === s.dsId)?.base.name || s.dsId)
         : (td ? td.name : '?');
-      body = `<div class="am-line"><b>${s.w.name}</b> ▶ <b>${tName}</b> <span style="color:var(--text-mute);font-size:10px;">(Att ${s.w.att}, Lock ${s.w.lock}+, Dmg ${s.w.dmg}, ${s.w.type})</span></div>`;
+      if (M.sceneryDamage) {
+        const hitLabel = `${s.w.hits} ${s.w.type === 'K' ? 'Kinetic' : 'Energy'} hit${s.w.hits !== 1 ? 's' : ''} (auto)`;
+        body = `<div class="am-line">⚠ <b>${s.w.name}</b> ▶ <b>${tName}</b> <span style="color:#f4a460;font-size:10px;">${hitLabel}</span></div>`;
+      } else {
+        body = `<div class="am-line"><b>${s.w.name}</b> ▶ <b>${tName}</b> <span style="color:var(--text-mute);font-size:10px;">(Att ${s.w.att}, Lock ${s.w.lock}+, Dmg ${s.w.dmg}, ${s.w.type})</span></div>`;
+      }
+    } else if (M.sceneryDamage) {
+      body = `<div class="am-line">⚠ <b>Scenery Damage</b> — ${M.shots.length} hit${M.shots.length !== 1 ? 's' : ''} incoming:</div>`;
     } else {
       const _tl = M.totalLocks ?? M.shots.length;
       body = `<div class="am-line">Firing <b>${aDef.name}</b> — ${_tl} weapon${_tl>1?'s':''} locked.</div>`;
@@ -5205,6 +5223,11 @@ function renderAttackModal() {
         return;
       }
       const td = getDef(s.targetGid);
+      if (M.sceneryDamage) {
+        const hitLabel = `${s.w.hits} ${s.w.type === 'K' ? 'Kinetic' : 'Energy'} hit${s.w.hits !== 1 ? 's' : ''}`;
+        body += `<div class="am-shot">⚠ ${s.w.name} <span style="color:#f4a460;">(${hitLabel})</span> ▶ <b>${td.name}</b></div>`;
+        return;
+      }
       let scNote = '';
       if (!M.bomber && M.attackerGid) {
         const ash = state.groups[M.attackerGid].ships[M.attackerSi];
@@ -5276,10 +5299,10 @@ function renderAttackModal() {
     body += mdvHtml;
     if (fromSelect) {
       footer = isAttacker ? `<button class="btn" data-am-back="1">◁ Back</button>
-        <button class="btn-primary ${sideClass==='shal'?'shal':''}" data-am-next="hit">Roll to Hit ▸</button>` : '';
+        <button class="btn-primary ${sideClass==='shal'?'shal':''}" data-am-next="hit">${M.sceneryDamage ? 'Roll Saves ▸' : 'Roll to Hit ▸'}</button>` : '';
     } else {
       footer = isAttacker ? `<button class="btn" data-am-cancel="1">Cancel</button>
-        <button class="btn-primary ${sideClass==='shal'?'shal':''}" data-am-next="hit">Roll to Hit ▸</button>` : '';
+        <button class="btn-primary ${sideClass==='shal'?'shal':''}" data-am-next="hit">${M.sceneryDamage ? 'Roll Saves ▸' : 'Roll to Hit ▸'}</button>` : '';
     }
   }
 
@@ -10093,7 +10116,8 @@ function renderActivationHUD() {
 
   // ── Play phase ──
   const moved = ship && ship.movedThisRound;
-  const locked = ship && (ship.firedThisActivation || ship.detectorUsed || (ship.launchedThisRound > 0));
+  const groupActed = grp.ships.some(s => !s.destroyed && (s.firedThisActivation || s.detectorUsed || (s.launchedThisRound > 0)));
+  const locked = !!(ship && groupActed);
   const anyMoved = grp.ships.some(s => !s.destroyed && s.movedThisRound);
   const pendCell = Object.values(state.groups).some(cg =>
     cg.ships.some(cs => cs.deployedByGid === gid && !cs.destroyed && !cs.movedThisRound && !cs.firedThisActivation && !(cs.launchedThisRound > 0))
@@ -10103,7 +10127,7 @@ function renderActivationHUD() {
   // started the turn already deployed on the table must not show UNDO DEPLOY.
   const anyOnTableNotMoved = grp.ships.some(s => !s.destroyed && !s.offTable && !s.movedThisRound && s.deployedRound === state.round && s.justArrived);
   let undoBtn = '';
-  if (ship && locked) {
+  if (ship && moved && locked) {
     undoBtn = `<button class="btn" disabled style="width:100%;opacity:0.45;margin-bottom:4px;" title="Can't undo after firing/detecting/launching">⟲ UNDO MOVE (locked)</button>`;
   } else if (ship && moved) {
     undoBtn = `<button class="btn" data-clear-trail="${gid}|${si}" style="width:100%;margin-bottom:4px;">⟲ UNDO MOVE</button>`;
@@ -10120,8 +10144,20 @@ function renderActivationHUD() {
   // Can finish if: any ship has moved, OR the group order doesn't require movement (Hold Position etc.)
   const _orderNeedsMove = grp.order && ORDERS[grp.order] && ORDERS[grp.order].moveMax > 0;
   const canFinishAct = anyMoved || (grp.order && !_orderNeedsMove);
+  // Scenery damage button: shown when any ship has pending scenery hits.
+  const allGroupMoved = grp.ships.filter(s => !s.destroyed && !s.offTable).every(s => s.movedThisRound);
+  let sceneryBtn = '';
+  if (hasSceneryDamage) {
+    if (allGroupMoved) {
+      sceneryBtn = `<button class="btn" data-scenery-damage="${gid}" style="width:100%;margin-bottom:4px;border-color:#f4a460;color:#f4a460;">⚠ RESOLVE SCENERY DAMAGE ▸</button>`;
+    } else {
+      sceneryBtn = `<button class="btn" disabled style="width:100%;margin-bottom:4px;opacity:0.45;">⚠ RESOLVE SCENERY DAMAGE (move all ships first)</button>`;
+    }
+  }
   let finishBtn;
-  if (pendCell) {
+  if (hasSceneryDamage) {
+    finishBtn = `<button class="btn-finish-act" disabled style="width:100%;opacity:0.35;">FINISH ACTIVATION ▸</button>`;
+  } else if (pendCell) {
     finishBtn = `<div style="font-size:8px;color:var(--hull-warn);margin-bottom:4px;">⬡ Deployed cell must act first</div>
       <button class="btn-finish-act" disabled style="width:100%;opacity:0.35;">FINISH ACTIVATION ▸</button>`;
   } else if (canFinishAct) {
@@ -10180,6 +10216,7 @@ function renderActivationHUD() {
     ${atmoBtn}
     ${actionsHTML}
     ${undoBtn}
+    ${sceneryBtn}
     ${finishBtn}
     ${cancelOrderBtn}
     ${anyOnTableNotMoved ? '' : passBtn}
@@ -12049,7 +12086,8 @@ function init3d() {
       const _rGrp = state.groups[_rGid];
       const _rShip = _rGrp && _rGrp.ships[_rSi];
       const _rTrail = _rGrp && (_rGrp.moveTrail || []);
-      const _canUndo = _rShip && _rShip.movedThisRound && !_rShip.firedThisActivation && !_rShip.detectorUsed && !(_rShip.launchedThisRound > 0) && !_rGrp.activated && _rTrail.some(t => t.si === _rSi);
+      const _grpActed = _rGrp.ships.some(s => !s.destroyed && (s.firedThisActivation || s.detectorUsed || (s.launchedThisRound > 0)));
+      const _canUndo = _rShip && _rShip.movedThisRound && !_grpActed && !_rGrp.activated && _rTrail.some(t => t.si === _rSi);
       if (_canUndo) { dispatch({ type: 'undoMove', gid: _rGid, si: _rSi }); }
       else { state.selectedGroupId = null; state.selectedShipIdx = null; netSendPeerView(); renderAll(true); }
       return;
@@ -12595,12 +12633,13 @@ function _sync3dOverlays(group) {
   if (arcViewMode !== 0 && (arcViewMode === 1 || ((movingActive || state.targeting) && arcViewMode !== 2))) {
     const enemySide = def.side === 'player1' ? 'player2' : 'player1';
     // During targeting, find the firing origin so we can check per-target ring crossing.
-    let targetingOrigin = null;
+    let targetingOrigin = null, tADefWpn = null, tWeapon = null;
     if (state.targeting) {
       const t = state.targeting;
       const tAGrp = state.groups[t.gid];
-      const tADef = getDef(t.gid);
-      targetingOrigin = tAGrp && tADef && firingOriginShip(tADef, tAGrp, t.si);
+      tADefWpn = getDef(t.gid);
+      tWeapon  = tADefWpn && tADefWpn.weapons[t.wi];
+      targetingOrigin = tAGrp && tADefWpn && firingOriginShip(tADefWpn, tAGrp, t.si);
     }
     fleetForSide(enemySide).forEach(edef => {
       const eg = getGroup(edef.id);
@@ -12618,8 +12657,11 @@ function _sync3dOverlays(group) {
         const eff = targetingOrigin ? sceneryAttackEffects(targetingOrigin.x, targetingOrigin.y, es.x, es.y, targetingOrigin, es) : { ignoreSpikes: false, ignoreSig: false };
         const sigIgnored  = eff.ignoreSig;                  // Dense field: sig + spikes both ignored
         const spikeIgnored = !sigIgnored && eff.ignoreSpikes && spikes > 0; // Micrometeor/ring: spikes only
+        // Any non-targetable ship gets a grey ring regardless of scenery type.
+        const forcedGrey = !!(tADefWpn && tWeapon && targetingOrigin
+          && !weaponCanTarget(state, tADefWpn, targetingOrigin, tWeapon, edef, es, eg));
 
-        if (sigIgnored) {
+        if (sigIgnored || forcedGrey) {
           // Dense field: grey out the entire bubble.
           group.add(_3dDashedCircle(es.x - 288, es.y - 288, sigSpikePx, wy, 0x555555, 0.3, 2, 4));
           const greyFill = new THREE.CircleGeometry(sigSpikePx, 64);
@@ -15140,6 +15182,12 @@ document.addEventListener('click', (e) => {
     state.selectedShipIdx = null;
     renderAll(true); return;
   }
+  // Resolve scenery damage
+  if (e.target.matches('[data-scenery-damage]')) {
+    const gid = e.target.dataset.sceneryDamage;
+    dispatch({ type: 'openSceneryDamage', gid });
+    return;
+  }
   // Finish activation
   if (e.target.matches('[data-finish-activation]')) {
     const gid = e.target.dataset.finishActivation;
@@ -15914,7 +15962,8 @@ board.addEventListener('contextmenu', (e) => {
     const _rGrp = state.groups[_rGid];
     const _rShip = _rGrp && _rGrp.ships[_rSi];
     const _rTrail = _rGrp && (_rGrp.moveTrail || []);
-    const _canUndo = _rShip && _rShip.movedThisRound && !_rShip.firedThisActivation && !_rShip.detectorUsed && !(_rShip.launchedThisRound > 0) && !_rGrp.activated && _rTrail.some(t => t.si === _rSi);
+    const _grpActed = _rGrp && _rGrp.ships.some(s => !s.destroyed && (s.firedThisActivation || s.detectorUsed || (s.launchedThisRound > 0)));
+    const _canUndo = _rShip && _rShip.movedThisRound && !_grpActed && !_rGrp.activated && _rTrail.some(t => t.si === _rSi);
     if (_canUndo) { state.targeting = null; dispatch({ type: 'undoMove', gid: _rGid, si: _rSi }); }
     else { state.selectedGroupId = null; state.selectedShipIdx = null; netSendPeerView(); renderAll(true); }
     return;
@@ -17580,7 +17629,7 @@ function maybeAutoFinish(gid) {
     const eo = effectiveOrder(def, grp, si);
     return fireLimit(eo, def) <= 0;
   });
-  if (allActed) {
+  if (allActed && !state.isHotseat) {
     const side = def.side;
     if (_isLegal(state, { type: 'finishActivation', gid }, side)) {
       dispatch({ type: 'finishActivation', gid });

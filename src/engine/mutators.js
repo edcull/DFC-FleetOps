@@ -2613,7 +2613,14 @@ export function rollDeferredBackupSaves(state, rng, M) {
    Rendering is the caller's job. Server-driven combat dispatches these as intents. */
 export function advanceAttack(state, rng, M, to) {
   if (!M) return state;
-  if (to === 'hit') { M.step = 'hit'; if (M.shotIdx == null) M.shotIdx = 0; M.hitResult = null; M.rerollN = null; rollHits(state, rng, M); }
+  if (to === 'hit') {
+    M.step = 'hit'; if (M.shotIdx == null) M.shotIdx = 0; M.hitResult = null; M.rerollN = null;
+    if (M.sceneryDamage) {
+      const sh = M.shots[M.shotIdx];
+      M.hitResult = { hits: sh.w.hits, crits: 0, lock: 0, dice: [], autoHit: true };
+      M.step = 'save'; M.saveResult = null; M.fighterSpend = {}; rollSaves(state, rng, M);
+    } else { rollHits(state, rng, M); }
+  }
   else if (to === 'save') {
     M.rerollN = null; M.fighterSpend = {};
     if (M.hitResult.hits > 0) { M.step = 'save'; M.saveResult = null; rollSaves(state, rng, M); }
@@ -3247,7 +3254,7 @@ function advanceRoundInternal(state, rng) {
       s.usedLinks = {}; s.gateRemaining = undefined; s.order = null;
       s.firedThisActivation = false; s.weaponTargets = {}; s.dcRepaired = false;
       s.dcThisRound = false; s.detectorUsed = false; s.arrestedThisRound = false;
-      s.usedVectoredSecondMove = false;
+      s.usedVectoredSecondMove = false; s.pendingSceneryHits = null;
       s.deployedByGid = null; // cleared each round — cell acts in cells group next turn
     });
     g.moveTrail = [];
@@ -3512,36 +3519,7 @@ export function commitMove(state, rng, gid, si, tx, ty, layerToggle) {
     }
     const hits = sceneryMoveHits(state, originX, originY, ship.x, ship.y, ship);
     if (hits.length) {
-      let total = 0; const labels = [];
-      hits.forEach(h => {
-        const sv = baseSaveForType(def, ship, h.type, false);
-        let unsaved = 0;
-        for (let i = 0; i < h.n; i++) {
-          if (sv == null) { unsaved++; continue; }
-          if (rollDie(rng) < sv) { const bv = saveVal(def.bs); if (bv == null || rollDie(rng) < bv) unsaved++; }
-        }
-        if (unsaved) { total += unsaved; labels.push(`${h.label} (${unsaved} ${h.type})`); }
-      });
-      if (total > 0) {
-        const wasAboveHalf = ship.hull > ship.maxHull / 2;
-        ship.hull = Math.max(0, ship.hull - total);
-        logEvent(state, `${def.name}: ${labels.join(', ')} → ${total} dmg`);
-        if (isCapital(def) && !ship.crippledRolled && ship.hull > 0 && ship.hull <= ship.maxHull / 2 && wasAboveHalf) {
-          ship.crippledRolled = true;
-          const c = makeCrippleRoll(gid, si, def);
-          rollCrippleEffect(rng, c);
-          ship.crippling = ship.crippling || [];
-          if (c.effectKey === 'fire') { ship.fireTokens = (ship.fireTokens || 0) + 1; if (!ship.crippling.includes('fire')) ship.crippling.push('fire'); }
-          else if (c.effectKey === 'energy') ship.spikes = (ship.spikes || 0) + 1;
-          else if (c.effectKey === 'structural') ship.hull = Math.max(0, ship.hull - 1);
-          else if (!ship.crippling.includes(c.effectKey)) ship.crippling.push(c.effectKey);
-          logEvent(state, `${def.name} crippled: ${c.effectName}`, 'attack');
-        }
-        if (ship.hull <= 0 && !ship.destroyed) {
-          ship.destroyed = true;
-          if (isCapital(def)) { const ex = makeExplosionRoll(gid, si, def, ship); applyExplosionEffect(state, rng, ex, { explodeQueue: [] }); }
-        }
-      }
+      ship.pendingSceneryHits = (ship.pendingSceneryHits || []).concat(hits);
     }
   }
 
@@ -3639,6 +3617,7 @@ export function undoMove(state, gid, si) {
   ship.x = prev.x; ship.y = prev.y; ship.heading = prev.heading;
   if (prev.layer !== undefined) ship.layer = prev.layer;
   ship.movedThisRound = false;
+  ship.pendingSceneryHits = [];
   trail.splice(idx, 1);
   state.aiming = null;
   state.vectoredSecondMove = null;
@@ -4734,6 +4713,36 @@ export function apply(state, intent, rng) {
     case 'daEnd':                  return applyDaEnd(state, rng);
     case 'launchDropsiteAsset':    return applyLaunchDropsiteAsset(state, intent);
     case 'fireFeatureWeapon':      return applyFireFeatureWeapon(state, intent);
+    case 'openSceneryDamage': {
+      const { gid: sdGid } = intent;
+      const sdGrp = state.groups[sdGid];
+      const sdDef = getDef(state, sdGid);
+      if (!sdGrp || !sdDef) return state;
+      const shots = [];
+      sdGrp.ships.forEach((sdShip, sdSi) => {
+        const ph = sdShip.pendingSceneryHits;
+        if (!ph || !ph.length) return;
+        ph.forEach(h => {
+          shots.push({ wi: shots.length, w: { name: h.label, type: h.type, hits: h.n, dmg: 1, arc: '—', special: '' }, targetGid: sdGid, targetSi: sdSi });
+        });
+        sdShip.pendingSceneryHits = [];
+      });
+      if (!shots.length) return state;
+      state.attackModal = {
+        sceneryDamage: true,
+        bomber: true, bomberKind: 'scenery', bomberAssetIds: [], bomberSide: sdDef.side,
+        saturation: 0, cripplingFire: 0,
+        attackerName: 'Scenery Damage',
+        attackerGid: null, attackerSi: null,
+        shots,
+        step: shots.length > 1 ? 'select' : 'intro',
+        shotIdx: shots.length === 1 ? 0 : null,
+        resolvedShots: [],
+        shieldsUp: {}, log: [], pendingDamage: {},
+        hitResult: null, saveResult: null, crippleQueue: [], explodeQueue: []
+      };
+      return state;
+    }
     case 'extractRecon': {
       const { gid: exGid, si: exSi, dsId: exDsId } = intent;
       const exGrp = state.groups[exGid];
