@@ -214,6 +214,7 @@ export function buildScenarioState(scen) {
       features,
       damage: 0,
       maxHull: base.hull,
+      surveyedBy: [],
       ...(d.siteRules ? { siteRules: d.siteRules } : {})
     };
   });

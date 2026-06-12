@@ -128,10 +128,9 @@ function grpHasReconOps(state, gid) {
   if (!reconOps) return false;
   const grp = state.groups[gid];
   if (!grp) return false;
-  return grp.ships.some((_, si) => {
-    const def = grp.def;
-    return def && (reconOps[def.id + '#' + si] || 0) > 0;
-  });
+  const def = grp.def;
+  if (!def) return false;
+  return grp.ships.some((_, si) => (reconOps[def.id + '#' + si] || 0) > 0);
 }
 // Missions where landing Battalions scores (so drop-capable ships should prioritise dropping).
 function isDropMission(state) {
@@ -760,6 +759,7 @@ function candidateTargets(state, gid, aiSide) {
 // hull / most-killable one. Committed (cached) until that ship dies, then re-pick the next.
 function computeFleetFocusTarget(state, aiSide) {
   const enemySide = aiSide === 'player1' ? 'player2' : 'player1';
+  const isExtract = state.scenario?.objective === 'extract';
   const shooters = [];
   for (const g of Object.values(state.groups)) {
     if (g.def?.side !== aiSide || !g.def?.weapons?.length) continue;
@@ -784,7 +784,7 @@ function computeFleetFocusTarget(state, aiSide) {
         + (grpHasReconOps(state, tgid) ? 200 : 0)
         // The enemy drop engine (Mothership channelling, or any dropper) is the priority kill —
         // killing it stops their objective scoring outright.
-        + (defIsGateMother(tg.def) && state?.scenario?.objective !== 'extract' ? 180 : defIsDropper(tg.def) && state?.scenario?.objective !== 'extract' ? 90 : 0)
+        + (!isExtract ? (defIsGateMother(tg.def) ? 180 : defIsDropper(tg.def) ? 90 : 0) : 0)
         + (hull < (ts.maxHull || hull) ? 25 : 0); // already wounded → finish it
       if (score > bestScore) { bestScore = score; best = { gid: tgid, si: tsi }; }
     }
@@ -850,6 +850,7 @@ function findBestTarget(state, gid, si, wi, aiSide) {
   const def = grp.def;
   if (!def?.weapons?.[wi]) return null;
   const w = def.weapons[wi];
+  const isExtract = state.scenario?.objective === 'extract';
   const ship = grp.ships[si];
   if (!ship || ship.destroyed || ship.offTable) return null;
   const enemySide = aiSide === 'player1' ? 'player2' : 'player1';
@@ -868,9 +869,7 @@ function findBestTarget(state, gid, si, wi, aiSide) {
         // On Extract missions, ships carrying Recon Operatives are the highest-value kill.
         + (grpHasReconOps(state, targetGid) ? 500 : 0)
         // Prioritise enemy drop ships to stop landings (non-Extract missions only).
-        + (state?.scenario?.objective !== 'extract'
-          ? (defIsGateMother(tgrp.def) ? 300 : defIsDropper(tgrp.def) ? 150 : 0)
-          : 0)
+        + (!isExtract ? (defIsGateMother(tgrp.def) ? 300 : defIsDropper(tgrp.def) ? 150 : 0) : 0)
         // Corvettes (Air-to-Air, ignore the atmosphere penalty) exist to hunt enemy Descent ships
         // landing in Atmosphere — make that their overriding target.
         + (defIsCorvette(def) && tAtmoDescent ? 400 : 0)

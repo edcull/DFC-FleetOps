@@ -4005,7 +4005,7 @@ function renderDetail() {
         const moved = ship.movedThisRound;
         // Layer state + effect of the pending toggle.
         const curLayer = ship.layer || 'orbit';
-        const normalMaxR = effectiveMaxMovePx(def, ship, grp.order ? effectiveOrder(def, grp, state.selectedShipIdx) : grp.order);
+        const normalMaxR = effectiveMaxMovePx(def, ship, selEffOrder);
         const lm = layerMove(normalMaxR, ship, state.layerToggle);
         const effMaxIn = (lm.maxPx / INCH).toFixed(1);
         const targetLayer = lm.endLayer;
@@ -4789,9 +4789,14 @@ function renderBoard() {
             const spikes = (tGrp.spikes || 0) + (s.spikes || 0);
             const sigPx      = sig * INCH;
             const sigSpikePx = (sig + 3 * spikes) * INCH;
-            if (eff.ignoreSpikes && spikes > 0) {
-              // Path crosses a planetary ring: spikes are ignored. Show full sig+spike aura
-              // in grey to indicate it doesn't count, and base sig aura in red.
+            if (eff.ignoreSig) {
+              // Dense field: sig AND spikes both ignored — grey out the whole bubble.
+              if (sigSpikePx > 0) {
+                html += `<circle cx="${s.x}" cy="${s.y}" r="${sigSpikePx}" fill="rgba(100,100,100,0.03)" stroke="#555" stroke-width="0.5" stroke-dasharray="2 4" opacity="0.5" pointer-events="none"/>`;
+              }
+            } else if (eff.ignoreSpikes && spikes > 0) {
+              // Micrometeor cloud / planetary ring: spikes ignored, base sig still counts.
+              // Show full sig+spike aura in grey, base sig aura in red.
               if (sigSpikePx > 0) {
                 html += `<circle cx="${s.x}" cy="${s.y}" r="${sigSpikePx}" fill="rgba(100,100,100,0.03)" stroke="#555" stroke-width="0.5" stroke-dasharray="2 4" opacity="0.5" pointer-events="none"/>`;
               }
@@ -9964,8 +9969,14 @@ function renderActivationHUD() {
     }
   }
 
-  const anyActivated = state.activeSide && allDefs().some(def =>
-    def.side === state.activeSide && state.groups[def.id]?.activated);
+  // Only count a group as "player-activated" (blocking pass) if it finished activation
+  // AND has at least one living on-board ship. Engine-pre-activated groups (all ships still
+  // offTable, ineligible to arrive) must not suppress the pass button.
+  const anyActivated = state.activeSide && allDefs().some(def => {
+    if (def.side !== state.activeSide) return false;
+    const grp = state.groups[def.id];
+    return grp && grp.activated && grp.ships.some(s => !s.destroyed && !s.offTable);
+  });
   const anyOrderSelected = state.activeSide && allDefs().some(def =>
     def.side === state.activeSide && !state.groups[def.id]?.activated && state.groups[def.id]?.order);
   const canPass = state.phase === 'play' && P && state.activeSide
@@ -12603,12 +12614,20 @@ function _sync3dOverlays(group) {
         if (sigSpikePx <= 0) return;
         const wy = _3D_LAYER_Y[es.layer] ?? 120;
 
-        // When targeting, check if the firing path crosses a planetary ring.
-        const eff = targetingOrigin ? sceneryAttackEffects(targetingOrigin.x, targetingOrigin.y, es.x, es.y, targetingOrigin, es) : { ignoreSpikes: false };
-        const ringBlock = eff.ignoreSpikes && spikes > 0;
+        // When targeting, check if the firing path crosses scenery.
+        const eff = targetingOrigin ? sceneryAttackEffects(targetingOrigin.x, targetingOrigin.y, es.x, es.y, targetingOrigin, es) : { ignoreSpikes: false, ignoreSig: false };
+        const sigIgnored  = eff.ignoreSig;                  // Dense field: sig + spikes both ignored
+        const spikeIgnored = !sigIgnored && eff.ignoreSpikes && spikes > 0; // Micrometeor/ring: spikes only
 
-        if (ringBlock) {
-          // Path crosses ring: grey sig+spike aura (spikes ignored), red base-sig aura.
+        if (sigIgnored) {
+          // Dense field: grey out the entire bubble.
+          group.add(_3dDashedCircle(es.x - 288, es.y - 288, sigSpikePx, wy, 0x555555, 0.3, 2, 4));
+          const greyFill = new THREE.CircleGeometry(sigSpikePx, 64);
+          greyFill.rotateX(-Math.PI / 2);
+          greyFill.translate(es.x - 288, wy, es.y - 288);
+          group.add(new THREE.Mesh(greyFill, new THREE.MeshBasicMaterial({ color: 0x555555, transparent: true, opacity: 0.025, side: THREE.DoubleSide, depthWrite: false })));
+        } else if (spikeIgnored) {
+          // Micrometeor cloud / planetary ring: spikes ignored, base sig still counts.
           group.add(_3dDashedCircle(es.x - 288, es.y - 288, sigSpikePx, wy, 0x555555, 0.3, 2, 4));
           const greyFill = new THREE.CircleGeometry(sigSpikePx, 64);
           greyFill.rotateX(-Math.PI / 2);

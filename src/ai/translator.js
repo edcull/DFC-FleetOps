@@ -747,8 +747,9 @@ export function buildActivation(state, rng, gid, order, movePlan, aiSide, applyF
       const reachable = isGateMother ? connectedGateships(state, def.side, exShip.x, exShip.y) : [];
       for (const exDs of exDropsites) {
         if (!exDs || exDs.destroyed || !(exDs.reconOps > 0)) continue;
-        const directDist = Math.hypot(exShip.x - exDs.x * INCH, exShip.y - exDs.y * INCH);
-        const viaGate = isGateMother && reachable.some(g => Math.hypot(g.x - exDs.x * INCH, g.y - exDs.y * INCH) <= 6 * INCH);
+        const exDsX = exDs.x * INCH, exDsY = exDs.y * INCH;
+        const directDist = Math.hypot(exShip.x - exDsX, exShip.y - exDsY);
+        const viaGate = isGateMother && reachable.some(g => Math.hypot(g.x - exDsX, g.y - exDsY) <= 6 * INCH);
         if (directDist <= 6 * INCH || viaGate) {
           if (isLegal(state, { type: 'extractRecon', gid, si: exSi, dsId: exDs.id }, def.side)) {
             applyFn({ type: 'extractRecon', gid, si: exSi, dsId: exDs.id });

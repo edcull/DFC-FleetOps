@@ -3510,7 +3510,7 @@ export function commitMove(state, rng, gid, si, tx, ty, layerToggle) {
       if (isCapital(def)) { const ex = makeExplosionRoll(gid, si, def, ship); applyExplosionEffect(state, rng, ex, { explodeQueue: [] }); }
       return state;
     }
-    const hits = sceneryMoveHits(state, rng, originX, originY, ship.x, ship.y, ship);
+    const hits = sceneryMoveHits(state, originX, originY, ship.x, ship.y, ship);
     if (hits.length) {
       let total = 0; const labels = [];
       hits.forEach(h => {
@@ -4362,6 +4362,10 @@ function applyDaSwitchSide(state, rng) {
   return state;
 }
 
+function advanceStageOrRound(state, rng) {
+  const res = advanceAssetStage(state, null);
+  return res.done ? advanceRound(state, rng) : null;
+}
 function autoAdvanceAssetPhase(state, rng) {
   const ap = state.assetPhase;
   if (!ap) return;
@@ -4378,8 +4382,8 @@ function autoAdvanceAssetPhase(state, rng) {
     (state.launchedAssets || []).forEach(a => { a.moved = false; a.t2t = false; a.bomberTarget = null; a._preMove = null; });
     state.dogfightResult = null;
     ap.assetType = null; state.assetActiveSide = null;
-    const _aasRes = advanceAssetStage(state, null);
-    if (_aasRes.done) return advanceRound(state, rng);
+    const _r = advanceStageOrRound(state, rng);
+    if (_r) return _r;
   }
 }
 
@@ -4799,7 +4803,7 @@ export function apply(state, intent, rng) {
       (state.launchedAssets || []).forEach(a => { a.moved = false; a.t2t = false; a.bomberTarget = null; a._preMove = null; });
       state.dogfightResult = null;
       state.assetPhase.assetType = null; state.assetActiveSide = null;
-      { const _samRes = advanceAssetStage(state, null); if (_samRes.done) return advanceRound(state, rng); }
+      { const _r = advanceStageOrRound(state, rng); if (_r) return _r; }
       return state;
     case 'assetStageDone': {
       const { assetType: asdType, side: asdSide } = intent;

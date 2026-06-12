@@ -214,6 +214,7 @@ export function buildStateBriefing(state, aiSide) {
   const aiSlot    = aiSide    === 'player1' ? 'f1' : 'f2';
   const humSlot   = humanSide === 'player1' ? 'f1' : 'f2';
 
+  const shipReconOps = state.shipReconOps || {};
   const aiFaction  = (state.factions?.[aiSide]    || state.fleetChoices?.[aiSlot]  || '?').toUpperCase();
   const humFaction = (state.factions?.[humanSide]  || state.fleetChoices?.[humSlot] || '?').toUpperCase();
   const aiName     = state.playerNames?.[aiSlot]   || 'AI';
@@ -275,7 +276,7 @@ export function buildStateBriefing(state, aiSide) {
     const lead   = alive[0];
     const id     = aiIds[gid];
     const isDrop = (g.def?.launch || []).some(l => isDropLaunch(l.type)) || g.def?.gateship > 0;
-    const reconAboard = g.ships.reduce((s, sh, si) => s + ((state.shipReconOps || {})[g.def?.id + '#' + si] || 0), 0);
+    const reconAboard = g.ships.reduce((s, sh, si) => s + (shipReconOps[g.def?.id + '#' + si] || 0), 0);
     const dtag   = isDrop ? '[DROP]' : '';
     const rtag   = reconAboard > 0 ? `[RECON:${reconAboard}]` : '';
     return alive.length
@@ -324,7 +325,7 @@ export function buildStateBriefing(state, aiSide) {
       const hpStr  = hp < maxHp ? `${hp}/${maxHp}HP` : `${maxHp}HP`;
       const count  = alive.length > 1 ? ` ×${alive.length}` : '';
       const isDrop = (grp.def?.launch || []).some(l => isDropLaunch(l.type)) || grp.def?.gateship > 0;
-      const reconOpsAboard = grp.ships.reduce((s, sh, si) => s + ((state.shipReconOps || {})[grp.def?.id + '#' + si] || 0), 0);
+      const reconOpsAboard = grp.ships.reduce((s, sh, si) => s + (shipReconOps[grp.def?.id + '#' + si] || 0), 0);
       L.push(`  ${humIds[gid]} ${grp.def?.name}${count} [${grp.def?.tonnage}] ${hpStr}${isDrop ? ' DROP' : ''}${reconOpsAboard > 0 ? ` RECON:${reconOpsAboard}` : ''}`);
     }
     if (humOffCount > 0) {
