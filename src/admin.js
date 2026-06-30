@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import bcrypt from 'bcryptjs';
-import { getAllUsers, getUserById, setUserRole, setUserAiAccess, setUserPassword, deleteUser, getAllSaves, deleteSaveDb } from './db.js';
+import { getAllUsers, getUserById, setUserRole, setUserAiAccess, setUserPassword, deleteUser, getAllSaves, getSaveByRoomId, deleteSaveDb } from './db.js';
 import { getAllRooms } from './rooms.js';
 
 export const adminRouter = Router();
@@ -71,6 +71,16 @@ adminRouter.get('/rooms', (_req, res) => {
     createdAt:   r.createdAt,
   }));
   res.json(rooms);
+});
+
+// GET /api/admin/saves/:id/state — download game state JSON for any save
+adminRouter.get('/saves/:id/state', (req, res) => {
+  const roomId = req.params.id.toUpperCase();
+  const save = getSaveByRoomId(roomId);
+  if (!save) return res.status(404).json({ error: 'Save not found.' });
+  res.setHeader('Content-Type', 'application/json');
+  res.setHeader('Content-Disposition', `attachment; filename="dfc-${roomId}-state.json"`);
+  res.json(save.currentState ?? {});
 });
 
 // DELETE /api/admin/saves/:id — admin can delete any save

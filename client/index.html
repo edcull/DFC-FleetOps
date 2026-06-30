@@ -3596,7 +3596,10 @@ function renderDetail() {
       else if (!moved) weaponsHTML += `<div class="weapon-special" style="color:var(--text-mute)">Move this ship first, then assign weapon targets.</div>`;
       else if (limit === 0) weaponsHTML += `<div class="weapon-special" style="color:var(--text-mute)">This Order cannot fire weapons.</div>`;
       else if (lockedCount > 0) {
-        weaponsHTML += `<button class="btn-finish-act" data-fire="${state.selectedGroupId}|${si}" style="background:linear-gradient(180deg,var(--hull-crit) 0%,#a32020 100%);border-color:var(--hull-crit);color:#fff;">⊕ ENGAGE (${lockedCount})</button>`;
+        weaponsHTML += `<div style="display:flex;gap:6px;flex-wrap:wrap;">`;
+        weaponsHTML += `<button class="btn-finish-act" data-fire="${state.selectedGroupId}|${si}" style="flex:1;background:linear-gradient(180deg,var(--hull-crit) 0%,#a32020 100%);border-color:var(--hull-crit);color:#fff;">⊕ ENGAGE (${lockedCount})</button>`;
+        weaponsHTML += `<button class="btn" data-cancel-fire="${state.selectedGroupId}" style="flex-shrink:0;padding:5px 10px;font-size:10px;color:var(--text-mute);border-color:var(--text-mute);">✕ Cancel</button>`;
+        weaponsHTML += `</div>`;
       } else {
         weaponsHTML += `<div class="weapon-special" style="color:var(--text-mute)">Click a weapon, then click an enemy ship to lock a target.</div>`;
       }
@@ -14794,6 +14797,12 @@ document.addEventListener('click', (e) => {
     dispatch({ type: 'fireWeapons', gid, si: parseInt(si) });
     return;
   }
+  // CANCEL FIRE — clear all locked weapon targets for the group without marking as fired.
+  if (e.target.matches('[data-cancel-fire]') || (e.target.closest && e.target.closest('[data-cancel-fire]'))) {
+    const btn = e.target.matches('[data-cancel-fire]') ? e.target : e.target.closest('[data-cancel-fire]');
+    dispatch({ type: 'cancelWeaponFire', gid: btn.dataset.cancelFire });
+    return;
+  }
   if (e.target.closest && e.target.closest('[data-detonate]')) {
     const btn = e.target.closest('[data-detonate]');
     const [gid, si] = btn.dataset.detonate.split('|');
@@ -18488,6 +18497,7 @@ async function openAdminPanel(anchor, inGame = false) {
                 ${(s.playerNames?.f1||'P1')} vs ${(s.playerNames?.f2||'P2')} · ${s.phase?.toUpperCase()} Rnd ${s.round??'—'} · ${s.isHotseat?'HOTSEAT':'ONLINE'}${s.hasReplay?' · ↺':''}
               </div>
             </div>
+            <a class="btn" href="/api/admin/saves/${s.roomId}/state" download="dfc-${s.roomId}-state.json" style="padding:3px 7px;font-size:8px;color:var(--text-mute);border-color:var(--text-mute);flex-shrink:0;text-decoration:none;">⬇</a>
             <button class="btn adm-del-save" data-rid="${s.roomId}" style="padding:3px 7px;font-size:8px;color:var(--hull-crit);border-color:var(--hull-crit);flex-shrink:0;">✕</button>
           </div>`).join('');
         body.querySelectorAll('.adm-del-save').forEach(btn => {

@@ -4227,6 +4227,14 @@ function applyUnlockWeapon(state, intent) {
   return state;
 }
 
+function applyCancelWeaponFire(state, intent) {
+  const { gid } = intent;
+  const grp = state.groups[gid];
+  if (!grp) return state;
+  grp.ships.forEach(s => { s.weaponTargets = {}; });
+  return state;
+}
+
 /* True if a Group definition mounts any weapon with "Mass Driver" in its name. */
 export function groupHasMassDriver(def) {
   return !!def && (def.weapons || []).some(w => /Mass Driver/i.test(w.name || ''));
@@ -4378,7 +4386,10 @@ function autoAdvanceAssetPhase(state, rng) {
     (state.launchedAssets || []).forEach(a => { a.moved = false; a.t2t = false; a.bomberTarget = null; a._preMove = null; });
     state.dogfightResult = null;
     ap.assetType = null; state.assetActiveSide = null;
-    advanceAssetStage(state, null);
+    const res = advanceAssetStage(state, null);
+    // No air assets to move — skip straight to the next round so the game never stalls
+    // waiting for assetPhaseDone calls that the client has no UI to trigger.
+    if (res.done) advanceRound(state, rng);
   }
 }
 
@@ -4721,6 +4732,7 @@ export function apply(state, intent, rng) {
     case 'lockBombardmentTarget':        return applyLockBombardmentTarget(state, intent);
     case 'resolveBombardCollateral':     return applyResolveBombardCollateral(state, intent);
     case 'unlockWeapon':              return applyUnlockWeapon(state, intent);
+    case 'cancelWeaponFire':          return applyCancelWeaponFire(state, intent);
     case 'fireWeapons':        return applyFireWeapons(state, intent);
     case 'setMassDriverVolley':   return applySetMassDriverVolley(state);
     case 'advanceRound':          return advanceRound(state, rng);

@@ -1134,11 +1134,23 @@ export function generateDeployOptions(state, aiSide) {
     const placed = grp.ships.filter(s => !s.destroyed && !s.offTable);
     let seedX, seedY;
     if (placed.length) {
-      // Beside the placed group-mates (lateral offset from their centroid), kept on the same row.
+      // Seed adjacent to the LAST placed ship so follow-on ships stay within coherency range.
+      // Try right, then left, then diagonals from that ship before falling back to the centroid.
+      const last = placed[placed.length - 1];
+      const iz = vgInZone || ((x, y) => !zone || isInZone(x / INCH, y / INCH, zone));
+      const dirs = [
+        { dx: spacing, dy: 0 }, { dx: -spacing, dy: 0 },
+        { dx: spacing, dy: spacing }, { dx: -spacing, dy: spacing },
+        { dx: spacing, dy: -spacing }, { dx: -spacing, dy: -spacing },
+      ];
       const cx = placed.reduce((a, s) => a + s.x, 0) / placed.length;
       const cy = placed.reduce((a, s) => a + s.y, 0) / placed.length;
-      seedX = Math.max(INCH, Math.min(BOARD_PX - INCH, cx + spacing));
-      seedY = Math.max(INCH, Math.min(BOARD_PX - INCH, cy));
+      const tryDir = dirs.find(d => {
+        const tx = last.x + d.dx, ty = last.y + d.dy;
+        return tx >= INCH && tx <= BOARD_PX - INCH && ty >= INCH && ty <= BOARD_PX - INCH && iz(tx, ty);
+      });
+      seedX = Math.max(INCH, Math.min(BOARD_PX - INCH, tryDir ? last.x + tryDir.dx : cx + spacing));
+      seedY = Math.max(INCH, Math.min(BOARD_PX - INCH, tryDir ? last.y + tryDir.dy : cy));
     } else {
       const za = legalZonePosPx(vgInZone ? null : zone,
         Math.max(INCH, Math.min(BOARD_PX - INCH, baseX)),

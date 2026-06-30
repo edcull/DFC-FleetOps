@@ -543,6 +543,16 @@ export function isLegal(state, intent, side) {
       if (!ship) return false;
       return true;
     }
+    case 'cancelWeaponFire': {
+      const { gid } = intent;
+      if (state.phase !== 'play') return false;
+      if (state.attackModal) return false;
+      const grp = state.groups[gid];
+      if (!grp || grp.activated) return false;
+      const def = getDef(state, gid);
+      if (!def || def.side !== side) return false;
+      return grp.ships.some(s => !s.destroyed && s.weaponTargets && Object.keys(s.weaponTargets).length > 0);
+    }
     case 'fireWeapons': {
       const { gid } = intent;
       if (state.phase !== 'play') return false;
